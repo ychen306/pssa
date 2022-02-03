@@ -1,9 +1,9 @@
 #include "VLoop.h"
 #include "ControlDependence.h"
-#include "llvm/IR/Dominators.h"
+#include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopIterator.h"
-#include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/IR/Dominators.h"
 
 using namespace llvm;
 
@@ -20,8 +20,7 @@ getIncomingPhiConditions(SmallVectorImpl<const ControlCondition *> &Conds,
 }
 
 VLoop::VLoop(Function *F, LoopInfo &LI, DominatorTree &DT,
-             ControlDependenceAnalysis &CDA,
-             VLoopInfo &VLI)
+             ControlDependenceAnalysis &CDA, VLoopInfo &VLI)
     : IsTopLevel(true), Parent(nullptr), LoopCond(nullptr), L(nullptr),
       VLI(VLI) {
   ReversePostOrderTraversal<Function *> RPO(F);
@@ -59,9 +58,8 @@ VLoop::VLoop(Function *F, LoopInfo &LI, DominatorTree &DT,
 VLoop::VLoop(LoopInfo &LI, Loop *L, ControlDependenceAnalysis &CDA,
              VLoopInfo &VLI)
     : IsTopLevel(false),
-      LoopCond(CDA.getConditionForBlock(L->getLoopPreheader())),
-      L(L), Parent(nullptr),
-      VLI(VLI) {
+      LoopCond(CDA.getConditionForBlock(L->getLoopPreheader())), L(L),
+      Parent(nullptr), VLI(VLI) {
   VLI.setVLoop(L, this);
   assert(L->isRotatedForm());
 
@@ -128,6 +126,4 @@ Optional<MuNode> VLoop::getMu(PHINode *PN) const {
 
 VLoop *VLoopInfo::getVLoop(Loop *L) const { return LoopToVLoopMap.lookup(L); }
 
-void VLoopInfo::setVLoop(Loop *L, VLoop *VL) {
-  LoopToVLoopMap[L] = VL;
-}
+void VLoopInfo::setVLoop(Loop *L, VLoop *VL) { LoopToVLoopMap[L] = VL; }
