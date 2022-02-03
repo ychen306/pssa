@@ -1,7 +1,7 @@
 #include "ControlDependence.h"
 #include "VLoop.h"
 #include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/MustExecute.h" // mayContainIrreducibleControl 
+#include "llvm/Analysis/MustExecute.h" // mayContainIrreducibleControl
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
@@ -11,13 +11,13 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Scalar/InstSimplifyPass.h"
 #include "llvm/Transforms/Utils.h"
-#include "llvm/Transforms/Scalar/GVN.h"
+#include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
 
 using namespace llvm;
 
@@ -40,7 +40,7 @@ struct PSSAEntry : public FunctionPass {
 
   bool runOnFunction(Function &) override;
 };
-}
+} // namespace
 
 INITIALIZE_PASS_BEGIN(PSSAEntry, "pssa-entry", "pssa-entry", false, false)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
@@ -61,13 +61,28 @@ bool PSSAEntry::runOnFunction(Function &F) {
   VLoopInfo VLI;
   VLoop TopLevelVL(&F, LI, DT, CDA, VLI);
 
+  // Don't deal with irreducible CFG
+  if (mayContainIrreducibleControl(F, LI))
+    return false;
+
+  // We don't deal with things like switches or invoke
+  for (auto &BB : F)
+    if (!isa<ReturnInst>(BB.getTerminator()) &&
+        !isa<BranchInst>(BB.getTerminator()))
+      return false;
+
+  // Don't deal with infinite loops or non-rotated loops
+  for (auto *L : LI->getLoopsInPreorder())
+    if (!L->isRotatedForm() || L->hasNoExitBlocks())
+      return false;
+
   return false;
 }
 
 // Automatically enable the pass.
 // http://adriansampson.net/blog/clangpass.html
 static void registerPSSAEntry(const PassManagerBuilder &PMB,
-                         legacy::PassManagerBase &MPM) {
+                              legacy::PassManagerBase &MPM) {
   MPM.add(createUnifyFunctionExitNodesPass());
   MPM.add(createLoopSimplifyPass());
   MPM.add(createLoopRotatePass());
@@ -85,8 +100,11 @@ static void registerPSSAEntry(const PassManagerBuilder &PMB,
 // Register this pass to run after all optimization,
 // because we want this pass to replace LLVM SLP.
 static RegisterStandardPasses
-    RegisterMyPass(PassManagerBuilder::EP_ScalarOptimizerLate, registerPSSAEntry);
+    RegisterMyPass(PassManagerBuilder::EP_ScalarOptimizerLate,
+                   registerPSSAEntry);
 
 static struct RegisterPSSAEntry {
-  RegisterPSSAEntry() { initializePSSAEntryPass(*PassRegistry::getPassRegistry()); }
+  RegisterPSSAEntry() {
+    initializePSSAEntryPass(*PassRegistry::getPassRegistry());
+  }
 } X;
