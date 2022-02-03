@@ -5,11 +5,18 @@
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 using namespace llvm;
 
 namespace {
+
+cl::opt<bool>
+    DumpBeforeErasing("dump-before-erasing",
+                      cl::desc("dump function before erasing old basic blocks"),
+                      cl::init(false));
+
 class PSSALowering {
   Function *F;
   LLVMContext &Ctx;
@@ -220,6 +227,9 @@ void PSSALowering::run(VLoop *TopLevelVL) {
   Entry = BasicBlock::Create(Ctx, "entry", F);
 
   lower(TopLevelVL, nullptr /* preheader */);
+
+  if (DumpBeforeErasing)
+    F->dump();
 
   // Remove the old blocks
   for (auto *BB : OldBlocks)
