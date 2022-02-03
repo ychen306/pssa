@@ -3,8 +3,8 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/PointerUnion.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace llvm {
 class Loop;
@@ -66,7 +66,9 @@ class VLoop {
   llvm::SmallVector<std::unique_ptr<VLoop>, 4> SubLoops;
   llvm::SmallDenseMap<llvm::PHINode *, MuNode, 8> Mus;
   llvm::DenseMap<llvm::PHINode *, OneHotPhi> OneHotPhis;
-  llvm::DenseMap<llvm::PHINode *, llvm::SmallVector<const ControlCondition *, 4>> GatedPhis;
+  llvm::DenseMap<llvm::PHINode *,
+                 llvm::SmallVector<const ControlCondition *, 4>>
+      GatedPhis;
   llvm::DenseMap<llvm::Instruction *, const ControlCondition *> InstConds;
 
   // Should we execute this loop at all
@@ -77,15 +79,15 @@ class VLoop {
   VLoop *Parent;
   llvm::Loop *L; // the original loop
 
-  VLoop(llvm::LoopInfo &, llvm::Loop *, ControlDependenceAnalysis &, VLoopInfo &);
+  VLoop(llvm::LoopInfo &, llvm::Loop *, ControlDependenceAnalysis &,
+        VLoopInfo &);
 
 public:
   // Construct a top-level "loop" that represents a whole function
-  VLoop(llvm::Function *, llvm::LoopInfo &, llvm::DominatorTree &, 
-             ControlDependenceAnalysis &,
-      VLoopInfo &);
+  VLoop(llvm::Function *, llvm::LoopInfo &, llvm::DominatorTree &,
+        ControlDependenceAnalysis &, VLoopInfo &);
 
-  llvm::ArrayRef<ItemType> getItems() const { return Items; }
+  llvm::ArrayRef<ItemType> items() const { return Items; }
 
   const ControlCondition *getInstCond(llvm::Instruction *I) const {
     assert(InstConds.count(I));
@@ -103,12 +105,11 @@ public:
   bool isLoop() const { return L; }
   llvm::Optional<MuNode> getMu(llvm::PHINode *) const;
 
-  bool isGatedPhi(llvm::PHINode *PN) const {
-    return GatedPhis.count(PN);
-  }
+  bool isGatedPhi(llvm::PHINode *PN) const { return GatedPhis.count(PN); }
 
   // Get the incoming condition if the ith phi value
-  const ControlCondition *getIncomingPhiCondition(llvm::PHINode *PN, unsigned i) {
+  const ControlCondition *getIncomingPhiCondition(llvm::PHINode *PN,
+                                                  unsigned i) {
     assert(GatedPhis.count(PN));
     return GatedPhis[PN][i];
   }
