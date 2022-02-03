@@ -68,7 +68,7 @@ class VLoop {
   llvm::DenseMap<llvm::PHINode *, OneHotPhi> OneHotPhis;
   llvm::DenseMap<llvm::PHINode *,
                  llvm::SmallVector<const ControlCondition *, 4>>
-      GatedPhis;
+      PhiConds;
   llvm::DenseMap<llvm::Instruction *, const ControlCondition *> InstConds;
 
   // Should we execute this loop at all
@@ -105,13 +105,12 @@ public:
   bool isLoop() const { return L; }
   llvm::Optional<MuNode> getMu(llvm::PHINode *) const;
 
-  bool isGatedPhi(llvm::PHINode *PN) const { return GatedPhis.count(PN); }
+  bool isGatedPhi(llvm::PHINode *PN) const { return PhiConds.count(PN); }
 
   // Get the incoming condition if the ith phi value
-  const ControlCondition *getIncomingPhiCondition(llvm::PHINode *PN,
-                                                  unsigned i) {
-    assert(GatedPhis.count(PN));
-    return GatedPhis[PN][i];
+  const ControlCondition *getPhiCondition(llvm::PHINode *PN, unsigned i) {
+    assert(PhiConds.count(PN));
+    return PhiConds[PN][i];
   }
 
   VLoop *getParent() const { return Parent; }

@@ -34,11 +34,10 @@ VLoop::VLoop(Function *F, LoopInfo &LI, DominatorTree &DT,
       for (auto &I : *BB) {
         if (I.isTerminator() && !isa<ReturnInst>(&I))
           continue;
-        errs() << I << '\n';
         Items.push_back(&I);
         InstConds[&I] = C;
         if (auto *PN = dyn_cast<PHINode>(&I))
-          getIncomingPhiConditions(GatedPhis[PN], PN, CDA);
+          getIncomingPhiConditions(PhiConds[PN], PN, CDA);
         VLI.mapInstToLoop(&I, this);
       }
     } else {
@@ -49,7 +48,6 @@ VLoop::VLoop(Function *F, LoopInfo &LI, DominatorTree &DT,
       // skip if we've seen this sub-loop before
       if (!Visited.insert(L).second)
         continue;
-      errs() << *L << '\n';
       auto *SubVL = new VLoop(LI, L, CDA, VLI);
       Items.push_back(SubVL);
       SubLoops.emplace_back(SubVL);
@@ -99,13 +97,12 @@ VLoop::VLoop(LoopInfo &LI, Loop *L, ControlDependenceAnalysis &CDA,
       for (auto &I : *BB) {
         if (I.isTerminator() && !isa<ReturnInst>(&I))
           continue;
-        errs() << I << '\n';
         Items.push_back(&I);
         InstConds[&I] = C;
         VLI.mapInstToLoop(&I, this);
         auto *PN = dyn_cast<PHINode>(&I);
         if (PN && !getMu(PN))
-          getIncomingPhiConditions(GatedPhis[PN], PN, CDA);
+          getIncomingPhiConditions(PhiConds[PN], PN, CDA);
       }
     } else {
       while (L2->getParentLoop() != L)
@@ -114,7 +111,6 @@ VLoop::VLoop(LoopInfo &LI, Loop *L, ControlDependenceAnalysis &CDA,
       // Skip if we've seen L2 before
       if (!Visited.insert(L2).second)
         continue;
-      errs() << *L2 << '\n';
       auto *SubVL = new VLoop(LI, L2, CDA, VLI);
       Items.push_back(SubVL);
       SubLoops.emplace_back(SubVL);
