@@ -80,8 +80,14 @@ VLoop::VLoop(LoopInfo &LI, Loop *L, ControlDependenceAnalysis &CDA,
   // Figure out the mu nodes
   for (PHINode &PN : Header->phis()) {
     assert(PN.getNumIncomingValues() == 2);
-    Mus.try_emplace(&PN, PN.getIncomingValueForBlock(Preheader),
-                    PN.getIncomingValueForBlock(Latch));
+    auto *Init = PN.getIncomingValueForBlock(Preheader);
+    auto *Iter = PN.getIncomingValueForBlock(Latch);
+    Mus.try_emplace(&PN, Init, Iter);
+    // Also canonicalize the phi-node so that first value is the init. and second iter.
+    PN.setIncomingValue(0, Init);
+    PN.setIncomingValue(1, Iter);
+    PN.setIncomingBlock(0, Preheader);
+    PN.setIncomingBlock(1, Latch);
   }
 
   // Populate the loop items

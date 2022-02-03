@@ -113,13 +113,10 @@ static void moveToEnd(Instruction *I, BasicBlock *BB) {
   assert(I->getParent() == BB);
 }
 
-static PHINode *emitMu(Value *Init, Value *Iter, BasicBlock *Preheader,
-                       BasicBlock *Header, BasicBlock *Latch) {
-  auto *PN = PHINode::Create(Init->getType(), 2, "mu");
-  PN->addIncoming(Init, Preheader);
-  PN->addIncoming(Iter, Latch);
-  Header->getInstList().push_front(PN);
-  return PN;
+static void moveToBegin(Instruction *I, BasicBlock *BB) {
+  if (I->getParent())
+    I->removeFromParent();
+  BB->getInstList().push_front(I);
 }
 
 std::pair<BasicBlock *, BasicBlock *>
@@ -150,7 +147,6 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
     return V;
   };
   BlockBuilder BBuilder(VL->isLoop() ? Header : Entry, UseScalar);
-  SmallVector<PHINode *> MusToPatch;
 
   // Lower the loop items in order
   for (auto &Item : VL->items()) {
@@ -175,13 +171,11 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
       continue;
     }
 
-    if (auto MuOrNone = VL->getMu(PN)) {
-      auto &Mu = *MuOrNone;
-      assert(Header && Exit);
-      auto *NewPN = emitMu(Mu.Init, Mu.Iter, Preheader, Header, Latch);
-      ReplacedPhis[PN] = NewPN;
-      PN->replaceAllUsesWith(NewPN);
-      MusToPatch.push_back(NewPN);
+    if (VL->getMu(PN)) {
+      assert(Preheader && Header && Latch);
+      moveToBegin(PN, Header);
+      PN->setIncomingBlock(0, Preheader);
+      PN->setIncomingBlock(1, Latch);
       continue;
     }
 
@@ -217,13 +211,6 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
   auto *ShouldContinue = new LoadInst(
       Type::getInt1Ty(Ctx), ShouldContinueAlloca, "should.continue", Latch);
   BranchInst::Create(Header, Exit, ShouldContinue, Latch);
-
-  for (auto *PN : MusToPatch) {
-    for (unsigned i = 0; i < PN->getNumOperands(); i++) {
-      auto *V = PN->getOperand(i);
-      PN->setOperand(i, UseScalar(V));
-    }
-  }
 
   return {Header, Exit};
 }
