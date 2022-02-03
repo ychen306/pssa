@@ -1,11 +1,11 @@
-#include "VLoop.h"
 #include "BlockBuilder.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/Instructions.h"
+#include "VLoop.h"
 #include "llvm/IR/Dominators.h"
-#include "llvm/Transforms/Utils/PromoteMemToReg.h"
-#include "llvm/IR/Verifier.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 using namespace llvm;
 
@@ -16,8 +16,7 @@ class PSSALowering {
   BasicBlock *Entry; // The new entry block for F
 
   // Lower a vloop and return the loop-header and exit.
-  std::pair<BasicBlock *, BasicBlock *>
-  lower(VLoop *VL, BasicBlock *Preheader);
+  std::pair<BasicBlock *, BasicBlock *> lower(VLoop *VL, BasicBlock *Preheader);
 
   SmallVector<AllocaInst *> Allocas;
   AllocaInst *createAlloca(Type *Ty, const Twine &Name, BasicBlock *BB) {
@@ -30,11 +29,13 @@ class PSSALowering {
     return Alloca;
   }
 
+  DenseMap<PHINode *, Value *> ReplacedPhis;
+
 public:
   PSSALowering(Function *F) : F(F), Ctx(F->getContext()) {}
   void run(VLoop *TopLevelVL);
 };
-}
+} // namespace
 
 static void fixDefUseDominance(Function *F, DominatorTree &DT) {
   // Find instructions not dominating their uses.
@@ -128,13 +129,19 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
     Exit = BasicBlock::Create(Ctx, "exit", F);
     BranchInst::Create(Header /*if true*/, Preheader /*insert at end*/);
 
-    ShouldContinueAlloca = createAlloca(Type::getInt1Ty(Ctx), "should.continue.mem", Header);
+    ShouldContinueAlloca =
+        createAlloca(Type::getInt1Ty(Ctx), "should.continue.mem", Header);
     // intialize it to false
     new StoreInst(ConstantInt::getFalse(Ctx), ShouldContinueAlloca, Header);
     // We will wire latch with exit and header later
   }
 
-  BlockBuilder BBuilder(VL->isLoop() ? Header : Entry, [&](Value *V) { return V; });
+  BlockBuilder BBuilder(VL->isLoop() ? Header : Entry, [&](Value *V) {
+    auto *PN = dyn_cast<PHINode>(V);
+    if (PN && ReplacedPhis.count(PN))
+      return ReplacedPhis.lookup(PN);
+    return V;
+  });
 
   // Lower the loop items in order
   for (auto &Item : VL->items()) {
@@ -162,21 +169,26 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
     if (auto MuOrNone = VL->getMu(PN)) {
       auto &Mu = *MuOrNone;
       assert(Header && Exit);
-      auto *NewPN =
-        emitMu(Mu.Init, Mu.Iter, Preheader, Header, Latch);
+      auto *NewPN = emitMu(Mu.Init, Mu.Iter, Preheader, Header, Latch);
+      ReplacedPhis[PN] = NewPN;
       PN->replaceAllUsesWith(NewPN);
       continue;
     }
 
     // Demote the phi to memory
-    auto *Alloca = createAlloca(PN->getType(), PN->getName()+".demoted", Entry);
+    auto *Alloca =
+        createAlloca(PN->getType(), PN->getName() + ".demoted", Entry);
     for (unsigned i = 0; i < PN->getNumIncomingValues(); i++) {
       auto *EdgeCond = VL->getPhiCondition(PN, i);
-      new StoreInst(PN->getIncomingValue(i), Alloca, BBuilder.getBlockFor(EdgeCond));
+      new StoreInst(PN->getIncomingValue(i), Alloca,
+                    BBuilder.getBlockFor(EdgeCond));
     }
 
-    auto *Reload = new LoadInst(PN->getType(), Alloca, PN->getName()+".reload", BBuilder.getBlockFor(Cond));
+    auto *Reload =
+        new LoadInst(PN->getType(), Alloca, PN->getName() + ".reload",
+                     BBuilder.getBlockFor(Cond));
     PN->replaceAllUsesWith(Reload);
+    ReplacedPhis[PN] = Reload;
   }
 
   // We are done if we are lowering the top-level "loop"
@@ -185,13 +197,15 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
 
   // Conditionally set the continue flag dependending on the backedge condition
   assert(ShouldContinueAlloca);
-  new StoreInst(ConstantInt::getTrue(Ctx), ShouldContinueAlloca, BBuilder.getBlockFor(VL->getBackEdgeCond()));
+  new StoreInst(ConstantInt::getTrue(Ctx), ShouldContinueAlloca,
+                BBuilder.getBlockFor(VL->getBackEdgeCond()));
 
   // Join all the control-flow to the latch
   BranchInst::Create(Latch, BBuilder.getBlockFor(nullptr));
   assert(!Latch->getTerminator());
   // Figure out whether we should exit the loop or continue
-  auto *ShouldContinue = new LoadInst(Type::getInt1Ty(Ctx), ShouldContinueAlloca, "should.continue", Latch);
+  auto *ShouldContinue = new LoadInst(
+      Type::getInt1Ty(Ctx), ShouldContinueAlloca, "should.continue", Latch);
   BranchInst::Create(Header, Exit, ShouldContinue, Latch);
 
   return {Header, Exit};
