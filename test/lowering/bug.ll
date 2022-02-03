@@ -21,7 +21,7 @@ for.inc4:                                         ; preds = %for.inc.preheader, 
   br i1 true, label %for.cond.for.end6_crit_edge.loopexit, label %for.cond1thread-pre-split, !llvm.loop !4
 
 for.cond.for.end6_crit_edge.loopexit:             ; preds = %for.inc4
-  ret i32 
+  ret i32 0
 }
 
 !0 = !{!1, !1, i64 0}
