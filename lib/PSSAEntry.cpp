@@ -62,7 +62,7 @@ bool PSSAEntry::runOnFunction(Function &F) {
   VLoop TopLevelVL(&F, LI, DT, CDA, VLI);
 
   // Don't deal with irreducible CFG
-  if (mayContainIrreducibleControl(F, LI))
+  if (mayContainIrreducibleControl(F, &LI))
     return false;
 
   // We don't deal with things like switches or invoke
@@ -72,7 +72,7 @@ bool PSSAEntry::runOnFunction(Function &F) {
       return false;
 
   // Don't deal with infinite loops or non-rotated loops
-  for (auto *L : LI->getLoopsInPreorder())
+  for (auto *L : LI.getLoopsInPreorder())
     if (!L->isRotatedForm() || L->hasNoExitBlocks())
       return false;
 
