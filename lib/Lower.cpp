@@ -143,12 +143,14 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
     // We will wire latch with exit and header later
   }
 
-  BlockBuilder BBuilder(VL->isLoop() ? Header : Entry, [&](Value *V) {
+  auto UseScalar = [&](Value *V) {
     auto *PN = dyn_cast<PHINode>(V);
     if (PN && ReplacedPhis.count(PN))
       return ReplacedPhis.lookup(PN);
     return V;
-  });
+  };
+  BlockBuilder BBuilder(VL->isLoop() ? Header : Entry, UseScalar);
+  SmallVector<PHINode *> MusToPatch;
 
   // Lower the loop items in order
   for (auto &Item : VL->items()) {
@@ -179,6 +181,7 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
       auto *NewPN = emitMu(Mu.Init, Mu.Iter, Preheader, Header, Latch);
       ReplacedPhis[PN] = NewPN;
       PN->replaceAllUsesWith(NewPN);
+      MusToPatch.push_back(NewPN);
       continue;
     }
 
@@ -214,6 +217,13 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
   auto *ShouldContinue = new LoadInst(
       Type::getInt1Ty(Ctx), ShouldContinueAlloca, "should.continue", Latch);
   BranchInst::Create(Header, Exit, ShouldContinue, Latch);
+
+  for (auto *PN : MusToPatch) {
+    for (unsigned i = 0; i < PN->getNumOperands(); i++) {
+      auto *V = PN->getOperand(i);
+      PN->setOperand(i, UseScalar(V));
+    }
+  }
 
   return {Header, Exit};
 }
