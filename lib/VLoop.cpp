@@ -34,6 +34,7 @@ VLoop::VLoop(Function *F, LoopInfo &LI, DominatorTree &DT,
       for (auto &I : *BB) {
         if (I.isTerminator() && !isa<ReturnInst>(&I))
           continue;
+        errs() << I << '\n';
         Items.push_back(&I);
         InstConds[&I] = C;
         if (auto *PN = dyn_cast<PHINode>(&I))
@@ -48,6 +49,7 @@ VLoop::VLoop(Function *F, LoopInfo &LI, DominatorTree &DT,
       // skip if we've seen this sub-loop before
       if (!Visited.insert(L).second)
         continue;
+      errs() << *L << '\n';
       auto *SubVL = new VLoop(LI, L, CDA, VLI);
       Items.push_back(SubVL);
       SubLoops.emplace_back(SubVL);
@@ -95,6 +97,9 @@ VLoop::VLoop(LoopInfo &LI, Loop *L, ControlDependenceAnalysis &CDA,
     if (L2 == L) {
       // BB is contained immediately within L
       for (auto &I : *BB) {
+        if (I.isTerminator() && !isa<ReturnInst>(&I))
+          continue;
+        errs() << I << '\n';
         Items.push_back(&I);
         InstConds[&I] = C;
         VLI.mapInstToLoop(&I, this);
@@ -103,12 +108,13 @@ VLoop::VLoop(LoopInfo &LI, Loop *L, ControlDependenceAnalysis &CDA,
           getIncomingPhiConditions(GatedPhis[PN], PN, CDA);
       }
     } else {
-      while (L2->getParentLoop() == L)
+      while (L2->getParentLoop() != L)
         L2 = L2->getParentLoop();
       assert(L2 && L2->getParentLoop() == L);
       // Skip if we've seen L2 before
       if (!Visited.insert(L2).second)
         continue;
+      errs() << *L2 << '\n';
       auto *SubVL = new VLoop(LI, L2, CDA, VLI);
       Items.push_back(SubVL);
       SubLoops.emplace_back(SubVL);
