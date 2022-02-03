@@ -5,6 +5,7 @@ set(LIB_PSSA_SRC
   BlockBuilder.cpp
   VLoop.cpp
   PSSAEntry.cpp
+  Lower.cpp
   )
 
 add_library(PSSA MODULE ${LIB_PSSA_SRC})

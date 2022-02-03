@@ -1,5 +1,6 @@
 #include "ControlDependence.h"
 #include "VLoop.h"
+#include "Lower.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MustExecute.h" // mayContainIrreducibleControl
 #include "llvm/Analysis/PostDominators.h"
@@ -57,10 +58,6 @@ bool PSSAEntry::runOnFunction(Function &F) {
   auto &PDT = getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
   auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
 
-  ControlDependenceAnalysis CDA(LI, DT, PDT);
-  VLoopInfo VLI;
-  VLoop TopLevelVL(&F, LI, DT, CDA, VLI);
-
   // Don't deal with irreducible CFG
   if (mayContainIrreducibleControl(F, &LI))
     return false;
@@ -76,7 +73,15 @@ bool PSSAEntry::runOnFunction(Function &F) {
     if (!L->isRotatedForm() || L->hasNoExitBlocks())
       return false;
 
-  return false;
+  ControlDependenceAnalysis CDA(LI, DT, PDT);
+  VLoopInfo VLI;
+  VLoop TopLevelVL(&F, LI, DT, CDA, VLI);
+
+  F.getParent()->dump();
+
+  lowerPSSAToLLVM(&F, &TopLevelVL);
+
+  return true;
 }
 
 // Automatically enable the pass.
