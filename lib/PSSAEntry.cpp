@@ -77,8 +77,6 @@ bool PSSAEntry::runOnFunction(Function &F) {
   VLoopInfo VLI;
   VLoop TopLevelVL(&F, LI, DT, CDA, VLI);
 
-  F.getParent()->dump();
-
   lowerPSSAToLLVM(&F, &TopLevelVL);
 
   return true;
