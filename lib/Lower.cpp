@@ -149,9 +149,9 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
   BlockBuilder BBuilder(VL->isLoop() ? Header : Entry, UseScalar);
 
   // Lower the loop items in order
-  for (auto &Item : VL->items()) {
+  for (auto &InstOrLoop : VL->items()) {
     // Emit the sub-loop recursively
-    if (auto *SubVL = Item.dyn_cast<VLoop *>()) {
+    if (auto *SubVL = InstOrLoop.asLoop()) {
       BasicBlock *SubLoopHeader, *SubLoopExit;
       auto *LoopCond = SubVL->getLoopCond();
       BasicBlock *Preheader = BBuilder.getBlockFor(LoopCond);
@@ -160,7 +160,7 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
       continue;
     }
 
-    auto *I = Item.dyn_cast<Instruction *>();
+    auto *I = InstOrLoop.asInstruction();
     assert(I);
 
     auto *Cond = VL->getInstCond(I);

@@ -5,6 +5,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/SmallVector.h"
+#include <list>
 
 namespace llvm {
 class Loop;
@@ -54,15 +55,24 @@ struct OneHotPhi {
       : C(C), IfTrue(IfTrue), IfFalse(IfFalse) {}
 };
 
+class VLoop;
+class Item {
+  llvm::PointerUnion<llvm::Instruction *, VLoop *> Storage;
+public:
+  Item(VLoop *VL) : Storage(VL) {}
+  Item(llvm::Instruction *I) : Storage(I) {}
+  bool isLoop() const { return Storage.is<VLoop *>(); };
+  VLoop *asLoop() const { return Storage.dyn_cast<VLoop *>(); }
+  llvm::Instruction *asInstruction() const { return Storage.dyn_cast<llvm::Instruction *>(); }
+};
+
 class VLoop {
   VLoopInfo &VLI;
   friend class VLoopInfo;
   bool IsTopLevel; // True if this VLoop doesn't represent any actual loop but
                    // the whole function
 
-  using ItemType = llvm::PointerUnion<llvm::Instruction *, VLoop *>;
-
-  llvm::SmallVector<ItemType> Items;
+  std::list<Item> Items;
   llvm::SmallVector<std::unique_ptr<VLoop>, 4> SubLoops;
   llvm::SmallDenseMap<llvm::PHINode *, MuNode, 8> Mus;
   llvm::DenseMap<llvm::PHINode *, OneHotPhi> OneHotPhis;
@@ -87,7 +97,7 @@ public:
   VLoop(llvm::Function *, llvm::LoopInfo &, llvm::DominatorTree &,
         ControlDependenceAnalysis &, VLoopInfo &);
 
-  llvm::ArrayRef<ItemType> items() const { return Items; }
+  const decltype(Items) &items() const { return Items; }
 
   const ControlCondition *getInstCond(llvm::Instruction *I) const {
     assert(InstConds.count(I));
