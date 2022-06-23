@@ -7,11 +7,6 @@
 
 using namespace llvm;
 
-static void setSubtract(BitVector &Src, BitVector ToRemove) {
-  ToRemove.flip();
-  Src &= ToRemove;
-}
-
 static void
 getIncomingPhiConditions(SmallVectorImpl<const ControlCondition *> &Conds,
                          PHINode *PN, ControlDependenceAnalysis &CDA) {
