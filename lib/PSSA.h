@@ -1,11 +1,11 @@
 #ifndef PSSA_H
 #define PSSA_H
 
+#include "ControlDependence.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/PointerUnion.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
-#include "ControlDependence.h"
+#include "llvm/ADT/SmallVector.h"
 #include <list>
 
 namespace llvm {
@@ -145,7 +145,7 @@ class PredicatedSSA {
   llvm::DenseMap<llvm::Instruction *, VLoop *> InstToVLoopMap;
 
 public:
-  // Convert from LLVM IR 
+  // Convert from LLVM IR
   PredicatedSSA(llvm::Function *);
   void mapInstToLoop(llvm::Instruction *I, VLoop *VL) {
     InstToVLoopMap[I] = VL;
@@ -159,4 +159,4 @@ public:
   VLoop &getTopLevel() { return TopVL; }
 };
 
-#endif
+#endif // end PSSA_H

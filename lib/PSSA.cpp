@@ -1,13 +1,13 @@
 #include "PSSA.h"
 #include "ControlDependence.h"
-#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopIterator.h"
-#include "llvm/Transforms/Utils/ValueMapper.h"
+#include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/InstIterator.h"
-#include "llvm/Analysis/PostDominators.h"
+#include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
 
 using namespace llvm;
 
@@ -108,9 +108,8 @@ PredicatedSSA::PredicatedSSA(Function *SrcF) : TopVL() {
     auto *LatchCond = CDA.getConditionForBlock(Latch);
     // Back edge taken === reaches latch && back edge taken
     if (LoopBr->isConditional())
-      VL->setBackEdgeCond(
-          CT.getAnd(LatchCond, LoopBr->getCondition(),
-                     LoopBr->getSuccessor(0) == L->getHeader()));
+      VL->setBackEdgeCond(CT.getAnd(LatchCond, LoopBr->getCondition(),
+                                    LoopBr->getSuccessor(0) == L->getHeader()));
     else
       VL->setBackEdgeCond(LatchCond);
 
