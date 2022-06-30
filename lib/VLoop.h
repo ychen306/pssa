@@ -69,6 +69,7 @@ class VLoop {
 
   std::list<Item> Items;
   llvm::SmallVector<std::unique_ptr<VLoop>, 4> SubLoops;
+  // FIXME: make this a small ptr set
   llvm::SmallDenseMap<llvm::PHINode *, MuNode, 8> Mus;
   llvm::DenseMap<llvm::PHINode *, OneHotPhi> OneHotPhis;
   llvm::DenseMap<llvm::PHINode *,
@@ -82,15 +83,27 @@ class VLoop {
   const ControlCondition *BackEdgeCond;
 
   VLoop *Parent;
-  llvm::Loop *L; // the original loop
-
-  VLoop(llvm::LoopInfo &, llvm::Loop *, ControlDependenceAnalysis &,
-        VLoopInfo &);
 
 public:
-  // Construct a top-level "loop" that represents a whole function
-  VLoop(llvm::Function *, llvm::LoopInfo &, llvm::DominatorTree &,
-        ControlDependenceAnalysis &, VLoopInfo &);
+  // Create a top-level "loop"
+  VLoop()
+      : IsTopLevel(true), Parent(nullptr), LoopCond(nullptr),
+        BackEdgeCond(nullptr) {}
+  VLoop(const ControlCondition *LoopCond, const ControlCondition *BackEdgeCond,
+        VLoop *Parent = nullptr)
+      : IsTopLevel(false), Parent(nullptr), LoopCond(LoopCond),
+        BackEdgeCond(BackEdgeCond) {}
+
+  using ItemIterator = decltype(Items)::iterator;
+
+  ItemIterator insert(llvm::Instruction *,
+      const ControlCondition *,
+      llvm::Optional<ItemIterator> InsertBefore=llvm::None);
+  ItemIterator insert(llvm::PHINode *,
+      const ControlCondition *,
+      ControlDependenceAnalysis &,
+      llvm::Optional<ItemIterator> InsertBefore=llvm::None);
+  ItemIterator insert(VLoop *, llvm::Optional<ItemIterator> InsertBefore=llvm::None);
 
   const decltype(Items) &items() const { return Items; }
 
@@ -107,8 +120,16 @@ public:
   }
   const ControlCondition *getLoopCond() const { return LoopCond; }
   const ControlCondition *getBackEdgeCond() const { return BackEdgeCond; }
-  bool isLoop() const { return L; }
+  void setBackEdgeCond(const ControlCondition *C) {
+    BackEdgeCond = C;
+  }
+  void setLoopCond(const ControlCondition *C) {
+    LoopCond = C;
+  }
+  bool isLoop() const { return !IsTopLevel; }
   llvm::Optional<MuNode> getMu(llvm::PHINode *) const;
+  // Add a phi node as mu. Assume the first value is the init. val and second rec.
+  void addMu(llvm::PHINode *);
 
   bool isGatedPhi(llvm::PHINode *PN) const { return PhiConds.count(PN); }
 
@@ -120,5 +141,10 @@ public:
 
   VLoop *getParent() const { return Parent; }
 };
+
+std::unique_ptr<VLoop> buildTopLevelVLoop(llvm::Function *, llvm::LoopInfo &,
+                                          llvm::DominatorTree &,
+                                          ControlDependenceAnalysis &,
+                                          VLoopInfo &);
 
 #endif

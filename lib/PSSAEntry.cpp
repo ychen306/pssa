@@ -75,9 +75,9 @@ bool PSSAEntry::runOnFunction(Function &F) {
 
   ControlDependenceAnalysis CDA(LI, DT, PDT);
   VLoopInfo VLI;
-  VLoop TopLevelVL(&F, LI, DT, CDA, VLI);
+  auto TopLevelVL = buildTopLevelVLoop(&F, LI, DT, CDA, VLI);
 
-  lowerPSSAToLLVM(&F, &TopLevelVL);
+  lowerPSSAToLLVM(&F, TopLevelVL.get());
 
   return true;
 }
