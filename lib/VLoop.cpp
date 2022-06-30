@@ -15,18 +15,20 @@ getIncomingPhiConditions(SmallVectorImpl<const ControlCondition *> &Conds,
 }
 
 VLoop::ItemIterator VLoop::insert(Instruction *I, const ControlCondition *C,
-    Optional<ItemIterator> InsertBefore) {
+                                  Optional<ItemIterator> InsertBefore) {
   InstConds[I] = C;
   return Items.insert(InsertBefore ? *InsertBefore : Items.end(), I);
 }
 
 VLoop::ItemIterator VLoop::insert(PHINode *PN, const ControlCondition *C,
-    ControlDependenceAnalysis &CDA, Optional<ItemIterator> InsertBefore) {
+                                  ControlDependenceAnalysis &CDA,
+                                  Optional<ItemIterator> InsertBefore) {
   getIncomingPhiConditions(PhiConds[PN], PN, CDA);
   return insert(PN, C);
 }
 
-VLoop::ItemIterator VLoop::insert(VLoop *SubVL, Optional<ItemIterator> InsertBefore) {
+VLoop::ItemIterator VLoop::insert(VLoop *SubVL,
+                                  Optional<ItemIterator> InsertBefore) {
   SubLoops.emplace_back(SubVL);
   return Items.insert(InsertBefore ? *InsertBefore : Items.end(), SubVL);
 }
@@ -36,8 +38,10 @@ void VLoop::addMu(PHINode *PN) {
   Mus.try_emplace(PN, PN->getIncomingValue(0), PN->getIncomingValue(1));
 }
 
-std::unique_ptr<VLoop> buildTopLevelVLoop(Function *F, LoopInfo &LI, DominatorTree &DT,
-             ControlDependenceAnalysis &CDA, VLoopInfo &VLI) {
+std::unique_ptr<VLoop> buildTopLevelVLoop(Function *F, LoopInfo &LI,
+                                          DominatorTree &DT,
+                                          ControlDependenceAnalysis &CDA,
+                                          VLoopInfo &VLI) {
   auto TopVL = std::make_unique<VLoop>();
 
   ReversePostOrderTraversal<Function *> RPO(F);
@@ -76,7 +80,7 @@ std::unique_ptr<VLoop> buildTopLevelVLoop(Function *F, LoopInfo &LI, DominatorTr
 
   while (!Worklist.empty()) {
     VLoop *VL;
-    Loop *L; 
+    Loop *L;
     std::tie(VL, L) = Worklist.pop_back_val();
 
     assert(L->isRotatedForm());
@@ -91,15 +95,17 @@ std::unique_ptr<VLoop> buildTopLevelVLoop(Function *F, LoopInfo &LI, DominatorTr
     auto *LatchCond = CDA.getConditionForBlock(Latch);
     // Back edge taken === reaches latch && back edge taken
     if (LoopBr->isConditional())
-      VL->setBackEdgeCond(CDA.getAnd(LatchCond, LoopBr->getCondition(),
-          LoopBr->getSuccessor(0) == L->getHeader()));
+      VL->setBackEdgeCond(
+          CDA.getAnd(LatchCond, LoopBr->getCondition(),
+                     LoopBr->getSuccessor(0) == L->getHeader()));
     else
       VL->setBackEdgeCond(LatchCond);
 
     // Figure out the mu nodes
     for (PHINode &PN : Header->phis()) {
       assert(PN.getNumIncomingValues() == 2);
-      // Canonicalize the phi-node so that first value is the init. and second iter.
+      // Canonicalize the phi-node so that first value is the init. and second
+      // iter.
       auto *Init = PN.getIncomingValueForBlock(Preheader);
       auto *Iter = PN.getIncomingValueForBlock(Latch);
       PN.setIncomingValue(0, Init);
@@ -142,7 +148,6 @@ std::unique_ptr<VLoop> buildTopLevelVLoop(Function *F, LoopInfo &LI, DominatorTr
         Worklist.emplace_back(SubVL, L2);
       }
     }
-
   }
   return TopVL;
 }

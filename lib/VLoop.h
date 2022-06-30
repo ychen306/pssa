@@ -55,12 +55,15 @@ struct OneHotPhi {
 class VLoop;
 class Item {
   llvm::PointerUnion<llvm::Instruction *, VLoop *> Storage;
+
 public:
   Item(VLoop *VL) : Storage(VL) {}
   Item(llvm::Instruction *I) : Storage(I) {}
   bool isLoop() const { return Storage.is<VLoop *>(); };
   VLoop *asLoop() const { return Storage.dyn_cast<VLoop *>(); }
-  llvm::Instruction *asInstruction() const { return Storage.dyn_cast<llvm::Instruction *>(); }
+  llvm::Instruction *asInstruction() const {
+    return Storage.dyn_cast<llvm::Instruction *>();
+  }
 };
 
 class VLoop {
@@ -96,14 +99,13 @@ public:
 
   using ItemIterator = decltype(Items)::iterator;
 
-  ItemIterator insert(llvm::Instruction *,
-      const ControlCondition *,
-      llvm::Optional<ItemIterator> InsertBefore=llvm::None);
-  ItemIterator insert(llvm::PHINode *,
-      const ControlCondition *,
-      ControlDependenceAnalysis &,
-      llvm::Optional<ItemIterator> InsertBefore=llvm::None);
-  ItemIterator insert(VLoop *, llvm::Optional<ItemIterator> InsertBefore=llvm::None);
+  ItemIterator insert(llvm::Instruction *, const ControlCondition *,
+                      llvm::Optional<ItemIterator> InsertBefore = llvm::None);
+  ItemIterator insert(llvm::PHINode *, const ControlCondition *,
+                      ControlDependenceAnalysis &,
+                      llvm::Optional<ItemIterator> InsertBefore = llvm::None);
+  ItemIterator insert(VLoop *,
+                      llvm::Optional<ItemIterator> InsertBefore = llvm::None);
 
   const decltype(Items) &items() const { return Items; }
 
@@ -120,15 +122,12 @@ public:
   }
   const ControlCondition *getLoopCond() const { return LoopCond; }
   const ControlCondition *getBackEdgeCond() const { return BackEdgeCond; }
-  void setBackEdgeCond(const ControlCondition *C) {
-    BackEdgeCond = C;
-  }
-  void setLoopCond(const ControlCondition *C) {
-    LoopCond = C;
-  }
+  void setBackEdgeCond(const ControlCondition *C) { BackEdgeCond = C; }
+  void setLoopCond(const ControlCondition *C) { LoopCond = C; }
   bool isLoop() const { return !IsTopLevel; }
   llvm::Optional<MuNode> getMu(llvm::PHINode *) const;
-  // Add a phi node as mu. Assume the first value is the init. val and second rec.
+  // Add a phi node as mu. Assume the first value is the init. val and second
+  // rec.
   void addMu(llvm::PHINode *);
 
   bool isGatedPhi(llvm::PHINode *PN) const { return PhiConds.count(PN); }
