@@ -1,5 +1,5 @@
 #include "ControlDependence.h"
-#include "VLoop.h"
+#include "PSSA.h"
 #include "Lower.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MustExecute.h" // mayContainIrreducibleControl
@@ -73,8 +73,8 @@ bool PSSAEntry::runOnFunction(Function &F) {
     if (!L->isRotatedForm() || L->hasNoExitBlocks())
       return false;
 
-  auto PSSA = buildPSSA(&F);
-  lowerPSSAToLLVM(&F, PSSA.TopVL.get());
+  PredicatedSSA PSSA(&F);
+  lowerPSSAToLLVM(&F, PSSA);
 
   return true;
 }

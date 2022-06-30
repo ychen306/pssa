@@ -1,5 +1,5 @@
 #include "BlockBuilder.h"
-#include "VLoop.h"
+#include "PSSA.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
@@ -242,8 +242,7 @@ void PSSALowering::run(VLoop *TopLevelVL) {
   fixDefUseDominance(F, DT);
 }
 
-void lowerPSSAToLLVM(Function *F, VLoop *VL) {
+void lowerPSSAToLLVM(Function *F, PredicatedSSA &PSSA) {
   PSSALowering Lowering(F);
-  assert(!VL->isLoop());
-  Lowering.run(VL);
+  Lowering.run(&PSSA.getTopLevel());
 }

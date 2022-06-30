@@ -3,7 +3,7 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR})
 set(LIB_PSSA_SRC
   ControlDependence.cpp
   BlockBuilder.cpp
-  VLoop.cpp
+  PSSA.cpp
   PSSAEntry.cpp
   Lower.cpp
   )

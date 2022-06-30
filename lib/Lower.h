@@ -5,8 +5,7 @@ namespace llvm {
 class Function;
 }
 
-class VLoop;
-// Lower a top-level "loop" back to llvm ir.
-void lowerPSSAToLLVM(llvm::Function *, VLoop *);
+class PredicatedSSA;
+void lowerPSSAToLLVM(llvm::Function *, PredicatedSSA &);
 
 #endif // PSSA_LOWER_H

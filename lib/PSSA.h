@@ -1,5 +1,5 @@
-#ifndef VLOOP_H
-#define VLOOP_H
+#ifndef PSSA_H
+#define PSSA_H
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/PointerUnion.h"
@@ -139,12 +139,14 @@ public:
   VLoop *getParent() const { return Parent; }
 };
 
-struct PredicatedSSA {
+class PredicatedSSA {
   ConditionTable CT;
-  std::unique_ptr<VLoop> TopVL;
+  VLoop TopVL;
   llvm::DenseMap<llvm::Instruction *, VLoop *> InstToVLoopMap;
 
 public:
+  // Convert from LLVM IR 
+  PredicatedSSA(llvm::Function *);
   void mapInstToLoop(llvm::Instruction *I, VLoop *VL) {
     InstToVLoopMap[I] = VL;
   }
@@ -153,8 +155,8 @@ public:
     assert(InstToVLoopMap.count(I));
     return InstToVLoopMap.lookup(I);
   }
-};
 
-PredicatedSSA buildPSSA(llvm::Function *);
+  VLoop &getTopLevel() { return TopVL; }
+};
 
 #endif

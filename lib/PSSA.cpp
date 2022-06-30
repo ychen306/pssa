@@ -1,4 +1,4 @@
-#include "VLoop.h"
+#include "PSSA.h"
 #include "ControlDependence.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/ADT/PostOrderIterator.h"
@@ -37,7 +37,7 @@ VLoop::ItemIterator VLoop::insert(VLoop *SubVL,
   return Items.insert(InsertBefore ? *InsertBefore : Items.end(), SubVL);
 }
 
-PredicatedSSA buildPSSA(Function *SrcF) {
+PredicatedSSA::PredicatedSSA(Function *SrcF) : TopVL() {
   ValueToValueMapTy VMap;
   auto *F = CloneFunction(SrcF, VMap);
 
@@ -49,16 +49,10 @@ PredicatedSSA buildPSSA(Function *SrcF) {
     RemapInstruction(&I, ArgMap,
                      RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
 
-  PredicatedSSA PSSA;
-  auto &CT = PSSA.CT;
-
   DominatorTree DT(*F);
   PostDominatorTree PDT(*F);
   LoopInfo LI(DT);
   ControlDependenceAnalysis CDA(LI, DT, PDT, CT);
-
-  PSSA.TopVL = std::move(std::make_unique<VLoop>());
-  auto *TopVL = PSSA.TopVL.get();
 
   ReversePostOrderTraversal<Function *> RPO(F);
   SmallPtrSet<Loop *, 8> Visited;
@@ -77,10 +71,10 @@ PredicatedSSA buildPSSA(Function *SrcF) {
         auto I = &SrcI;
 
         if (auto *PN = dyn_cast<PHINode>(I))
-          TopVL->insert(PN, C, CDA);
+          TopVL.insert(PN, C, CDA);
         else
-          TopVL->insert(I, C);
-        PSSA.mapInstToLoop(I, TopVL);
+          TopVL.insert(I, C);
+        mapInstToLoop(I, &TopVL);
       }
     } else {
       // BB is contained in some loop, get the top-level loop that contains BB
@@ -90,8 +84,8 @@ PredicatedSSA buildPSSA(Function *SrcF) {
       // skip if we've seen this sub-loop before
       if (!Visited.insert(L).second)
         continue;
-      auto *SubVL = new VLoop(nullptr, nullptr, TopVL);
-      TopVL->insert(SubVL);
+      auto *SubVL = new VLoop(nullptr, nullptr, &TopVL);
+      TopVL.insert(SubVL);
       // Remember to build the child loop later
       Worklist.emplace_back(SubVL, L);
     }
@@ -158,7 +152,7 @@ PredicatedSSA buildPSSA(Function *SrcF) {
             VL->insert(PN, C, CDA);
           else
             VL->insert(I, C);
-          PSSA.mapInstToLoop(I, VL);
+          mapInstToLoop(I, VL);
         }
       } else {
         while (L2->getParentLoop() != L)
@@ -184,6 +178,4 @@ PredicatedSSA buildPSSA(Function *SrcF) {
       I->removeFromParent();
   }
   F->dropAllReferences();
-
-  return PSSA;
 }
