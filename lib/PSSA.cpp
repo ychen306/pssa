@@ -75,16 +75,14 @@ PredicatedSSA::PredicatedSSA(Function *SrcF) : TopVL(this) {
     if (!L) {
       // BB is not contained in any loop
       auto *C = CDA.getConditionForBlock(BB);
-      for (auto &SrcI : *BB) {
-        if (SrcI.isTerminator() && !isa<ReturnInst>(&SrcI))
+      for (auto &I : *BB) {
+        if (I.isTerminator() && !isa<ReturnInst>(&I))
           continue;
 
-        auto I = &SrcI;
-
-        if (auto *PN = dyn_cast<PHINode>(I))
+        if (auto *PN = dyn_cast<PHINode>(&I))
           TopVL.insert(PN, C, CDA);
         else
-          TopVL.insert(I, C);
+          TopVL.insert(&I, C);
       }
     } else {
       // BB is contained in some loop, get the top-level loop that contains BB
@@ -124,20 +122,19 @@ PredicatedSSA::PredicatedSSA(Function *SrcF) : TopVL(this) {
       VL->setBackEdgeCond(LatchCond);
 
     // Figure out the mu nodes
-    for (PHINode &SrcPN : Header->phis()) {
-      assert(SrcPN.getNumIncomingValues() == 2);
+    for (PHINode &PN : Header->phis()) {
+      assert(PN.getNumIncomingValues() == 2);
 
-      auto *PN = &SrcPN;
       // Canonicalize the phi-node so that first value is the init. and second
       // iter.
-      auto *Init = PN->getIncomingValueForBlock(Preheader);
-      auto *Iter = PN->getIncomingValueForBlock(Latch);
-      PN->setIncomingValue(0, Init);
-      PN->setIncomingValue(1, Iter);
-      PN->setIncomingBlock(0, Preheader);
-      PN->setIncomingBlock(1, Latch);
+      auto *Init = PN.getIncomingValueForBlock(Preheader);
+      auto *Iter = PN.getIncomingValueForBlock(Latch);
+      PN.setIncomingValue(0, Init);
+      PN.setIncomingValue(1, Iter);
+      PN.setIncomingBlock(0, Preheader);
+      PN.setIncomingBlock(1, Latch);
 
-      VL->addMu(PN);
+      VL->addMu(&PN);
     }
 
     // Populate the loop items
@@ -150,17 +147,15 @@ PredicatedSSA::PredicatedSSA(Function *SrcF) : TopVL(this) {
       assert(L2);
       if (L2 == L) {
         // BB is contained immediately within L
-        for (auto &SrcI : *BB) {
-          if (SrcI.isTerminator() && !isa<ReturnInst>(&SrcI))
+        for (auto &I : *BB) {
+          if (I.isTerminator() && !isa<ReturnInst>(&I))
             continue;
 
-          auto *I = &SrcI;
-
-          auto *PN = dyn_cast<PHINode>(I);
+          auto *PN = dyn_cast<PHINode>(&I);
           if (PN && !VL->isMu(PN))
             VL->insert(PN, C, CDA);
           else
-            VL->insert(I, C);
+            VL->insert(&I, C);
         }
       } else {
         while (L2->getParentLoop() != L)
