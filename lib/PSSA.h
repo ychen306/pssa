@@ -22,21 +22,6 @@ class PostDominatorTree;
 class ControlCondition;
 class ControlDependenceAnalysis;
 
-class VLoop;
-class VLoopInfo {
-  llvm::DenseMap<llvm::Instruction *, VLoop *> InstToVLoopMap;
-
-public:
-  void mapInstToLoop(llvm::Instruction *I, VLoop *VL) {
-    InstToVLoopMap[I] = VL;
-  }
-
-  VLoop *getLoopForInst(llvm::Instruction *I) const {
-    assert(InstToVLoopMap.count(I));
-    return InstToVLoopMap.lookup(I);
-  }
-};
-
 // This represents a special kind of gated phi
 struct OneHotPhi {
   const ControlCondition *C;
@@ -49,6 +34,7 @@ struct OneHotPhi {
 
 class VLoop;
 class Item {
+  friend struct ItemHashInfo;
   llvm::PointerUnion<llvm::Instruction *, VLoop *> Storage;
 
 public:
@@ -61,7 +47,27 @@ public:
   }
 };
 
+struct ItemHashInfo {
+  using InstInfo = llvm::DenseMapInfo<llvm::Instruction *>;
+  using Info = llvm::DenseMapInfo<llvm::PointerUnion<llvm::Instruction *, VLoop *>>;
+  static inline Item getEmptyKey() { return Item(InstInfo::getEmptyKey()); }
+  static inline Item getTombstoneKey() {
+    return Item(InstInfo::getTombstoneKey());
+  }
+  static unsigned getHashValue(const Item &It) {
+    return Info::getHashValue(It.Storage);
+  }
+  static bool isEqual(const Item &It1, const Item &It2) {
+    return It1.Storage == It2.Storage;
+  }
+};
+
+
+class PredicatedSSA;
 class VLoop {
+  friend class PredicatedSSA;
+
+  PredicatedSSA *PSSA;
   bool IsTopLevel; // True if this VLoop doesn't represent any actual loop but
                    // the whole function
 
@@ -83,12 +89,14 @@ class VLoop {
 
 public:
   // Create a top-level "loop"
-  VLoop()
-      : IsTopLevel(true), Parent(nullptr), LoopCond(nullptr),
+  VLoop(PredicatedSSA *PSSA)
+      : PSSA(PSSA), IsTopLevel(true), Parent(nullptr), LoopCond(nullptr),
         BackEdgeCond(nullptr) {}
-  VLoop(const ControlCondition *LoopCond, const ControlCondition *BackEdgeCond,
+  VLoop(PredicatedSSA *PSSA,
+      const ControlCondition *LoopCond, const ControlCondition *BackEdgeCond,
         VLoop *Parent = nullptr)
-      : IsTopLevel(false), Parent(nullptr), LoopCond(LoopCond),
+      : PSSA(PSSA),
+        IsTopLevel(false), Parent(nullptr), LoopCond(LoopCond),
         BackEdgeCond(BackEdgeCond) {}
 
   using ItemIterator = decltype(Items)::iterator;
@@ -100,6 +108,8 @@ public:
                       llvm::Optional<ItemIterator> InsertBefore = llvm::None);
   ItemIterator insert(VLoop *,
                       llvm::Optional<ItemIterator> InsertBefore = llvm::None);
+
+  void erase(ItemIterator It) { Items.erase(It); }
 
   const decltype(Items) &items() const { return Items; }
 
@@ -137,18 +147,42 @@ public:
   }
 
   VLoop *getParent() const { return Parent; }
+  PredicatedSSA *getPSSA() const { return PSSA; }
 };
 
 class PredicatedSSA {
   ConditionTable CT;
   VLoop TopVL;
   llvm::DenseMap<llvm::Instruction *, VLoop *> InstToVLoopMap;
+  llvm::DenseMap<Item, VLoop::ItemIterator, ItemHashInfo> ItemToIteratorMap;
 
 public:
+  struct InsertPoint {
+    VLoop *VL;
+    VLoop::ItemIterator It;
+    void insert(llvm::Instruction *I, const ControlCondition *C);
+  };
+
+  InsertPoint getInsertPoint(llvm::Instruction *I) {
+    assert(ItemToIteratorMap.count(I));
+    assert(InstToVLoopMap.count(I));
+    return { InstToVLoopMap.lookup(I), ItemToIteratorMap.lookup(I) };
+  }
+  InsertPoint getInsertPoint(VLoop *VL) {
+    assert(VL->getParent());
+    assert(ItemToIteratorMap.count(VL));
+    return { VL->getParent(), ItemToIteratorMap.lookup(VL) };
+  }
+  InsertPoint getEntry() {
+    return { &TopVL, TopVL.Items.begin() };
+  }
+
   // Convert from LLVM IR
   PredicatedSSA(llvm::Function *);
-  void mapInstToLoop(llvm::Instruction *I, VLoop *VL) {
-    InstToVLoopMap[I] = VL;
+  void mapItemToLoop(VLoop::ItemIterator It, VLoop *VL) {
+    if (auto *I = It->asInstruction())
+      InstToVLoopMap[I] = VL;
+    ItemToIteratorMap[*It] = It;
   }
 
   VLoop *getLoopForInst(llvm::Instruction *I) const {

@@ -21,7 +21,9 @@ getIncomingPhiConditions(SmallVectorImpl<const ControlCondition *> &Conds,
 VLoop::ItemIterator VLoop::insert(Instruction *I, const ControlCondition *C,
                                   Optional<ItemIterator> InsertBefore) {
   InstConds[I] = C;
-  return Items.insert(InsertBefore ? *InsertBefore : Items.end(), I);
+  auto It = Items.insert(InsertBefore ? *InsertBefore : Items.end(), I);
+  PSSA->mapItemToLoop(It, this);
+  return It;
 }
 
 VLoop::ItemIterator VLoop::insert(PHINode *PN, const ControlCondition *C,
@@ -34,10 +36,19 @@ VLoop::ItemIterator VLoop::insert(PHINode *PN, const ControlCondition *C,
 VLoop::ItemIterator VLoop::insert(VLoop *SubVL,
                                   Optional<ItemIterator> InsertBefore) {
   SubLoops.emplace_back(SubVL);
-  return Items.insert(InsertBefore ? *InsertBefore : Items.end(), SubVL);
+  auto It = Items.insert(InsertBefore ? *InsertBefore : Items.end(), SubVL);
+  PSSA->mapItemToLoop(It, this);
+  return It;
 }
 
-PredicatedSSA::PredicatedSSA(Function *SrcF) : TopVL() {
+void PredicatedSSA::InsertPoint::insert(Instruction *I, const ControlCondition *C) {
+  assert(VL);
+  assert(!I->isTerminator());
+  assert(!isa<PHINode>(I));
+  VL->insert(I, C, It);
+}
+
+PredicatedSSA::PredicatedSSA(Function *SrcF) : TopVL(this) {
   ValueToValueMapTy VMap;
   auto *F = CloneFunction(SrcF, VMap);
 
@@ -74,7 +85,6 @@ PredicatedSSA::PredicatedSSA(Function *SrcF) : TopVL() {
           TopVL.insert(PN, C, CDA);
         else
           TopVL.insert(I, C);
-        mapInstToLoop(I, &TopVL);
       }
     } else {
       // BB is contained in some loop, get the top-level loop that contains BB
@@ -84,7 +94,7 @@ PredicatedSSA::PredicatedSSA(Function *SrcF) : TopVL() {
       // skip if we've seen this sub-loop before
       if (!Visited.insert(L).second)
         continue;
-      auto *SubVL = new VLoop(nullptr, nullptr, &TopVL);
+      auto *SubVL = new VLoop(this, nullptr, nullptr, &TopVL);
       TopVL.insert(SubVL);
       // Remember to build the child loop later
       Worklist.emplace_back(SubVL, L);
@@ -151,7 +161,6 @@ PredicatedSSA::PredicatedSSA(Function *SrcF) : TopVL() {
             VL->insert(PN, C, CDA);
           else
             VL->insert(I, C);
-          mapInstToLoop(I, VL);
         }
       } else {
         while (L2->getParentLoop() != L)
@@ -160,7 +169,7 @@ PredicatedSSA::PredicatedSSA(Function *SrcF) : TopVL() {
         // Skip if we've seen L2 before
         if (!Visited.insert(L2).second)
           continue;
-        auto *SubVL = new VLoop(nullptr, nullptr, VL);
+        auto *SubVL = new VLoop(this, nullptr, nullptr, VL);
         VL->insert(SubVL);
         Worklist.emplace_back(SubVL, L2);
       }
