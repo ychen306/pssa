@@ -22,15 +22,12 @@ class ControlDependenceAnalysis;
 
 class VLoop;
 class VLoopInfo {
-  llvm::DenseMap<llvm::Loop *, VLoop *> LoopToVLoopMap;
   llvm::DenseMap<llvm::Instruction *, VLoop *> InstToVLoopMap;
 
 public:
   void mapInstToLoop(llvm::Instruction *I, VLoop *VL) {
     InstToVLoopMap[I] = VL;
   }
-  VLoop *getVLoop(llvm::Loop *) const;
-  void setVLoop(llvm::Loop *, VLoop *);
 
   VLoop *getLoopForInst(llvm::Instruction *I) const {
     assert(InstToVLoopMap.count(I));
@@ -67,8 +64,6 @@ public:
 };
 
 class VLoop {
-  VLoopInfo &VLI;
-  friend class VLoopInfo;
   bool IsTopLevel; // True if this VLoop doesn't represent any actual loop but
                    // the whole function
 

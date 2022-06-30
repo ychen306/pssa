@@ -16,8 +16,7 @@ getIncomingPhiConditions(SmallVectorImpl<const ControlCondition *> &Conds,
 
 VLoop::VLoop(Function *F, LoopInfo &LI, DominatorTree &DT,
              ControlDependenceAnalysis &CDA, VLoopInfo &VLI)
-    : IsTopLevel(true), Parent(nullptr), LoopCond(nullptr), L(nullptr),
-      VLI(VLI) {
+    : IsTopLevel(true), Parent(nullptr), LoopCond(nullptr), L(nullptr) {
   ReversePostOrderTraversal<Function *> RPO(F);
   SmallPtrSet<Loop *, 8> Visited;
   // Populate the loop items in program order
@@ -54,8 +53,7 @@ VLoop::VLoop(LoopInfo &LI, Loop *L, ControlDependenceAnalysis &CDA,
              VLoopInfo &VLI)
     : IsTopLevel(false),
       LoopCond(CDA.getConditionForBlock(L->getLoopPreheader())), L(L),
-      Parent(nullptr), VLI(VLI) {
-  VLI.setVLoop(L, this);
+      Parent(nullptr) {
   assert(L->isRotatedForm());
 
   auto *Preheader = L->getLoopPreheader();
@@ -126,7 +124,3 @@ Optional<MuNode> VLoop::getMu(PHINode *PN) const {
     return It->second;
   return None;
 }
-
-VLoop *VLoopInfo::getVLoop(Loop *L) const { return LoopToVLoopMap.lookup(L); }
-
-void VLoopInfo::setVLoop(Loop *L, VLoop *VL) { LoopToVLoopMap[L] = VL; }
