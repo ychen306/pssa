@@ -157,13 +157,22 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
     Header = BasicBlock::Create(Ctx, "header", F);
     Latch = BasicBlock::Create(Ctx, "latch", F);
     Exit = BasicBlock::Create(Ctx, "exit", F);
+    // Branch from preheader to the header.
+    // We will wire latch with exit and header later
     BranchInst::Create(Header /*if true*/, Preheader /*insert at end*/);
 
     ShouldContinueAlloca =
       createAlloca(Type::getInt1Ty(Ctx), "should.continue.mem", Header);
     // intialize it to false
     new StoreInst(ConstantInt::getFalse(Ctx), ShouldContinueAlloca, Header);
-    // We will wire latch with exit and header later
+
+    // Lower the Mu nodes
+    for (auto *PN : VL->mus()) {
+      assert(Preheader && Header && Latch);
+      moveToBegin(PN, Header);
+      PN->setIncomingBlock(0, Preheader);
+      PN->setIncomingBlock(1, Latch);
+    }
   }
 
   auto UseScalar = [&](Value *V) {
@@ -183,44 +192,13 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
       BasicBlock *Preheader = BBuilder.getBlockFor(LoopCond);
       std::tie(SubLoopHeader, SubLoopExit) = lower(SubVL, Preheader);
       BBuilder.setBlockForCondition(SubLoopExit, LoopCond);
-      continue;
-    }
-
-    auto *I = InstOrLoop.asInstruction();
-    assert(I);
-
-    auto *Cond = VL->getInstCond(I);
-
-    auto *PN = dyn_cast<PHINode>(I);
-    if (!PN) {
+    } else {
+      auto *I = InstOrLoop.asInstruction();
+      assert(I);
+      auto *Cond = VL->getInstCond(I);
+      assert(!isa<PHINode>(I) && "Phis should have been demoted");
       moveToEnd(I, BBuilder.getBlockFor(Cond));
-      continue;
     }
-
-    assert(VL->isMu(PN));
-
-    if (VL->isMu(PN)) {
-      assert(Preheader && Header && Latch);
-      moveToBegin(PN, Header);
-      PN->setIncomingBlock(0, Preheader);
-      PN->setIncomingBlock(1, Latch);
-      continue;
-    }
-
-    //// Demote the phi to memory
-    //auto *Alloca =
-    //  createAlloca(PN->getType(), PN->getName() + ".demoted", Entry);
-    //for (unsigned i = 0; i < PN->getNumIncomingValues(); i++) {
-    //  auto *EdgeCond = VL->getPhiCondition(PN, i);
-    //  new StoreInst(PN->getIncomingValue(i), Alloca,
-    //      BBuilder.getBlockFor(EdgeCond));
-    //}
-
-    //auto *Reload =
-    //  new LoadInst(PN->getType(), Alloca, PN->getName() + ".reload",
-    //      BBuilder.getBlockFor(Cond));
-    //PN->replaceAllUsesWith(Reload);
-    //ReplacedPhis[PN] = Reload;
   }
 
   // We are done if we are lowering the top-level "loop"

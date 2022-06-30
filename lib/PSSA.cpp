@@ -154,7 +154,7 @@ PredicatedSSA::PredicatedSSA(Function *SrcF) : TopVL(this) {
           auto *PN = dyn_cast<PHINode>(&I);
           if (PN && !VL->isMu(PN))
             VL->insert(PN, C, CDA);
-          else
+          else if (!PN)
             VL->insert(&I, C);
         }
       } else {
