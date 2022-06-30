@@ -37,7 +37,7 @@ VLoop::ItemIterator VLoop::insert(VLoop *SubVL,
   return Items.insert(InsertBefore ? *InsertBefore : Items.end(), SubVL);
 }
 
-PSSA buildPSSA(Function *SrcF) {
+PredicatedSSA buildPSSA(Function *SrcF) {
   ValueToValueMapTy VMap;
   auto *F = CloneFunction(SrcF, VMap);
 
@@ -49,22 +49,16 @@ PSSA buildPSSA(Function *SrcF) {
     RemapInstruction(&I, ArgMap,
                      RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
 
-  PSSA ThePSSA;
-  auto &VLI = ThePSSA.VLI;
-  auto &DT = *(ThePSSA.DT = std::make_unique<DominatorTree>(*F));
-  auto &PDT = *(ThePSSA.PDT = std::make_unique<PostDominatorTree>(*F));
-  auto &LI = *(ThePSSA.LI = std::make_unique<LoopInfo>(DT));
-  auto &CDA = *(ThePSSA.CDA = std::make_unique<ControlDependenceAnalysis>(LI, DT, PDT));
+  PredicatedSSA PSSA;
+  auto &CT = PSSA.CT;
 
-  //VLoopInfo VLI;
-  //std::unique_ptr<VLoop> TopVL;
-  //std::unique_ptr<ControlDependenceAnalysis> CDA;
-  //std::unique_ptr<llvm::LoopInfo> LI;
-  //std::unique_ptr<llvm::DominatorTree> DT;
-  //std::unique_ptr<llvm::PostDominatorTree> PDT:
+  DominatorTree DT(*F);
+  PostDominatorTree PDT(*F);
+  LoopInfo LI(DT);
+  ControlDependenceAnalysis CDA(LI, DT, PDT, CT);
 
-  ThePSSA.TopVL = std::move(std::make_unique<VLoop>());
-  auto *TopVL = ThePSSA.TopVL.get();
+  PSSA.TopVL = std::move(std::make_unique<VLoop>());
+  auto *TopVL = PSSA.TopVL.get();
 
   ReversePostOrderTraversal<Function *> RPO(F);
   SmallPtrSet<Loop *, 8> Visited;
@@ -86,7 +80,7 @@ PSSA buildPSSA(Function *SrcF) {
           TopVL->insert(PN, C, CDA);
         else
           TopVL->insert(I, C);
-        VLI.mapInstToLoop(I, TopVL);
+        PSSA.mapInstToLoop(I, TopVL);
       }
     } else {
       // BB is contained in some loop, get the top-level loop that contains BB
@@ -121,7 +115,7 @@ PSSA buildPSSA(Function *SrcF) {
     // Back edge taken === reaches latch && back edge taken
     if (LoopBr->isConditional())
       VL->setBackEdgeCond(
-          CDA.getAnd(LatchCond, LoopBr->getCondition(),
+          CT.getAnd(LatchCond, LoopBr->getCondition(),
                      LoopBr->getSuccessor(0) == L->getHeader()));
     else
       VL->setBackEdgeCond(LatchCond);
@@ -164,7 +158,7 @@ PSSA buildPSSA(Function *SrcF) {
             VL->insert(PN, C, CDA);
           else
             VL->insert(I, C);
-          VLI.mapInstToLoop(I, VL);
+          PSSA.mapInstToLoop(I, VL);
         }
       } else {
         while (L2->getParentLoop() != L)
@@ -191,5 +185,5 @@ PSSA buildPSSA(Function *SrcF) {
   }
   F->dropAllReferences();
 
-  return ThePSSA;
+  return PSSA;
 }

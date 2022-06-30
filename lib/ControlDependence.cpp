@@ -12,19 +12,20 @@ using namespace llvm;
 
 ControlDependenceAnalysis::ControlDependenceAnalysis(LoopInfo &LI,
                                                      DominatorTree &DT,
-                                                     PostDominatorTree &PDT)
-    : LI(LI), DT(DT), PDT(PDT) {
+                                                     PostDominatorTree &PDT,
+                                                     ConditionTable &CT)
+    : LI(LI), DT(DT), PDT(PDT), CT(CT) {
   // Run a half-ass GVN over the control conditions
   Function *F = DT.getRootNode()->getBlock()->getParent();
   ReversePostOrderTraversal<Function *> RPO(F);
   for (auto *BB : RPO) {
     auto *Br = dyn_cast_or_null<BranchInst>(BB->getTerminator());
     if (Br && Br->isConditional())
-      (void)getCanonicalValue(Br->getCondition());
+      (void)CT.getCanonicalValue(Br->getCondition());
   }
 }
 
-Value *ControlDependenceAnalysis::getCanonicalValue(Value *V) {
+Value *ConditionTable::getCanonicalValue(Value *V) {
   if (auto *V2 = CanonicalValues.lookup(V))
     return V2;
 
@@ -102,7 +103,7 @@ getGreatestCommonCondition(ArrayRef<const ControlCondition *> Conds) {
 }
 
 const ControlCondition *
-ControlDependenceAnalysis::getCanonicalCondition(const ControlCondition *C) {
+ConditionTable::getCanonicalCondition(const ControlCondition *C) {
   if (auto *And = dyn_cast<ConditionAnd>(C)) {
     auto *Parent = And->Parent;
     if (Parent) {
@@ -120,7 +121,7 @@ ControlDependenceAnalysis::getCanonicalCondition(const ControlCondition *C) {
 }
 
 const ControlCondition *
-ControlDependenceAnalysis::getAnd(const ControlCondition *Parent, Value *Cond,
+ConditionTable::getAnd(const ControlCondition *Parent, Value *Cond,
                                   bool IsTrue) {
   AndKeyT Key(Parent, Cond);
   auto &Slot = IsTrue ? UniqueAndOfTrue[Key] : UniqueAndOfFalse[Key];
@@ -135,7 +136,7 @@ ControlDependenceAnalysis::getAnd(const ControlCondition *Parent, Value *Cond,
 }
 
 const ControlCondition *
-ControlDependenceAnalysis::getOr(ArrayRef<const ControlCondition *> Conds) {
+ConditionTable::getOr(ArrayRef<const ControlCondition *> Conds) {
   if (Conds.empty())
     return nullptr;
 
@@ -155,26 +156,6 @@ ControlDependenceAnalysis::getOr(ArrayRef<const ControlCondition *> Conds) {
   return It->second.get();
 }
 
-const GammaNode *ControlDependenceAnalysis::getGamma(PHINode *PN) {
-  decltype(Gammas)::iterator It;
-  bool Inserted;
-  std::tie(It, Inserted) = Gammas.try_emplace(PN);
-  if (!Inserted)
-    return It->second.get();
-
-  auto *G = new GammaNode;
-  G->PN = PN;
-  It->second.reset(G);
-  Value *V;
-  BasicBlock *BB;
-  for (auto Pair : zip(PN->incoming_values(), PN->blocks())) {
-    std::tie(V, BB) = Pair;
-    G->Vals.push_back(V);
-    G->Conds.push_back(getConditionForEdge(BB, PN->getParent()));
-  }
-  return G;
-}
-
 const ControlCondition *
 ControlDependenceAnalysis::getConditionForBranch(BranchInst *Br, bool Taken,
                                                  Loop *CtxL) {
@@ -185,7 +166,7 @@ ControlDependenceAnalysis::getConditionForBranch(BranchInst *Br, bool Taken,
   for (auto *SrcL = LI.getLoopFor(Src); SrcL && SrcL != CtxL;
        SrcL = SrcL->getParentLoop()) {
     auto *PreheaderC = getConditionForBlock(SrcL->getLoopPreheader());
-    SrcCond = concat(PreheaderC, SrcCond);
+    SrcCond = CT.concat(PreheaderC, SrcCond);
   }
 
   // Ignore backedges
@@ -194,7 +175,7 @@ ControlDependenceAnalysis::getConditionForBranch(BranchInst *Br, bool Taken,
     return SrcCond;
   }
 
-  return getAnd(SrcCond, Br->getCondition(), Taken);
+  return CT.getAnd(SrcCond, Br->getCondition(), Taken);
 }
 
 const ControlCondition *
@@ -206,7 +187,7 @@ ControlDependenceAnalysis::getConditionForEdge(BasicBlock *Src,
 }
 
 const ControlCondition *
-ControlDependenceAnalysis::concat(const ControlCondition *CondA,
+ConditionTable::concat(const ControlCondition *CondA,
                                   const ControlCondition *CondB) {
   if (!CondA)
     return CondB;
@@ -293,7 +274,7 @@ ControlDependenceAnalysis::getConditionForBlock(BasicBlock *BB) {
   }
 
   sort(CondsToJoin);
-  auto *C = getOr(CondsToJoin);
+  auto *C = CT.getOr(CondsToJoin);
   LLVM_DEBUG(dbgs() << "Condition for " << BB->getName() << " is " << *C << '\n');
   return BlockConditions[BB] = C;
 }

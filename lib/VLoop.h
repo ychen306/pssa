@@ -5,6 +5,7 @@
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "ControlDependence.h"
 #include <list>
 
 namespace llvm {
@@ -138,15 +139,22 @@ public:
   VLoop *getParent() const { return Parent; }
 };
 
-struct PSSA {
-  VLoopInfo VLI;
+struct PredicatedSSA {
+  ConditionTable CT;
   std::unique_ptr<VLoop> TopVL;
-  std::unique_ptr<ControlDependenceAnalysis> CDA;
-  std::unique_ptr<llvm::LoopInfo> LI;
-  std::unique_ptr<llvm::DominatorTree> DT;
-  std::unique_ptr<llvm::PostDominatorTree> PDT;
+  llvm::DenseMap<llvm::Instruction *, VLoop *> InstToVLoopMap;
+
+public:
+  void mapInstToLoop(llvm::Instruction *I, VLoop *VL) {
+    InstToVLoopMap[I] = VL;
+  }
+
+  VLoop *getLoopForInst(llvm::Instruction *I) const {
+    assert(InstToVLoopMap.count(I));
+    return InstToVLoopMap.lookup(I);
+  }
 };
 
-PSSA buildPSSA(llvm::Function *);
+PredicatedSSA buildPSSA(llvm::Function *);
 
 #endif

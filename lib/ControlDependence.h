@@ -48,7 +48,7 @@ struct ConditionAnd : public ControlCondition {
   }
 
 private:
-  friend class ControlDependenceAnalysis;
+  friend class ConditionTable;
   ConditionAnd(const ControlCondition *Parent, llvm::Value *Cond, bool IsTrue)
       : ControlCondition(Kind_ConditionAnd, getDepth(Parent) + 1),
         Parent(Parent), Cond(Cond), IsTrue(IsTrue) {}
@@ -63,14 +63,8 @@ struct ConditionOr : public ControlCondition {
   }
 
 private:
-  friend class ControlDependenceAnalysis;
+  friend class ConditionTable;
   ConditionOr(llvm::ArrayRef<const ControlCondition *> Conds);
-};
-
-struct GammaNode {
-  llvm::PHINode *PN;
-  llvm::SmallVector<llvm::Value *, 2> Vals;
-  llvm::SmallVector<const ControlCondition *, 2> Conds;
 };
 
 struct BinaryInstruction {
@@ -98,11 +92,8 @@ template <> struct DenseMapInfo<BinaryInstruction> {
 };
 } // namespace llvm
 
-// FIXME: refactor out the condition management stuff
-class ControlDependenceAnalysis {
-  llvm::LoopInfo &LI;
-  llvm::DominatorTree &DT;
-  llvm::PostDominatorTree &PDT;
+
+class ConditionTable {
   llvm::EquivalenceClasses<const ControlCondition *> EquivalentConds;
   llvm::DenseMap<std::pair<const ControlCondition *, const ControlCondition *>,
                  const ControlCondition *>
@@ -114,14 +105,28 @@ class ControlDependenceAnalysis {
   llvm::DenseMap<AndKeyT, std::unique_ptr<ConditionAnd>> UniqueAndOfTrue;
   llvm::DenseMap<AndKeyT, std::unique_ptr<ConditionAnd>> UniqueAndOfFalse;
 
-  llvm::DenseMap<llvm::BasicBlock *, const ControlCondition *> BlockConditions;
-
-  llvm::DenseMap<llvm::PHINode *, std::unique_ptr<GammaNode>> Gammas;
-
   llvm::DenseMap<BinaryInstruction, llvm::Value *> CanonicalInsts;
   llvm::DenseMap<llvm::Value *, llvm::Value *> CanonicalValues;
-  llvm::Value *getCanonicalValue(llvm::Value *);
   const ControlCondition *getCanonicalCondition(const ControlCondition *);
+public:
+  llvm::Value *getCanonicalValue(llvm::Value *);
+  const ControlCondition *getAnd(const ControlCondition *, llvm::Value *, bool);
+  const ControlCondition *getOr(llvm::ArrayRef<const ControlCondition *>);
+  const ControlCondition *concat(const ControlCondition *,
+                                 const ControlCondition *);
+  bool isEquivalent(const ControlCondition *C1,
+                    const ControlCondition *C2) const {
+    return EquivalentConds.isEquivalent(C1, C2);
+  }
+};
+
+// FIXME: refactor out the condition management stuff
+class ControlDependenceAnalysis {
+  llvm::LoopInfo &LI;
+  llvm::DominatorTree &DT;
+  llvm::PostDominatorTree &PDT;
+
+  llvm::DenseMap<llvm::BasicBlock *, const ControlCondition *> BlockConditions;
 
   // use std::map to avoid reallocation/iterator stability
   std::map<llvm::BasicBlock *, llvm::SmallPtrSet<llvm::BasicBlock *, 4>>
@@ -133,22 +138,14 @@ class ControlDependenceAnalysis {
   const ControlCondition *getConditionForBranch(llvm::BranchInst *, bool Taken,
                                                 llvm::Loop *CtxL);
 
+  ConditionTable &CT;
+
 public:
   ControlDependenceAnalysis(llvm::LoopInfo &LI, llvm::DominatorTree &DT,
-                            llvm::PostDominatorTree &PDT);
+                            llvm::PostDominatorTree &PDT, ConditionTable &CT);
   const ControlCondition *getConditionForBlock(llvm::BasicBlock *);
   const ControlCondition *getConditionForEdge(llvm::BasicBlock *,
                                               llvm::BasicBlock *);
-  const GammaNode *getGamma(llvm::PHINode *);
-
-  const ControlCondition *getAnd(const ControlCondition *, llvm::Value *, bool);
-  const ControlCondition *getOr(llvm::ArrayRef<const ControlCondition *>);
-  const ControlCondition *concat(const ControlCondition *,
-                                 const ControlCondition *);
-  bool isEquivalent(const ControlCondition *C1,
-                    const ControlCondition *C2) const {
-    return EquivalentConds.isEquivalent(C1, C2);
-  }
 };
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const ControlCondition &);
