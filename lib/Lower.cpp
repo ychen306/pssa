@@ -171,7 +171,7 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
       continue;
     }
 
-    if (VL->getMu(PN)) {
+    if (VL->isMu(PN)) {
       assert(Preheader && Header && Latch);
       moveToBegin(PN, Header);
       PN->setIncomingBlock(0, Preheader);
@@ -216,24 +216,15 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
 }
 
 void PSSALowering::run(VLoop *TopLevelVL) {
-  std::vector<BasicBlock *> OldBlocks;
-  for (auto &BB : *F)
-    OldBlocks.push_back(&BB);
+  F->dropAllReferences();
 
-  // Allocate the new dedicated entry block
   Entry = BasicBlock::Create(Ctx, "entry", F);
 
   lower(TopLevelVL, nullptr /* preheader */);
 
-  if (DumpBeforeErasing)
-    F->dump();
-
-  // Remove the old blocks
-  for (auto *BB : OldBlocks)
-    for (auto &I : *BB)
-      I.dropAllReferences();
-  for (auto *BB : OldBlocks)
-    BB->eraseFromParent();
+  // Kill all of the forward phis which we've replaced with allocas
+  for (auto &KV : ReplacedPhis)
+    delete KV.first;
 
   auto *RetTy = F->getReturnType();
   for (auto &BB : *F) {

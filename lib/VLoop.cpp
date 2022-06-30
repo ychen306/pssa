@@ -1,9 +1,13 @@
 #include "VLoop.h"
 #include "ControlDependence.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopIterator.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/Analysis/PostDominators.h"
 
 using namespace llvm;
 
@@ -33,16 +37,34 @@ VLoop::ItemIterator VLoop::insert(VLoop *SubVL,
   return Items.insert(InsertBefore ? *InsertBefore : Items.end(), SubVL);
 }
 
-void VLoop::addMu(PHINode *PN) {
-  assert(PN->getNumIncomingValues() == 2);
-  Mus.try_emplace(PN, PN->getIncomingValue(0), PN->getIncomingValue(1));
-}
+PSSA buildPSSA(Function *SrcF) {
+  ValueToValueMapTy VMap;
+  auto *F = CloneFunction(SrcF, VMap);
 
-std::unique_ptr<VLoop> buildTopLevelVLoop(Function *F, LoopInfo &LI,
-                                          DominatorTree &DT,
-                                          ControlDependenceAnalysis &CDA,
-                                          VLoopInfo &VLI) {
-  auto TopVL = std::make_unique<VLoop>();
+  // Remap instructions to use the argument of SrcF
+  ValueToValueMapTy ArgMap;
+  for (auto Pair : llvm::zip(F->args(), SrcF->args()))
+    ArgMap[&std::get<0>(Pair)] = &std::get<1>(Pair);
+  for (auto &I : instructions(F))
+    RemapInstruction(&I, ArgMap,
+                     RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
+
+  PSSA ThePSSA;
+  auto &VLI = ThePSSA.VLI;
+  auto &DT = *(ThePSSA.DT = std::make_unique<DominatorTree>(*F));
+  auto &PDT = *(ThePSSA.PDT = std::make_unique<PostDominatorTree>(*F));
+  auto &LI = *(ThePSSA.LI = std::make_unique<LoopInfo>(DT));
+  auto &CDA = *(ThePSSA.CDA = std::make_unique<ControlDependenceAnalysis>(LI, DT, PDT));
+
+  //VLoopInfo VLI;
+  //std::unique_ptr<VLoop> TopVL;
+  //std::unique_ptr<ControlDependenceAnalysis> CDA;
+  //std::unique_ptr<llvm::LoopInfo> LI;
+  //std::unique_ptr<llvm::DominatorTree> DT;
+  //std::unique_ptr<llvm::PostDominatorTree> PDT:
+
+  ThePSSA.TopVL = std::move(std::make_unique<VLoop>());
+  auto *TopVL = ThePSSA.TopVL.get();
 
   ReversePostOrderTraversal<Function *> RPO(F);
   SmallPtrSet<Loop *, 8> Visited;
@@ -54,14 +76,17 @@ std::unique_ptr<VLoop> buildTopLevelVLoop(Function *F, LoopInfo &LI,
     if (!L) {
       // BB is not contained in any loop
       auto *C = CDA.getConditionForBlock(BB);
-      for (auto &I : *BB) {
-        if (I.isTerminator() && !isa<ReturnInst>(&I))
+      for (auto &SrcI : *BB) {
+        if (SrcI.isTerminator() && !isa<ReturnInst>(&SrcI))
           continue;
-        if (auto *PN = dyn_cast<PHINode>(&I))
+
+        auto I = &SrcI;
+
+        if (auto *PN = dyn_cast<PHINode>(I))
           TopVL->insert(PN, C, CDA);
         else
-          TopVL->insert(&I, C);
-        VLI.mapInstToLoop(&I, TopVL.get());
+          TopVL->insert(I, C);
+        VLI.mapInstToLoop(I, TopVL);
       }
     } else {
       // BB is contained in some loop, get the top-level loop that contains BB
@@ -71,7 +96,7 @@ std::unique_ptr<VLoop> buildTopLevelVLoop(Function *F, LoopInfo &LI,
       // skip if we've seen this sub-loop before
       if (!Visited.insert(L).second)
         continue;
-      auto *SubVL = new VLoop(nullptr, nullptr, TopVL.get());
+      auto *SubVL = new VLoop(nullptr, nullptr, TopVL);
       TopVL->insert(SubVL);
       // Remember to build the child loop later
       Worklist.emplace_back(SubVL, L);
@@ -102,18 +127,20 @@ std::unique_ptr<VLoop> buildTopLevelVLoop(Function *F, LoopInfo &LI,
       VL->setBackEdgeCond(LatchCond);
 
     // Figure out the mu nodes
-    for (PHINode &PN : Header->phis()) {
-      assert(PN.getNumIncomingValues() == 2);
+    for (PHINode &SrcPN : Header->phis()) {
+      assert(SrcPN.getNumIncomingValues() == 2);
+
+      auto *PN = &SrcPN;
       // Canonicalize the phi-node so that first value is the init. and second
       // iter.
-      auto *Init = PN.getIncomingValueForBlock(Preheader);
-      auto *Iter = PN.getIncomingValueForBlock(Latch);
-      PN.setIncomingValue(0, Init);
-      PN.setIncomingValue(1, Iter);
-      PN.setIncomingBlock(0, Preheader);
-      PN.setIncomingBlock(1, Latch);
+      auto *Init = PN->getIncomingValueForBlock(Preheader);
+      auto *Iter = PN->getIncomingValueForBlock(Latch);
+      PN->setIncomingValue(0, Init);
+      PN->setIncomingValue(1, Iter);
+      PN->setIncomingBlock(0, Preheader);
+      PN->setIncomingBlock(1, Latch);
 
-      VL->addMu(&PN);
+      VL->addMu(PN);
     }
 
     // Populate the loop items
@@ -126,15 +153,18 @@ std::unique_ptr<VLoop> buildTopLevelVLoop(Function *F, LoopInfo &LI,
       assert(L2);
       if (L2 == L) {
         // BB is contained immediately within L
-        for (auto &I : *BB) {
-          if (I.isTerminator() && !isa<ReturnInst>(&I))
+        for (auto &SrcI : *BB) {
+          if (SrcI.isTerminator() && !isa<ReturnInst>(&SrcI))
             continue;
-          auto *PN = dyn_cast<PHINode>(&I);
-          if (PN && !VL->getMu(PN))
+
+          auto *I = &SrcI;
+
+          auto *PN = dyn_cast<PHINode>(I);
+          if (PN && !VL->isMu(PN))
             VL->insert(PN, C, CDA);
           else
-            VL->insert(&I, C);
-          VLI.mapInstToLoop(&I, VL);
+            VL->insert(I, C);
+          VLI.mapInstToLoop(I, VL);
         }
       } else {
         while (L2->getParentLoop() != L)
@@ -149,12 +179,17 @@ std::unique_ptr<VLoop> buildTopLevelVLoop(Function *F, LoopInfo &LI,
       }
     }
   }
-  return TopVL;
-}
 
-Optional<MuNode> VLoop::getMu(PHINode *PN) const {
-  auto It = Mus.find(PN);
-  if (It != Mus.end())
-    return It->second;
-  return None;
+  std::vector<Instruction *> Insts;
+  for (auto &I : instructions(F))
+    Insts.push_back(&I);
+  for (auto *I : Insts) {
+    if (I->isTerminator() && !isa<ReturnInst>(I))
+      I->eraseFromParent();
+    else
+      I->removeFromParent();
+  }
+  F->dropAllReferences();
+
+  return ThePSSA;
 }

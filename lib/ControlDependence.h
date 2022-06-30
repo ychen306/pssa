@@ -98,6 +98,7 @@ template <> struct DenseMapInfo<BinaryInstruction> {
 };
 } // namespace llvm
 
+// FIXME: refactor out the condition management stuff
 class ControlDependenceAnalysis {
   llvm::LoopInfo &LI;
   llvm::DominatorTree &DT;

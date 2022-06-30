@@ -2,9 +2,9 @@
 #define VLOOP_H
 
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include <list>
 
 namespace llvm {
@@ -15,6 +15,7 @@ class Value;
 class LoopInfo;
 class PHINode;
 class DominatorTree;
+class PostDominatorTree;
 } // namespace llvm
 
 class ControlCondition;
@@ -33,13 +34,6 @@ public:
     assert(InstToVLoopMap.count(I));
     return InstToVLoopMap.lookup(I);
   }
-};
-
-// This represents the mu nodes in Gated SSA
-struct MuNode {
-  llvm::Value *Init;
-  llvm::Value *Iter;
-  MuNode(llvm::Value *Init, llvm::Value *Iter) : Init(Init), Iter(Iter) {}
 };
 
 // This represents a special kind of gated phi
@@ -72,8 +66,7 @@ class VLoop {
 
   std::list<Item> Items;
   llvm::SmallVector<std::unique_ptr<VLoop>, 4> SubLoops;
-  // FIXME: make this a small ptr set
-  llvm::SmallDenseMap<llvm::PHINode *, MuNode, 8> Mus;
+  llvm::SmallPtrSet<llvm::PHINode *, 8> Mus;
   llvm::DenseMap<llvm::PHINode *, OneHotPhi> OneHotPhis;
   llvm::DenseMap<llvm::PHINode *,
                  llvm::SmallVector<const ControlCondition *, 4>>
@@ -125,10 +118,14 @@ public:
   void setBackEdgeCond(const ControlCondition *C) { BackEdgeCond = C; }
   void setLoopCond(const ControlCondition *C) { LoopCond = C; }
   bool isLoop() const { return !IsTopLevel; }
-  llvm::Optional<MuNode> getMu(llvm::PHINode *) const;
+  bool isMu(llvm::PHINode *PN) const { return Mus.count(PN); }
   // Add a phi node as mu. Assume the first value is the init. val and second
   // rec.
-  void addMu(llvm::PHINode *);
+  void addMu(llvm::PHINode *PN) { Mus.insert(PN); }
+
+  llvm::iterator_range<decltype(Mus)::iterator> mus() {
+    return llvm::make_range(Mus.begin(), Mus.end());
+  }
 
   bool isGatedPhi(llvm::PHINode *PN) const { return PhiConds.count(PN); }
 
@@ -141,9 +138,15 @@ public:
   VLoop *getParent() const { return Parent; }
 };
 
-std::unique_ptr<VLoop> buildTopLevelVLoop(llvm::Function *, llvm::LoopInfo &,
-                                          llvm::DominatorTree &,
-                                          ControlDependenceAnalysis &,
-                                          VLoopInfo &);
+struct PSSA {
+  VLoopInfo VLI;
+  std::unique_ptr<VLoop> TopVL;
+  std::unique_ptr<ControlDependenceAnalysis> CDA;
+  std::unique_ptr<llvm::LoopInfo> LI;
+  std::unique_ptr<llvm::DominatorTree> DT;
+  std::unique_ptr<llvm::PostDominatorTree> PDT;
+};
+
+PSSA buildPSSA(llvm::Function *);
 
 #endif

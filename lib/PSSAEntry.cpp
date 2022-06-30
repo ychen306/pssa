@@ -73,11 +73,8 @@ bool PSSAEntry::runOnFunction(Function &F) {
     if (!L->isRotatedForm() || L->hasNoExitBlocks())
       return false;
 
-  ControlDependenceAnalysis CDA(LI, DT, PDT);
-  VLoopInfo VLI;
-  auto TopLevelVL = buildTopLevelVLoop(&F, LI, DT, CDA, VLI);
-
-  lowerPSSAToLLVM(&F, TopLevelVL.get());
+  auto PSSA = buildPSSA(&F);
+  lowerPSSAToLLVM(&F, PSSA.TopVL.get());
 
   return true;
 }
