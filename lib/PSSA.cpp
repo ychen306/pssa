@@ -3,11 +3,6 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopIterator.h"
-#include "llvm/Analysis/PostDominators.h"
-#include "llvm/IR/Dominators.h"
-#include "llvm/IR/InstIterator.h"
-#include "llvm/Transforms/Utils/Cloning.h"
-#include "llvm/Transforms/Utils/ValueMapper.h"
 
 using namespace llvm;
 
@@ -48,21 +43,8 @@ void PredicatedSSA::InsertPoint::insert(Instruction *I, const ControlCondition *
   VL->insert(I, C, It);
 }
 
-PredicatedSSA::PredicatedSSA(Function *SrcF) : TopVL(this) {
-  ValueToValueMapTy VMap;
-  auto *F = CloneFunction(SrcF, VMap);
-
-  // Remap instructions to use the argument of SrcF
-  ValueToValueMapTy ArgMap;
-  for (auto Pair : llvm::zip(F->args(), SrcF->args()))
-    ArgMap[&std::get<0>(Pair)] = &std::get<1>(Pair);
-  for (auto &I : instructions(F))
-    RemapInstruction(&I, ArgMap,
-                     RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
-
-  DominatorTree DT(*F);
-  PostDominatorTree PDT(*F);
-  LoopInfo LI(DT);
+PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI,
+    DominatorTree &DT, PostDominatorTree &PDT) : LI(LI), TopVL(this) {
   ControlDependenceAnalysis CDA(LI, DT, PDT, CT);
 
   ReversePostOrderTraversal<Function *> RPO(F);
@@ -170,15 +152,4 @@ PredicatedSSA::PredicatedSSA(Function *SrcF) : TopVL(this) {
       }
     }
   }
-
-  std::vector<Instruction *> Insts;
-  for (auto &I : instructions(F))
-    Insts.push_back(&I);
-  for (auto *I : Insts) {
-    if (I->isTerminator() && !isa<ReturnInst>(I))
-      I->eraseFromParent();
-    else
-      I->removeFromParent();
-  }
-  F->dropAllReferences();
 }

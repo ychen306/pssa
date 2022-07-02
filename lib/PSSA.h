@@ -151,12 +151,17 @@ public:
 };
 
 class PredicatedSSA {
+  llvm::LoopInfo &LI;
   ConditionTable CT;
   VLoop TopVL;
   llvm::DenseMap<llvm::Instruction *, VLoop *> InstToVLoopMap;
   llvm::DenseMap<Item, VLoop::ItemIterator, ItemHashInfo> ItemToIteratorMap;
 
 public:
+  // Convert from LLVM IR
+  PredicatedSSA(llvm::Function *, llvm::LoopInfo &, llvm::DominatorTree &,
+      llvm::PostDominatorTree &);
+
   struct InsertPoint {
     VLoop *VL;
     VLoop::ItemIterator It;
@@ -177,8 +182,6 @@ public:
     return { &TopVL, TopVL.Items.begin() };
   }
 
-  // Convert from LLVM IR
-  PredicatedSSA(llvm::Function *);
   void mapItemToLoop(VLoop::ItemIterator It, VLoop *VL) {
     if (auto *I = It->asInstruction())
       InstToVLoopMap[I] = VL;

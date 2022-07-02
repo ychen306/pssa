@@ -73,7 +73,7 @@ bool PSSAEntry::runOnFunction(Function &F) {
     if (!L->isRotatedForm() || L->hasNoExitBlocks())
       return false;
 
-  PredicatedSSA PSSA(&F);
+  PredicatedSSA PSSA(&F, LI, DT, PDT);
   lowerPSSAToLLVM(&F, PSSA);
 
   return true;

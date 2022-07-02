@@ -240,9 +240,9 @@ void PSSALowering::run(VLoop *TopLevelVL) {
   for (auto *PN : Phis)
     demotePhi(PSSA, PN);
 
-
+  /////////
   // Now actually do the lowering
-  F->dropAllReferences();
+  //////////
 
   Entry = BasicBlock::Create(Ctx, "entry", F);
 
@@ -269,6 +269,18 @@ void PSSALowering::run(VLoop *TopLevelVL) {
 }
 
 void lowerPSSAToLLVM(Function *F, PredicatedSSA &PSSA) {
+  // Clean up the function before we start the lowering
+  std::vector<Instruction *> Insts;
+  for (auto &I : instructions(F))
+    Insts.push_back(&I);
+  for (auto *I : Insts) {
+    if (I->isTerminator() && !isa<ReturnInst>(I))
+      I->eraseFromParent();
+    else
+      I->removeFromParent();
+  }
+  F->dropAllReferences();
+
   PSSALowering Lowering(F);
   Lowering.run(&PSSA.getTopLevel());
 }
