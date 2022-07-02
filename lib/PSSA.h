@@ -49,7 +49,8 @@ public:
 
 struct ItemHashInfo {
   using InstInfo = llvm::DenseMapInfo<llvm::Instruction *>;
-  using Info = llvm::DenseMapInfo<llvm::PointerUnion<llvm::Instruction *, VLoop *>>;
+  using Info =
+      llvm::DenseMapInfo<llvm::PointerUnion<llvm::Instruction *, VLoop *>>;
   static inline Item getEmptyKey() { return Item(InstInfo::getEmptyKey()); }
   static inline Item getTombstoneKey() {
     return Item(InstInfo::getTombstoneKey());
@@ -61,7 +62,6 @@ struct ItemHashInfo {
     return It1.Storage == It2.Storage;
   }
 };
-
 
 class PredicatedSSA;
 class VLoop {
@@ -92,11 +92,9 @@ public:
   VLoop(PredicatedSSA *PSSA)
       : PSSA(PSSA), IsTopLevel(true), Parent(nullptr), LoopCond(nullptr),
         BackEdgeCond(nullptr) {}
-  VLoop(PredicatedSSA *PSSA,
-      const ControlCondition *LoopCond, const ControlCondition *BackEdgeCond,
-        VLoop *Parent = nullptr)
-      : PSSA(PSSA),
-        IsTopLevel(false), Parent(nullptr), LoopCond(LoopCond),
+  VLoop(PredicatedSSA *PSSA, const ControlCondition *LoopCond,
+        const ControlCondition *BackEdgeCond, VLoop *Parent = nullptr)
+      : PSSA(PSSA), IsTopLevel(false), Parent(nullptr), LoopCond(LoopCond),
         BackEdgeCond(BackEdgeCond) {}
 
   using ItemIterator = decltype(Items)::iterator;
@@ -160,7 +158,7 @@ class PredicatedSSA {
 public:
   // Convert from LLVM IR
   PredicatedSSA(llvm::Function *, llvm::LoopInfo &, llvm::DominatorTree &,
-      llvm::PostDominatorTree &);
+                llvm::PostDominatorTree &);
 
   struct InsertPoint {
     VLoop *VL;
@@ -171,16 +169,14 @@ public:
   InsertPoint getInsertPoint(llvm::Instruction *I) {
     assert(ItemToIteratorMap.count(I));
     assert(InstToVLoopMap.count(I));
-    return { InstToVLoopMap.lookup(I), ItemToIteratorMap.lookup(I) };
+    return {InstToVLoopMap.lookup(I), ItemToIteratorMap.lookup(I)};
   }
   InsertPoint getInsertPoint(VLoop *VL) {
     assert(VL->getParent());
     assert(ItemToIteratorMap.count(VL));
-    return { VL->getParent(), ItemToIteratorMap.lookup(VL) };
+    return {VL->getParent(), ItemToIteratorMap.lookup(VL)};
   }
-  InsertPoint getEntry() {
-    return { &TopVL, TopVL.Items.begin() };
-  }
+  InsertPoint getEntry() { return {&TopVL, TopVL.Items.begin()}; }
 
   void mapItemToLoop(VLoop::ItemIterator It, VLoop *VL) {
     if (auto *I = It->asInstruction())

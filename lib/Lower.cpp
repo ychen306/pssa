@@ -48,21 +48,21 @@ public:
 
 void PSSALowering::demotePhi(PredicatedSSA *PSSA, PHINode *PN) {
   // Demote the phi to memory
-  auto *Alloca = new AllocaInst(PN->getType(), 0, nullptr/*ArraySize*/,
-      Align(), PN->getName() + ".demoted");
+  auto *Alloca = new AllocaInst(PN->getType(), 0, nullptr /*ArraySize*/,
+                                Align(), PN->getName() + ".demoted");
   Allocas.push_back(Alloca);
   PSSA->getEntry().insert(Alloca, nullptr);
 
   auto InsertPt = PSSA->getInsertPoint(PN);
   auto *VL = InsertPt.VL;
   for (unsigned i = 0; i < PN->getNumIncomingValues(); i++) {
-    auto *SI = new StoreInst(PN->getIncomingValue(i), Alloca, false/*isVolatile*/,
-        Align());
+    auto *SI = new StoreInst(PN->getIncomingValue(i), Alloca,
+                             false /*isVolatile*/, Align());
     InsertPt.insert(SI, VL->getPhiCondition(PN, i));
   }
 
-  auto *Reload = new LoadInst(PN->getType(), Alloca, PN->getName() + ".reload", false/*isVolatile*/,
-      Align());
+  auto *Reload = new LoadInst(PN->getType(), Alloca, PN->getName() + ".reload",
+                              false /*isVolatile*/, Align());
   auto *Cond = VL->getInstCond(PN);
   InsertPt.insert(Reload, Cond);
   PN->replaceAllUsesWith(Reload);
@@ -103,7 +103,7 @@ static void fixDefUseDominance(Function *F, DominatorTree &DT) {
     ArrayRef<Instruction *> Users = KV.second;
 
     auto *Alloca = new AllocaInst(I->getType(), 0, I->getName() + ".mem",
-        &*F->getEntryBlock().getFirstInsertionPt());
+                                  &*F->getEntryBlock().getFirstInsertionPt());
     new StoreInst(I, Alloca, I->getNextNode());
     Allocas.push_back(Alloca);
     for (Instruction *UserInst : Users) {
@@ -121,8 +121,8 @@ static void fixDefUseDominance(Function *F, DominatorTree &DT) {
         continue;
       }
       auto *Reload =
-        new LoadInst(I->getType(), Alloca, I->getName() + ".reload",
-            UserInst /*insert before*/);
+          new LoadInst(I->getType(), Alloca, I->getName() + ".reload",
+                       UserInst /*insert before*/);
       UserInst->replaceUsesOfWith(I, Reload);
     }
   }
@@ -162,7 +162,7 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
     BranchInst::Create(Header /*if true*/, Preheader /*insert at end*/);
 
     ShouldContinueAlloca =
-      createAlloca(Type::getInt1Ty(Ctx), "should.continue.mem", Header);
+        createAlloca(Type::getInt1Ty(Ctx), "should.continue.mem", Header);
     // intialize it to false
     new StoreInst(ConstantInt::getFalse(Ctx), ShouldContinueAlloca, Header);
 
@@ -208,7 +208,7 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
   // Conditionally set the continue flag dependending on the backedge condition
   assert(ShouldContinueAlloca);
   new StoreInst(ConstantInt::getTrue(Ctx), ShouldContinueAlloca,
-      BBuilder.getBlockFor(VL->getBackEdgeCond()));
+                BBuilder.getBlockFor(VL->getBackEdgeCond()));
 
   // Join all the control-flow to the latch
   BranchInst::Create(Latch, BBuilder.getBlockFor(nullptr));
@@ -222,9 +222,10 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
 }
 
 void PSSALowering::run(VLoop *TopLevelVL) {
-  // demote the phi nodes to make lowering easier (so we don't have to consider them)
+  // demote the phi nodes to make lowering easier (so we don't have to consider
+  // them)
   SmallVector<PHINode *> Phis;
-  SmallVector<VLoop *> Worklist { TopLevelVL };
+  SmallVector<VLoop *> Worklist{TopLevelVL};
   while (!Worklist.empty()) {
     auto *VL = Worklist.pop_back_val();
     for (auto &InstOrLoop : VL->items()) {

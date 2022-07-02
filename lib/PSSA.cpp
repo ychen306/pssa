@@ -36,15 +36,17 @@ VLoop::ItemIterator VLoop::insert(VLoop *SubVL,
   return It;
 }
 
-void PredicatedSSA::InsertPoint::insert(Instruction *I, const ControlCondition *C) {
+void PredicatedSSA::InsertPoint::insert(Instruction *I,
+                                        const ControlCondition *C) {
   assert(VL);
   assert(!I->isTerminator());
   assert(!isa<PHINode>(I));
   VL->insert(I, C, It);
 }
 
-PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI,
-    DominatorTree &DT, PostDominatorTree &PDT) : LI(LI), TopVL(this) {
+PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
+                             PostDominatorTree &PDT)
+    : LI(LI), TopVL(this) {
   ControlDependenceAnalysis CDA(LI, DT, PDT, CT);
 
   ReversePostOrderTraversal<Function *> RPO(F);
