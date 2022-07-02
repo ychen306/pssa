@@ -49,88 +49,96 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
     : LI(LI), TopVL(this) {
   ControlDependenceAnalysis CDA(LI, DT, PDT, CT);
 
-  ReversePostOrderTraversal<Function *> RPO(F);
-  SmallPtrSet<Loop *, 8> Visited;
-  SmallVector<std::pair<VLoop *, Loop *>> Worklist;
+  SmallVector<Loop *, 8> LoopStack{nullptr};
+  using BlockOrLoop = PointerUnion<BasicBlock *, Loop *>;
+  std::map<Loop *, std::vector<BlockOrLoop>> Bodies;
+  DenseSet<BasicBlock *> VisitedBlocks;
+  DenseSet<Loop *> VisitedLoops;
+  DenseMap<Loop *, VLoop *> VLoops;
+  VLoops[nullptr] = &TopVL;
 
-  // Populate the loop items in program order
-  for (auto *BB : RPO) {
-    auto *L = LI.getLoopFor(BB);
-    if (!L) {
-      // BB is not contained in any loop
-      auto *C = CDA.getConditionForBlock(BB);
-      for (auto &I : *BB) {
-        if (I.isTerminator() && !isa<ReturnInst>(&I))
-          continue;
+  std::function<void(Loop *)> VisitLoop;
+  std::function<void(BasicBlock *)> VisitBlock;
 
-        if (auto *PN = dyn_cast<PHINode>(&I))
-          TopVL.insert(PN, C, CDA);
-        else
-          TopVL.insert(&I, C);
+  VisitLoop = [&](Loop *L) {
+    if (!VisitedLoops.insert(L).second)
+      return;
+    SmallVector<BasicBlock *, 2> Exits;
+    L->getExitBlocks(Exits);
+    llvm::for_each(Exits, VisitBlock);
+
+    Bodies[LoopStack.back()].push_back(L);
+
+    LoopStack.push_back(L);
+    VisitBlock(L->getHeader());
+    LoopStack.pop_back();
+  };
+
+  VisitBlock = [&](BasicBlock *BB) {
+    if (!VisitedBlocks.insert(BB).second)
+      return;
+
+    auto *CurL = LoopStack.back();
+    assert(LI.getLoopFor(BB) == CurL);
+    for (auto *Succ : successors(BB)) {
+      auto *SuccL = LI.getLoopFor(Succ);
+      if (SuccL == CurL)
+        VisitBlock(Succ);
+      else if (!CurL || CurL->contains(Succ))
+        VisitLoop(SuccL);
+      // otherwise Succ is an exit block and is visited by VistLoop(SuccL)
+    }
+
+    Bodies[CurL].push_back(BB);
+  };
+
+  VisitBlock(&F->getEntryBlock());
+
+  for (auto &KV : Bodies) {
+    Loop *L = KV.first;
+    auto *VL = VLoops.lookup(L);
+    if (!VL)
+      VL = VLoops[L] = new VLoop(this, nullptr, nullptr, nullptr);
+
+    if (L) {
+      assert(L->isRotatedForm());
+      VL->setLoopCond(CDA.getConditionForBlock(L->getLoopPreheader()));
+
+      auto *Preheader = L->getLoopPreheader();
+      auto *Header = L->getHeader();
+      auto *Latch = L->getLoopLatch();
+
+      // Figure out the condition for taking the backedge (vs exiting the loop)
+      auto *LoopBr = cast<BranchInst>(Latch->getTerminator());
+      auto *LatchCond = CDA.getConditionForBlock(Latch);
+      // Back edge taken === reaches latch && back edge taken
+      if (LoopBr->isConditional())
+        VL->setBackEdgeCond(
+            CT.getAnd(LatchCond, LoopBr->getCondition(),
+                      LoopBr->getSuccessor(0) == L->getHeader()));
+      else
+        VL->setBackEdgeCond(LatchCond);
+
+      // Figure out the mu nodes
+      for (PHINode &PN : Header->phis()) {
+        assert(PN.getNumIncomingValues() == 2);
+
+        // Canonicalize the phi-node so that first value is the init. and second
+        // iter.
+        auto *Init = PN.getIncomingValueForBlock(Preheader);
+        auto *Iter = PN.getIncomingValueForBlock(Latch);
+        PN.setIncomingValue(0, Init);
+        PN.setIncomingValue(1, Iter);
+        PN.setIncomingBlock(0, Preheader);
+        PN.setIncomingBlock(1, Latch);
+
+        VL->addMu(&PN);
       }
-    } else {
-      // BB is contained in some loop, get the top-level loop that contains BB
-      while (L->getParentLoop() != nullptr)
-        L = L->getParentLoop();
-      assert(L);
-      // skip if we've seen this sub-loop before
-      if (!Visited.insert(L).second)
-        continue;
-      auto *SubVL = new VLoop(this, nullptr, nullptr, &TopVL);
-      TopVL.insert(SubVL);
-      // Remember to build the child loop later
-      Worklist.emplace_back(SubVL, L);
-    }
-  }
-
-  while (!Worklist.empty()) {
-    VLoop *VL;
-    Loop *L;
-    std::tie(VL, L) = Worklist.pop_back_val();
-
-    assert(L->isRotatedForm());
-    VL->setLoopCond(CDA.getConditionForBlock(L->getLoopPreheader()));
-
-    auto *Preheader = L->getLoopPreheader();
-    auto *Header = L->getHeader();
-    auto *Latch = L->getLoopLatch();
-
-    // Figure out the condition for taking the backedge (vs exiting the loop)
-    auto *LoopBr = cast<BranchInst>(Latch->getTerminator());
-    auto *LatchCond = CDA.getConditionForBlock(Latch);
-    // Back edge taken === reaches latch && back edge taken
-    if (LoopBr->isConditional())
-      VL->setBackEdgeCond(CT.getAnd(LatchCond, LoopBr->getCondition(),
-                                    LoopBr->getSuccessor(0) == L->getHeader()));
-    else
-      VL->setBackEdgeCond(LatchCond);
-
-    // Figure out the mu nodes
-    for (PHINode &PN : Header->phis()) {
-      assert(PN.getNumIncomingValues() == 2);
-
-      // Canonicalize the phi-node so that first value is the init. and second
-      // iter.
-      auto *Init = PN.getIncomingValueForBlock(Preheader);
-      auto *Iter = PN.getIncomingValueForBlock(Latch);
-      PN.setIncomingValue(0, Init);
-      PN.setIncomingValue(1, Iter);
-      PN.setIncomingBlock(0, Preheader);
-      PN.setIncomingBlock(1, Latch);
-
-      VL->addMu(&PN);
     }
 
-    // Populate the loop items
-    LoopBlocksRPO RPO(L);
-    RPO.perform(&LI);
-    SmallPtrSet<Loop *, 8> Visited;
-    for (auto *BB : RPO) {
-      auto *C = CDA.getConditionForBlock(BB);
-      auto *L2 = LI.getLoopFor(BB);
-      assert(L2);
-      if (L2 == L) {
-        // BB is contained immediately within L
+    for (auto BlockOrLoop : reverse(KV.second)) {
+      if (auto *BB = BlockOrLoop.dyn_cast<BasicBlock *>()) {
+        auto *C = CDA.getConditionForBlock(BB);
         for (auto &I : *BB) {
           if (I.isTerminator() && !isa<ReturnInst>(&I))
             continue;
@@ -142,15 +150,18 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
             VL->insert(&I, C);
         }
       } else {
-        while (L2->getParentLoop() != L)
-          L2 = L2->getParentLoop();
-        assert(L2 && L2->getParentLoop() == L);
-        // Skip if we've seen L2 before
-        if (!Visited.insert(L2).second)
-          continue;
-        auto *SubVL = new VLoop(this, nullptr, nullptr, VL);
+        auto *SubL = BlockOrLoop.dyn_cast<Loop *>();
+        assert(SubL);
+        auto *SubVL = VLoops.lookup(SubL);
+        if (SubVL) {
+          assert(!SubVL->Parent);
+          SubVL->Parent = VL;
+        } else {
+          SubVL = new VLoop(this, nullptr, nullptr, VL);
+          VLoops[SubL] = SubVL;
+        }
+
         VL->insert(SubVL);
-        Worklist.emplace_back(SubVL, L2);
       }
     }
   }
