@@ -61,8 +61,6 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
   std::function<void(BasicBlock *)> VisitBlock;
 
   VisitLoop = [&](Loop *L) {
-    if (!VisitedLoops.insert(L).second)
-      return;
     SmallVector<BasicBlock *, 2> Exits;
     L->getExitBlocks(Exits);
     llvm::for_each(Exits, VisitBlock);
@@ -79,13 +77,18 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
       return;
 
     auto *CurL = LoopStack.back();
+    auto *CurVL = VLoops.lookup(CurL);
+    assert(CurVL);
     assert(LI.getLoopFor(BB) == CurL);
     for (auto *Succ : successors(BB)) {
       auto *SuccL = LI.getLoopFor(Succ);
-      if (SuccL == CurL)
+      if (SuccL == CurL) {
         VisitBlock(Succ);
-      else if (!CurL || CurL->contains(Succ))
+      } else if (!CurL || CurL->contains(Succ)) {
+        assert(!VLoops.lookup(SuccL) && "loops should have unique parents");
+        VLoops[SuccL] = new VLoop(this, nullptr, nullptr, CurVL);
         VisitLoop(SuccL);
+      }
       // otherwise Succ is an exit block and is visited by VistLoop(SuccL)
     }
 
@@ -97,8 +100,7 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
   for (auto &KV : Bodies) {
     Loop *L = KV.first;
     auto *VL = VLoops.lookup(L);
-    if (!VL)
-      VL = VLoops[L] = new VLoop(this, nullptr, nullptr, nullptr);
+    assert(VL);
 
     if (L) {
       assert(L->isRotatedForm());
@@ -150,17 +152,8 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
             VL->insert(&I, C);
         }
       } else {
-        auto *SubL = BlockOrLoop.dyn_cast<Loop *>();
-        assert(SubL);
-        auto *SubVL = VLoops.lookup(SubL);
-        if (SubVL) {
-          assert(!SubVL->Parent);
-          SubVL->Parent = VL;
-        } else {
-          SubVL = new VLoop(this, nullptr, nullptr, VL);
-          VLoops[SubL] = SubVL;
-        }
-
+        auto *SubVL = VLoops.lookup(BlockOrLoop.get<Loop *>());
+        assert(SubVL);
         VL->insert(SubVL);
       }
     }
