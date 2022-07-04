@@ -275,10 +275,10 @@ void lowerPSSAToLLVM(Function *F, PredicatedSSA &PSSA) {
   for (auto &I : instructions(F))
     Insts.push_back(&I);
   for (auto *I : Insts) {
-    if (I->isTerminator() && !isa<ReturnInst>(I))
-      I->eraseFromParent();
-    else
+    if (PSSA.contains(I))
       I->removeFromParent();
+    else // otherwise just remove the dead instructions
+      I->eraseFromParent();
   }
   F->dropAllReferences();
 

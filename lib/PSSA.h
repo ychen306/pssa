@@ -6,6 +6,7 @@
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/Instructions.h"
 #include <list>
 
 namespace llvm {
@@ -128,9 +129,10 @@ public:
   void setLoopCond(const ControlCondition *C) { LoopCond = C; }
   bool isLoop() const { return !IsTopLevel; }
   bool isMu(llvm::PHINode *PN) const { return Mus.count(PN); }
+
   // Add a phi node as mu. Assume the first value is the init. val and second
   // rec.
-  void addMu(llvm::PHINode *PN) { Mus.insert(PN); }
+  void addMu(llvm::PHINode *PN);
 
   llvm::iterator_range<decltype(Mus)::iterator> mus() {
     return llvm::make_range(Mus.begin(), Mus.end());
@@ -184,9 +186,17 @@ public:
     ItemToIteratorMap[*It] = It;
   }
 
+  void mapMuToLoop(llvm::PHINode *PN, VLoop *VL) {
+    InstToVLoopMap[PN] = VL;
+  }
+
   VLoop *getLoopForInst(llvm::Instruction *I) const {
     assert(InstToVLoopMap.count(I));
     return InstToVLoopMap.lookup(I);
+  }
+
+  bool contains(llvm::Instruction *I) const {
+    return InstToVLoopMap.count(I);
   }
 
   VLoop &getTopLevel() { return TopVL; }
