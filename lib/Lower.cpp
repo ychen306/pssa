@@ -274,12 +274,17 @@ void lowerPSSAToLLVM(Function *F, PredicatedSSA &PSSA) {
   std::vector<Instruction *> Insts;
   for (auto &I : instructions(F))
     Insts.push_back(&I);
+  std::vector<Instruction *> DeadInsts;
   for (auto *I : Insts) {
     if (PSSA.contains(I))
       I->removeFromParent();
     else // otherwise just remove the dead instructions
-      I->eraseFromParent();
+      DeadInsts.push_back(I);
   }
+  for (auto *I : DeadInsts)
+    I->dropAllReferences();
+  for (auto *I : DeadInsts)
+    I->eraseFromParent();
   F->dropAllReferences();
 
   PSSALowering Lowering(F);
