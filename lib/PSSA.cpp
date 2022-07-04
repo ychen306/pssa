@@ -44,6 +44,12 @@ void PredicatedSSA::InsertPoint::insert(Instruction *I,
   VL->insert(I, C, It);
 }
 
+void VLoop::addMu(PHINode *PN) { 
+  Mus.insert(PN);
+  assert(PSSA);
+  PSSA->mapMuToLoop(PN, this);
+}
+
 PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
                              PostDominatorTree &PDT)
     : LI(LI), TopVL(this) {
