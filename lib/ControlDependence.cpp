@@ -165,6 +165,7 @@ ControlDependenceAnalysis::getConditionForBranch(BranchInst *Br, bool Taken,
   // Special case for exit edges
   for (auto *SrcL = LI.getLoopFor(Src); SrcL && SrcL != CtxL;
        SrcL = SrcL->getParentLoop()) {
+    assert(SrcL->getLoopPreheader());
     auto *PreheaderC = getConditionForBlock(SrcL->getLoopPreheader());
     SrcCond = CT.concat(PreheaderC, SrcCond);
   }

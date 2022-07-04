@@ -70,7 +70,7 @@ bool PSSAEntry::runOnFunction(Function &F) {
 
   // Don't deal with infinite loops or non-rotated loops
   for (auto *L : LI.getLoopsInPreorder())
-    if (!L->isRotatedForm() || L->hasNoExitBlocks())
+    if (!L->isLoopSimplifyForm() || !L->isRotatedForm() || L->hasNoExitBlocks())
       return false;
 
   PredicatedSSA PSSA(&F, LI, DT, PDT);
