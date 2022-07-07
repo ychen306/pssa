@@ -1,4 +1,4 @@
-; RUN: %opt -pssa-entry %s -verify
+; RUN: %opt -passes='pssa-entry,verify' %s
 
 ; ModuleID = 'crash.c'
 source_filename = "crash.c"

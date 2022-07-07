@@ -1,15 +1,15 @@
 #include "ControlDependence.h"
-#include "PSSA.h"
 #include "Lower.h"
+#include "PSSA.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MustExecute.h" // mayContainIrreducibleControl
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/LegacyPassManager.h"
-#include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
@@ -17,94 +17,72 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Scalar/InstSimplifyPass.h"
-#include "llvm/Transforms/Utils.h"
+#include "llvm/Transforms/Scalar/LoopRotation.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
 
 using namespace llvm;
 
-namespace llvm {
-void initializePSSAEntryPass(PassRegistry &);
-}
-
 namespace {
-struct PSSAEntry : public FunctionPass {
-  static char ID;
-  PSSAEntry() : FunctionPass(ID) {
-    initializePSSAEntryPass(*PassRegistry::getPassRegistry());
-  }
-
-  virtual void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.addRequired<DominatorTreeWrapperPass>();
-    AU.addRequired<LoopInfoWrapperPass>();
-    AU.addRequired<PostDominatorTreeWrapperPass>();
-  }
-
-  bool runOnFunction(Function &) override;
+struct PSSAEntry : public PassInfoMixin<PSSAEntry> {
+  PreservedAnalyses run(Function &, FunctionAnalysisManager &);
 };
 } // namespace
 
-INITIALIZE_PASS_BEGIN(PSSAEntry, "pssa-entry", "pssa-entry", false, false)
-INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(PostDominatorTreeWrapperPass)
-INITIALIZE_PASS_END(PSSAEntry, "pssa-entry", "pssa-entry", false, false)
-
-char PSSAEntry::ID = 42;
-
-bool PSSAEntry::runOnFunction(Function &F) {
+PreservedAnalyses PSSAEntry::run(Function &F, FunctionAnalysisManager &AM) {
   errs() << "!! processing " << F.getName() << '\n';
 
-  auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
-  auto &PDT = getAnalysis<PostDominatorTreeWrapperPass>().getPostDomTree();
-  auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+  auto &LI = AM.getResult<LoopAnalysis>(F);
+  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
 
   // Don't deal with irreducible CFG
   if (mayContainIrreducibleControl(F, &LI))
-    return false;
+    return PreservedAnalyses::none();
 
   // We don't deal with things like switches or invoke
   for (auto &BB : F)
     if (!isa<ReturnInst>(BB.getTerminator()) &&
         !isa<BranchInst>(BB.getTerminator()))
-      return false;
+      return PreservedAnalyses::none();
 
   // Don't deal with infinite loops or non-rotated loops
   for (auto *L : LI.getLoopsInPreorder())
     if (!L->isLoopSimplifyForm() || !L->isRotatedForm() || L->hasNoExitBlocks())
-      return false;
+      return PreservedAnalyses::none();
 
   PredicatedSSA PSSA(&F, LI, DT, PDT);
   lowerPSSAToLLVM(&F, PSSA);
 
-  return true;
+  return PreservedAnalyses::none();
 }
 
-// Automatically enable the pass.
-// http://adriansampson.net/blog/clangpass.html
-static void registerPSSAEntry(const PassManagerBuilder &PMB,
-                              legacy::PassManagerBase &MPM) {
-  MPM.add(createUnifyFunctionExitNodesPass());
-  MPM.add(createLoopSimplifyPass());
-  MPM.add(createLoopRotatePass());
-  MPM.add(createLCSSAPass());
-  MPM.add(new PSSAEntry());
+extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
+llvmGetPassPluginInfo() {
+  return {LLVM_PLUGIN_API_VERSION, "pssa-entry", LLVM_VERSION_STRING,
+          [](PassBuilder &PB) {
+            PB.registerPipelineParsingCallback(
+                [](StringRef Name, FunctionPassManager &FPM,
+                   ArrayRef<PassBuilder::PipelineElement>) {
+                  if (Name == "pssa-entry") {
+                    FPM.addPass(PSSAEntry());
+                    return true;
+                  }
+                  return false;
+                });
+            PB.registerScalarOptimizerLateEPCallback(
+                [](FunctionPassManager &FPM, OptimizationLevel) {
+                  // Preprocess
+                  FPM.addPass(UnifyFunctionExitNodesPass());
+                  FPM.addPass(LoopSimplifyPass());
+                  FPM.addPass(
+                      createFunctionToLoopPassAdaptor(LoopRotatePass()));
+                  FPM.addPass(LCSSAPass());
 
-  // Clean up
-  MPM.add(createCFGSimplificationPass());
-  MPM.add(createJumpThreadingPass());
-  MPM.add(createInstructionCombiningPass(true /*expensive combines*/));
-  MPM.add(createGVNPass());
-  MPM.add(createAggressiveDCEPass());
+                  FPM.addPass(PSSAEntry());
+
+                  // Cleanup
+                  FPM.addPass(SimplifyCFGPass());
+                });
+          }};
 }
-
-// Register this pass to run after all optimization,
-// because we want this pass to replace LLVM SLP.
-static RegisterStandardPasses
-    RegisterMyPass(PassManagerBuilder::EP_ScalarOptimizerLate,
-                   registerPSSAEntry);
-
-static struct RegisterPSSAEntry {
-  RegisterPSSAEntry() {
-    initializePSSAEntryPass(*PassRegistry::getPassRegistry());
-  }
-} X;

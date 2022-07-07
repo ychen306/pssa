@@ -5,6 +5,8 @@
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/ArrayRef.h"
 
 #include <map>
 

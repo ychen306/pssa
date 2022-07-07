@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-exec opt -load @CMAKE_BINARY_DIR@/lib/libPSSA.so $@
+exec opt -load-pass-plugin @CMAKE_BINARY_DIR@/lib/libPSSA.so $@

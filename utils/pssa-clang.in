@@ -11,4 +11,4 @@ else
   exit 1
 fi
 
-exec $clang -Xclang -load -Xclang @CMAKE_BINARY_DIR@/lib/libPSSA.so $@
+exec $clang -fpass-plugin=@CMAKE_BINARY_DIR@/lib/libPSSA.so $@
