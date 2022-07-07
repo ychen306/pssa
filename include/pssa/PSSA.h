@@ -1,7 +1,7 @@
 #ifndef PSSA_H
 #define PSSA_H
 
-#include "ControlDependence.h"
+#include "pssa/ControlDependence.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/SmallPtrSet.h"

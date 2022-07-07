@@ -22,7 +22,7 @@ link_directories(${LLVM_LIBRARY_DIRS})
 add_definitions(-fno-rtti)
 add_definitions(-std=c++14)
 
-add_subdirectory(lib)
+add_subdirectory(lib/pssa)
 
 configure_file(
   ${CMAKE_SOURCE_DIR}/test/lit.site.cfg.in
