@@ -15,8 +15,10 @@
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Scalar.h"
+#include "llvm/Transforms/Scalar/ADCE.h"
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Scalar/InstSimplifyPass.h"
+#include "llvm/Transforms/Scalar/JumpThreading.h"
 #include "llvm/Transforms/Scalar/LoopRotation.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
@@ -24,6 +26,9 @@
 using namespace llvm;
 
 namespace {
+cl::opt<bool> TestCodeGen("test-pssa-lowering", cl::desc("Test PSSA Lowering"),
+                          cl::init(true));
+
 struct PSSAEntry : public PassInfoMixin<PSSAEntry> {
   PreservedAnalyses run(Function &, FunctionAnalysisManager &);
 };
@@ -57,32 +62,42 @@ PreservedAnalyses PSSAEntry::run(Function &F, FunctionAnalysisManager &AM) {
   return PreservedAnalyses::none();
 }
 
+static void addPreprocessingPasses(FunctionPassManager &FPM) {
+  FPM.addPass(UnifyFunctionExitNodesPass());
+  FPM.addPass(LoopSimplifyPass());
+  FPM.addPass(createFunctionToLoopPassAdaptor(LoopRotatePass()));
+  FPM.addPass(LCSSAPass());
+}
+
+static void addCleanupPasses(FunctionPassManager &FPM) {
+  FPM.addPass(SimplifyCFGPass());
+  FPM.addPass(JumpThreadingPass());
+  FPM.addPass(InstCombinePass());
+  FPM.addPass(GVNPass());
+  FPM.addPass(ADCEPass());
+}
+
+static void buildPasses(PassBuilder &PB) {
+  PB.registerPipelineParsingCallback(
+      [](StringRef Name, FunctionPassManager &FPM,
+         ArrayRef<PassBuilder::PipelineElement>) {
+        if (Name == "pssa-entry") {
+          FPM.addPass(PSSAEntry());
+          return true;
+        }
+        return false;
+      });
+  if (TestCodeGen)
+    PB.registerScalarOptimizerLateEPCallback(
+        [](FunctionPassManager &FPM, OptimizationLevel) {
+          addPreprocessingPasses(FPM);
+          FPM.addPass(PSSAEntry());
+          addCleanupPasses(FPM);
+        });
+}
+
 extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
 llvmGetPassPluginInfo() {
   return {LLVM_PLUGIN_API_VERSION, "pssa-entry", LLVM_VERSION_STRING,
-          [](PassBuilder &PB) {
-            PB.registerPipelineParsingCallback(
-                [](StringRef Name, FunctionPassManager &FPM,
-                   ArrayRef<PassBuilder::PipelineElement>) {
-                  if (Name == "pssa-entry") {
-                    FPM.addPass(PSSAEntry());
-                    return true;
-                  }
-                  return false;
-                });
-            PB.registerScalarOptimizerLateEPCallback(
-                [](FunctionPassManager &FPM, OptimizationLevel) {
-                  // Preprocess
-                  FPM.addPass(UnifyFunctionExitNodesPass());
-                  FPM.addPass(LoopSimplifyPass());
-                  FPM.addPass(
-                      createFunctionToLoopPassAdaptor(LoopRotatePass()));
-                  FPM.addPass(LCSSAPass());
-
-                  FPM.addPass(PSSAEntry());
-
-                  // Cleanup
-                  FPM.addPass(SimplifyCFGPass());
-                });
-          }};
+          buildPasses};
 }
