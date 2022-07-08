@@ -1,4 +1,4 @@
-; RUN: %opt -passes='pssa-entry,verify' %s
+; RUN: %opt -test-pssa-lowering -passes='pssa-entry,verify' %s -o /dev/null
 
 ; ModuleID = 'crash.c'
 source_filename = "crash.c"

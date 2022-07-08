@@ -27,7 +27,7 @@ using namespace llvm;
 
 namespace {
 cl::opt<bool> TestCodeGen("test-pssa-lowering", cl::desc("Test PSSA Lowering"),
-                          cl::init(true));
+                          cl::init(false));
 
 struct PSSAEntry : public PassInfoMixin<PSSAEntry> {
   PreservedAnalyses run(Function &, FunctionAnalysisManager &);
