@@ -1,6 +1,7 @@
 #include "pssa/ControlDependence.h"
 #include "pssa/Lower.h"
 #include "pssa/PSSA.h"
+#include "vegen/Pack.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MustExecute.h" // mayContainIrreducibleControl
 #include "llvm/Analysis/PostDominators.h"
@@ -30,6 +31,10 @@ cl::opt<bool> TestCodeGen("test-pssa-lowering", cl::desc("Test PSSA Lowering"),
                           cl::init(false));
 
 struct PSSAEntry : public PassInfoMixin<PSSAEntry> {
+  PreservedAnalyses run(Function &, FunctionAnalysisManager &);
+};
+
+struct TestVectorGen : public PassInfoMixin<TestVectorGen> {
   PreservedAnalyses run(Function &, FunctionAnalysisManager &);
 };
 } // namespace
@@ -62,6 +67,10 @@ PreservedAnalyses PSSAEntry::run(Function &F, FunctionAnalysisManager &AM) {
   return PreservedAnalyses::none();
 }
 
+PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
+  return PreservedAnalyses::none();
+}
+
 static void addPreprocessingPasses(FunctionPassManager &FPM) {
   FPM.addPass(UnifyFunctionExitNodesPass());
   FPM.addPass(LoopSimplifyPass());
@@ -85,13 +94,20 @@ static void buildPasses(PassBuilder &PB) {
           FPM.addPass(PSSAEntry());
           return true;
         }
+
+        if (Name == "test-vector-codegen") {
+          FPM.addPass(TestVectorGen());
+          return true;
+        }
+
         return false;
       });
+
   if (TestCodeGen)
     PB.registerScalarOptimizerLateEPCallback(
         [](FunctionPassManager &FPM, OptimizationLevel) {
           addPreprocessingPasses(FPM);
-          FPM.addPass(PSSAEntry());
+          FPM.addPass(TestVectorGen());
           addCleanupPasses(FPM);
         });
 }
