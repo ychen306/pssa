@@ -8,6 +8,7 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
@@ -29,6 +30,8 @@ using namespace llvm;
 namespace {
 cl::opt<bool> TestCodeGen("test-pssa-lowering", cl::desc("Test PSSA Lowering"),
                           cl::init(false));
+
+cl::list<std::string> InstsToPack("p", cl::desc("<comma-separted list of instructions to pack>"));
 
 struct PSSAEntry : public PassInfoMixin<PSSAEntry> {
   PreservedAnalyses run(Function &, FunctionAnalysisManager &);
@@ -68,6 +71,29 @@ PreservedAnalyses PSSAEntry::run(Function &F, FunctionAnalysisManager &AM) {
 }
 
 PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
+  DenseMap<StringRef, Instruction *> NameToInstMap;
+  for (auto &I : instructions(&F))
+    if (I.hasName())
+      NameToInstMap[I.getName()] = &I;
+
+  SmallVector<std::unique_ptr<Pack>> Packs;
+  for (StringRef Arg : InstsToPack) {
+    SmallVector<StringRef> Names;
+    Arg.split(Names, ',');
+
+    SmallVector<Instruction *> Insts;
+    for (StringRef Name : Names) {
+      auto *I = NameToInstMap.lookup(Name);
+      assert(I);
+      Insts.push_back(I);
+    }
+
+    auto *Pack = SIMDPack::tryPack(Insts);
+    errs() << "Packing " << *Pack << '\n';
+    assert(Pack && "failed to pack specified insts");
+    Packs.emplace_back(Pack);
+  }
+
   return PreservedAnalyses::none();
 }
 

@@ -1,5 +1,6 @@
 #include "vegen/Pack.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -70,4 +71,20 @@ Value *SIMDPack::emit(ArrayRef<Value *> Operands, InserterTy Insert) const {
   }
 
   llvm_unreachable("unsupported opcode");
+}
+
+void SIMDPack::print(raw_ostream &OS) const {
+  OS << "[";
+  for (auto *I : Insts) {
+    if (I->hasName())
+      OS << I->getName() << "; ";
+    else
+      OS << *I << "; ";
+  }
+  OS << ']';
+}
+
+raw_ostream &operator<<(raw_ostream &OS, Pack &P) {
+  P.print(OS);
+  return OS;
 }
