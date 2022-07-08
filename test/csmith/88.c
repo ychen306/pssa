@@ -1,4 +1,4 @@
-// RUN: %clang -O3 %s -o %t && %t | FileCheck %s
+// RUN: %clang -mllvm -test-pssa-lowering -O3 %s -o %t && %t | FileCheck %s
 // CHECK: checksum = A6E0BEB1
 # 1 "<stdin>"
 # 1 "<built-in>" 1
