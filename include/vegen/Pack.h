@@ -7,7 +7,7 @@
 namespace llvm {
 class Instruction;
 class Value;
-}
+} // namespace llvm
 
 using OperandPack = llvm::SmallVector<llvm::Value *, 8>;
 using InserterTy = std::function<llvm::Value *(llvm::Value *)>;
@@ -17,12 +17,13 @@ struct Pack {
   virtual llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, InserterTy) const;
 };
 
-
 class SIMDPack : public Pack {
   llvm::SmallVector<llvm::Instruction *, 8> Insts;
+  SIMDPack(llvm::ArrayRef<llvm::Instruction *> Insts)
+      : Insts(Insts.begin(), Insts.end()) {}
+
 public:
-  SIMDPack(llvm::ArrayRef<llvm::Instruction *> Insts)  
-    : Insts(Insts.begin(), Insts.end()) {}
+  static SIMDPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts);
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, InserterTy) const override;
 };

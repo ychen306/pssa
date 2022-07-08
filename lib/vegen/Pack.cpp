@@ -8,6 +8,30 @@ Value *Pack::emit(ArrayRef<Value *>, InserterTy) const {
   return nullptr;
 }
 
+SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
+  if (Insts.empty())
+    return nullptr;
+
+  auto *I = Insts.front();
+  auto Rest = drop_begin(Insts);
+  unsigned Opcode = I->getOpcode();
+  auto *Ty = I->getType();
+  if (any_of(Rest, [Opcode, Ty](auto *I) {
+        return I->getOpcode() != Opcode || I->getType() != Ty;
+      }))
+    return nullptr;
+
+  if (auto *Cmp = dyn_cast<CmpInst>(I)) {
+    auto Pred = Cmp->getPredicate();
+    if (any_of(Rest, [Pred](auto *I) {
+          return cast<CmpInst>(I)->getPredicate() != Pred;
+        }))
+      return nullptr;
+  }
+
+  return new SIMDPack(Insts);
+}
+
 SmallVector<OperandPack, 2> SIMDPack::getOperands() const {
   SmallVector<OperandPack, 2> Operands;
 
@@ -36,7 +60,8 @@ Value *SIMDPack::emit(ArrayRef<Value *> Operands, InserterTy Insert) const {
     assert(all_of(Insts, [Pred](auto *I) {
       return cast<CmpInst>(I)->getPredicate() == Pred;
     }));
-    return Insert(CmpInst::Create(Cmp->getOpcode(), Pred, Operands[0], Operands[1]));
+    return Insert(
+        CmpInst::Create(Cmp->getOpcode(), Pred, Operands[0], Operands[1]));
   }
 
   if (isa<SelectInst>(I)) {
