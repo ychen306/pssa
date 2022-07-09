@@ -63,7 +63,7 @@ TEST(OrderedTest, Reorder) {
 
 TEST(OrderedTest, BatchedReorder) {
   OrderedList<int> List;
-  for (int i = 4; i < 8; i++)
+  for (int i = 4; i < 16; i++)
     List.push_back(i);
   for (int i = 0; i < 4; i++)
     List.push_back(i);
@@ -74,8 +74,11 @@ TEST(OrderedTest, BatchedReorder) {
   std::vector<int> Temp{0, 1, 2, 3};
   List.insert(List.begin(), Temp.begin(), Temp.end());
 
-  EXPECT_EQ(to_vector<int>(List), std::vector<int>({0, 1, 2, 3, 4, 5, 6, 7}));
-  for (unsigned i = 0; i < 8; i++)
-    for (unsigned j = i + 1; j < 8; j++)
+  auto Vec = to_vector<int>(List);
+  for (int i = 0; i < 16; i++)
+    EXPECT_EQ(Vec[i], i);
+
+  for (unsigned i = 0; i < 16; i++)
+    for (unsigned j = i + 1; j < 16; j++)
       EXPECT_TRUE(List.comesBefore(i, j)) << "; i = " << i << ", j = " << j;
 }
