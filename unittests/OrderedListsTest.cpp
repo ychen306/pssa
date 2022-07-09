@@ -13,12 +13,13 @@ TEST(OrderredListTest, Test1) {
 
 TEST(OrderedTest, Test2) {
   OrderedList<int> List;
+  int N = 500;
   List.push_back(0);
-  List.push_back(8);
+  List.push_back(N);
   auto Last = std::prev(List.end());
-  for (unsigned i = 1; i < 8; i++)
+  for (unsigned i = 1; i < N; i++)
     List.insert(Last, i);
-  for (unsigned i = 0; i < 8; i++)
-    for (unsigned j = i + 1; j < 8; j++)
+  for (unsigned i = 0; i < N; i++)
+    for (unsigned j = i + 1; j < N; j++)
       EXPECT_TRUE(List.comesBefore(i, j)) << "; i = " << i << ", j = " << j;
 }
