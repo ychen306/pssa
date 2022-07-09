@@ -1,13 +1,13 @@
 #ifndef PSSA_H
 #define PSSA_H
 
+#include "utils/OrderedList.h"
 #include "pssa/ControlDependence.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Instructions.h"
-#include <list>
 
 namespace llvm {
 class Loop;
@@ -72,7 +72,7 @@ class VLoop {
   bool IsTopLevel; // True if this VLoop doesn't represent any actual loop but
                    // the whole function
 
-  std::list<Item> Items;
+  OrderedList<Item, ItemHashInfo> Items;
   llvm::SmallVector<std::unique_ptr<VLoop>, 4> SubLoops;
   llvm::SmallPtrSet<llvm::PHINode *, 8> Mus;
   llvm::DenseMap<llvm::PHINode *, OneHotPhi> OneHotPhis;
