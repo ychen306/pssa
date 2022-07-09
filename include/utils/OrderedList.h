@@ -71,7 +71,7 @@ public:
   void insert(iterator Pos, InputIt Begin, InputIt End) {
     unsigned N = std::distance(Begin, End);
     iterator Prev = std::prev(Pos);
-    unsigned PrevLabel = getLabel(std::prev(Prev));
+    unsigned PrevLabel = getLabel(Prev);
     // Number of available labels
     unsigned Space = getLabel(Pos) - PrevLabel;
     // Number of available labels for each item
