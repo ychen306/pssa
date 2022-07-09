@@ -106,7 +106,9 @@ public:
   const_iterator end() const { return Storage.end(); }
 
   bool comesBefore(const T &X, const T &Y) const {
-    return getLabel(X) < getLabel(Y);
+    assert(Labels.count(X));
+    assert(Labels.count(Y));
+    return Labels.lookup(X) < Labels.lookup(Y);
   }
 };
 
