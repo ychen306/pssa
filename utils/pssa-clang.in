@@ -13,4 +13,4 @@ fi
 
 LIBRARY_PATH=@CMAKE_BINARY_DIR@/lib/libPSSA.so
 
-exec $clang -fpass-plugin=$LIBRARY_PATH -Xclang -load=$LIBRARY_PATH $@
+exec $clang -fpass-plugin=$LIBRARY_PATH -Xclang -load -Xclang $LIBRARY_PATH $@

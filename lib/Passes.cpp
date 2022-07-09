@@ -133,7 +133,7 @@ static void buildPasses(PassBuilder &PB) {
     PB.registerScalarOptimizerLateEPCallback(
         [](FunctionPassManager &FPM, OptimizationLevel) {
           addPreprocessingPasses(FPM);
-          FPM.addPass(TestVectorGen());
+          FPM.addPass(PSSAEntry());
           addCleanupPasses(FPM);
         });
 }
