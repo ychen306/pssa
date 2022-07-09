@@ -77,15 +77,15 @@ public:
     // Number of available labels for each item
     unsigned Offset = Space / (N + 1);
 
-    Storage.insert(Begin, End);
+    Storage.insert(Pos, Begin, End);
 
     if (Offset >= 1) {
       // Directly assign labels if there's enough space
       unsigned Label = PrevLabel + Offset;
-      for (iterator It = Begin; It != End; ++It, Label += Offset)
+      for (InputIt It = Begin; It != End; ++It, Label += Offset)
         Labels[*It] = Label;
     } else {
-      for (iterator It = Begin; It != End; ++It)
+      for (InputIt It = Begin; It != End; ++It)
         Labels[*It] = PrevLabel;
       relabel(Prev);
     }

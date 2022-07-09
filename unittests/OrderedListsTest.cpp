@@ -8,7 +8,7 @@ std::vector<T> to_vector(const Container &C) {
 }
 } // namespace
 
-TEST(OrderredListTest, Test1) {
+TEST(OrderredListTest, Insert1) {
   OrderedList<int> List;
   List.push_back(1);
   List.push_back(3);
@@ -19,7 +19,7 @@ TEST(OrderredListTest, Test1) {
   EXPECT_TRUE(List.comesBefore(1, 3));
 }
 
-TEST(OrderedTest, Test2) {
+TEST(OrderedTest, Insert2) {
   OrderedList<int> List;
   int N = 500;
   List.push_back(0);
@@ -36,5 +36,24 @@ TEST(OrderedTest, Test2) {
 
   for (unsigned i = 0; i < N; i++)
     for (unsigned j = i + 1; j < N; j++)
+      EXPECT_TRUE(List.comesBefore(i, j)) << "; i = " << i << ", j = " << j;
+}
+
+TEST(OrderedTest, Reorder) {
+  OrderedList<int> List;
+  for (int i = 4; i < 8; i++)
+    List.push_back(i);
+  for (int i = 0; i < 4; i++)
+    List.push_back(i);
+  for (int i = 0; i < 4; i++) {
+    auto It = std::find(List.begin(), List.end(), i);
+    List.erase(It);
+  }
+  std::vector<int> Temp{0,1,2,3};
+  List.insert(List.begin(), Temp.begin(), Temp.end());
+
+  EXPECT_EQ(to_vector<int>(List), std::vector<int>({0,1,2,3,4,5,6,7}));
+  for (unsigned i = 0; i < 8; i++)
+    for (unsigned j = i + 1; j < 8; j++)
       EXPECT_TRUE(List.comesBefore(i, j)) << "; i = " << i << ", j = " << j;
 }
