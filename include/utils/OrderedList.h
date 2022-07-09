@@ -28,11 +28,12 @@ private:
     unsigned Offset = Gap / 2;
 
     unsigned Label = getLabel(Begin) + Offset;
-    for (iterator It = std::next(Begin), End = end(); It != End; ++It, Label += Offset) {
+    for (iterator It = std::next(Begin), End = end(); It != End;
+         ++It, Label += Offset) {
       if (getLabel(It) > Label) {
-        assert(It == std::prev(End) || 
-            (getLabel(It) < getLabel(std::next(It)) &&
-             getLabel(It) > getLabel(std::prev(It))));
+        assert(It == std::prev(End) ||
+               (getLabel(It) < getLabel(std::next(It)) &&
+                getLabel(It) > getLabel(std::prev(It))));
         break;
       }
 
@@ -82,7 +83,7 @@ public:
       // Directly assign labels if there's enough space
       unsigned Label = PrevLabel + Offset;
       for (iterator It = Begin; It != End; ++It, Label += Offset)
-        Labels[*It] =  Label;
+        Labels[*It] = Label;
     } else {
       for (iterator It = Begin; It != End; ++It)
         Labels[*It] = PrevLabel;
@@ -95,7 +96,7 @@ public:
     Storage.push_back(Val);
   }
 
-  iterator erase(iterator Pos) { 
+  iterator erase(iterator Pos) {
     Labels.erase(*Pos);
     return Storage.erase(Pos);
   }
