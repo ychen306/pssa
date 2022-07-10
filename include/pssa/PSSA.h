@@ -110,6 +110,10 @@ public:
 
   void erase(ItemIterator It) { Items.erase(It); }
 
+  bool comesBefore(Item A, Item B) const {
+    return Items.comesBefore(A, B);
+  }
+
   const decltype(Items) &items() const { return Items; }
 
   const ControlCondition *getInstCond(llvm::Instruction *I) const {
