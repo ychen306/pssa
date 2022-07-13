@@ -95,6 +95,103 @@ public:
   }
 };
 
+// Keep track of the values produced by a lowered pack
+class PackIndex {
+public:
+  struct Lane {
+    unsigned Idx;
+    Value *Vec;
+    Lane(unsigned Idx, Value *Vec) : Idx(Idx), Vec(Vec) {}
+  };
+
+private:
+  // Mapping a scalar value to the vector lane that contains the value
+  DenseMap<Value *, Lane> Lanes;
+
+public:
+  void insert(Value *VecVal, Pack *P) {
+    for (auto X : enumerate(P->values()))
+      if (X.value())
+        Lanes.try_emplace(X.value(), (unsigned)X.index(), VecVal);
+  }
+  Optional<Lane> getLane(Value *V) const {
+    auto It = Lanes.find(V);
+    if (It == Lanes.end())
+      return None;
+    return It->second;
+  }
+};
+
+class Inserter {
+  VLoop *VL;
+  const ControlCondition *C;
+  VLoop::ItemIterator InsertBefore;
+
+public:
+  Inserter(VLoop *VL, const ControlCondition *C,
+           VLoop::ItemIterator InsertBefore)
+      : VL(VL), C(C), InsertBefore(InsertBefore) {}
+
+  Value *operator()(Value *V) {
+    if (auto *I = dyn_cast<Instruction>(V))
+      VL->insert(I, C, InsertBefore);
+    return V;
+  }
+};
+
+Constant *toInt64(LLVMContext &Ctx, int Idx) {
+  return ConstantInt::get(Type::getInt64Ty(Ctx), Idx);
+}
+
+// Utility to extract scalar values on-demand
+class ExtractMaterializer : public ValueMaterializer {
+  struct ExtractInfo {
+    Value *Vec;
+    unsigned Idx;
+    Value *Val; // the materialized value (non-null if materialized)
+
+    // Insert point for the materialized extract
+    VLoop *VL;
+    const ControlCondition *C;
+    VLoop::ItemIterator InsertBefore;
+
+    ExtractInfo(Value *Vec, unsigned Idx, VLoop *VL, const ControlCondition *C,
+                VLoop::ItemIterator InsertBefore)
+        : Vec(Vec), Idx(Idx), Val(nullptr), VL(VL), C(C),
+          InsertBefore(InsertBefore) {}
+  };
+  // mapping scalar value -> the vector (and index) that contains it
+  DenseMap<Value *, ExtractInfo> Infos;
+
+public:
+  // Remember a materialized vector
+  void remember(Pack *P, Value *Vec, VLoop *VL, const ControlCondition *C,
+                VLoop::ItemIterator InsertBefore) {
+    for (auto X : enumerate(P->values())) {
+      if (!X.value())
+        continue;
+      Infos.try_emplace(X.value(), Vec, X.index(), VL, C, InsertBefore);
+    }
+  }
+
+  Value *materialize(Value *V) override {
+    auto It = Infos.find(V);
+    if (It == Infos.end())
+      return V;
+
+    auto &Info = It->second;
+
+    // Return the extract if we've done it already
+    if (Info.Val)
+      return Info.Val;
+
+    auto *Extract = ExtractElementInst::Create(
+        Info.Vec, toInt64(V->getContext(), Info.Idx));
+    Info.VL->insert(Extract, Info.C, Info.InsertBefore);
+    return Info.Val = Extract;
+  }
+};
+
 }; // namespace
 
 static bool mayReadOrWriteMemory(const Item &It) {
@@ -231,57 +328,6 @@ static void schedule(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
   }
 }
 
-// Keep track of the values produced by a lowered pack
-namespace {
-class PackIndex {
-public:
-  struct Lane {
-    unsigned Idx;
-    Value *Vec;
-    Lane(unsigned Idx, Value *Vec) : Idx(Idx), Vec(Vec) {}
-  };
-
-private:
-  // Mapping a scalar value to the vector lane that contains the value
-  DenseMap<Value *, Lane> Lanes;
-
-public:
-  void insert(Value *VecVal, Pack *P) {
-    for (auto X : enumerate(P->values()))
-      if (X.value())
-        Lanes.try_emplace(X.value(), (unsigned)X.index(), VecVal);
-  }
-  Optional<Lane> getLane(Value *V) const {
-    auto It = Lanes.find(V);
-    if (It == Lanes.end())
-      return None;
-    return It->second;
-  }
-};
-
-class Inserter {
-  VLoop *VL;
-  const ControlCondition *C;
-  VLoop::ItemIterator InsertBefore;
-
-public:
-  Inserter(VLoop *VL, const ControlCondition *C,
-           VLoop::ItemIterator InsertBefore)
-      : VL(VL), C(C), InsertBefore(InsertBefore) {}
-
-  Value *operator()(Value *V) {
-    if (auto *I = dyn_cast<Instruction>(V))
-      VL->insert(I, C, InsertBefore);
-    return V;
-  }
-};
-
-} // namespace
-
-static Constant *toInt64(LLVMContext &Ctx, int Idx) {
-  return ConstantInt::get(Type::getInt64Ty(Ctx), Idx);
-}
-
 static Value *gatherOperand(ArrayRef<Value *> Values, PackIndex &PI,
                             InserterTy Insert) {
   struct GatherEdge {
@@ -405,57 +451,6 @@ static Value *gatherOperand(ArrayRef<Value *> Values, PackIndex &PI,
   return Acc;
 }
 
-namespace {
-// Utility to extract scalar values on-demand
-class ExtractMaterializer : public ValueMaterializer {
-  struct ExtractInfo {
-    Value *Vec;
-    unsigned Idx;
-    Value *Val; // the materialized value (non-null if materialized)
-
-    // Insert point for the materialized extract
-    VLoop *VL;
-    const ControlCondition *C;
-    VLoop::ItemIterator InsertBefore;
-
-    ExtractInfo(Value *Vec, unsigned Idx, VLoop *VL, const ControlCondition *C,
-                VLoop::ItemIterator InsertBefore)
-        : Vec(Vec), Idx(Idx), Val(nullptr), VL(VL), C(C),
-          InsertBefore(InsertBefore) {}
-  };
-  // mapping scalar value -> the vector (and index) that contains it
-  DenseMap<Value *, ExtractInfo> Infos;
-
-public:
-  // Remember a materialized vector
-  void remember(Pack *P, Value *Vec, VLoop *VL, const ControlCondition *C,
-                VLoop::ItemIterator InsertBefore) {
-    for (auto X : enumerate(P->values())) {
-      if (!X.value())
-        continue;
-      Infos.try_emplace(X.value(), Vec, X.index(), VL, C, InsertBefore);
-    }
-  }
-
-  Value *materialize(Value *V) override {
-    auto It = Infos.find(V);
-    if (It == Infos.end())
-      return V;
-
-    auto &Info = It->second;
-
-    // Return the extract if we've done it already
-    if (Info.Val)
-      return Info.Val;
-
-    auto *Extract = ExtractElementInst::Create(
-        Info.Vec, toInt64(V->getContext(), Info.Idx));
-    Info.VL->insert(Extract, Info.C, Info.InsertBefore);
-    return Info.Val = Extract;
-  }
-};
-} // namespace
-
 void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
   schedule(Packs, PSSA, DI);
 
@@ -476,7 +471,6 @@ void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
   SmallVector<Instruction *> DeadInsts;
   DenseSet<Pack *> Lowered;
   PackIndex PI;
-  auto &Ctx = PSSA.getContext();
 
   while (!Worklist.empty()) {
     auto *VL = Worklist.pop_back_val();
