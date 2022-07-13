@@ -2,6 +2,8 @@
 #include "pssa/Lower.h"
 #include "pssa/PSSA.h"
 #include "vegen/Pack.h"
+#include "vegen/Lower.h"
+#include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MustExecute.h" // mayContainIrreducibleControl
 #include "llvm/Analysis/PostDominators.h"
@@ -72,27 +74,60 @@ PreservedAnalyses PSSAEntry::run(Function &F, FunctionAnalysisManager &AM) {
 
 PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   DenseMap<StringRef, Instruction *> NameToInstMap;
-  for (auto &I : instructions(&F))
+  DenseMap<StringRef, Instruction *> NameToStoreMap;
+  for (auto &I : instructions(&F)) {
     if (I.hasName())
       NameToInstMap[I.getName()] = &I;
+    if (auto *SI = dyn_cast<StoreInst>(&I)) {
+      auto *V = SI->getValueOperand();
+      if (V->hasName())
+        NameToStoreMap[V->getName()] = SI;
+    }
+  }
 
-  SmallVector<std::unique_ptr<Pack>> Packs;
+  auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
+  auto &DL = F.getParent()->getDataLayout();
+
+  SmallVector<Pack *> Packs;
   for (StringRef Arg : InstsToPack) {
     SmallVector<StringRef> Names;
     Arg.split(Names, ',');
 
     SmallVector<Instruction *> Insts;
     for (StringRef Name : Names) {
-      auto *I = NameToInstMap.lookup(Name);
+      Instruction *I = nullptr;
+      if (Name.startswith("storeOf:")) {
+        I = NameToStoreMap.lookup(Name.drop_front(StringRef("storeOf:").size()));
+      } else {
+        I = NameToInstMap.lookup(Name);
+      }
       assert(I);
       Insts.push_back(I);
     }
 
-    auto *Pack = SIMDPack::tryPack(Insts);
-    errs() << "Packing " << *Pack << '\n';
-    assert(Pack && "failed to pack specified insts");
-    Packs.emplace_back(Pack);
+    if (auto *Pack = SIMDPack::tryPack(Insts)) {
+      Packs.push_back(Pack);
+    } else if (auto *LoadP = LoadPack::tryPack(Insts, DL, SE)) {
+      Packs.push_back(LoadP);
+    } else if (auto *StoreP = StorePack::tryPack(Insts, DL, SE)) {
+      Packs.push_back(StoreP);
+    } else {
+      errs() << "failed to pack specified insts\n";
+      return PreservedAnalyses::all();
+    }
+
+    errs() << "Packing " << *Packs.back() << '\n';
   }
+
+  auto &LI = AM.getResult<LoopAnalysis>(F);
+  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
+  PredicatedSSA PSSA(&F, LI, DT, PDT);
+  lower(Packs, PSSA, AM.getResult<DependenceAnalysis>(F));
+  lowerPSSAToLLVM(&F, PSSA);
+
+  for (auto *P : Packs)
+    delete P;
 
   return PreservedAnalyses::none();
 }

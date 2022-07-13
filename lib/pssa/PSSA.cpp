@@ -36,6 +36,22 @@ VLoop::ItemIterator VLoop::insert(VLoop *SubVL,
   return It;
 }
 
+bool VLoop::contains(VLoop *VL) const {
+  if (VL == this)
+    return true;
+  if (!VL)
+    return false;
+  return contains(VL->getParent());
+}
+
+VLoop::ItemIterator VLoop::toIterator(const Item &I) {
+  return PSSA->toIterator(I);
+}
+
+bool VLoop::contains(Instruction *I) const {
+  return contains(PSSA->getLoopForInst(I));
+}
+
 void PredicatedSSA::InsertPoint::insert(Instruction *I,
                                         const ControlCondition *C) {
   assert(VL);
@@ -52,7 +68,7 @@ void VLoop::addMu(PHINode *PN) {
 
 PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
                              PostDominatorTree &PDT)
-    : LI(LI), TopVL(this) {
+    : Ctx(F->getContext()), LI(LI), TopVL(this) {
   ControlDependenceAnalysis CDA(LI, DT, PDT, CT);
 
   ReversePostOrderTraversal<Function *> RPO(F);

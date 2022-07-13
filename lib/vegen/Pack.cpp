@@ -1,5 +1,7 @@
 #include "vegen/Pack.h"
+#include "llvm/Analysis/LoopAccessAnalysis.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -14,6 +16,9 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
     return nullptr;
 
   auto *I = Insts.front();
+  if (I->mayReadOrWriteMemory())
+    return nullptr;
+
   auto Rest = drop_begin(Insts);
   unsigned Opcode = I->getOpcode();
   auto *Ty = I->getType();
@@ -73,15 +78,115 @@ Value *SIMDPack::emit(ArrayRef<Value *> Operands, InserterTy Insert) const {
   llvm_unreachable("unsupported opcode");
 }
 
-void SIMDPack::print(raw_ostream &OS) const {
+void Pack::print(raw_ostream &OS) const {
   OS << "[";
-  for (auto *I : Insts) {
-    if (I->hasName())
+  for (auto *I : values()) {
+    if (!I)
+      OS << "dont_care; ";
+    else if (I->hasName())
       OS << I->getName() << "; ";
     else
       OS << *I << "; ";
   }
   OS << ']';
+}
+
+LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
+                            ScalarEvolution &SE) {
+  SmallVector<Value *, 8> Ptrs;
+  for (auto *I : Insts) {
+    if (auto *LI = dyn_cast<LoadInst>(I))
+      Ptrs.push_back(LI->getPointerOperand());
+    else
+      return nullptr;
+  }
+
+  auto *Ty = Insts.front()->getType();
+  SmallVector<unsigned, 8> SortedIdxs;
+  if (!sortPtrAccesses(Ptrs, Ty, DL, SE, SortedIdxs))
+    return nullptr;
+
+  auto GetSortedIdx = [&SortedIdxs](unsigned i) {
+    if (SortedIdxs.empty())
+      return i;
+    return SortedIdxs[i];
+  };
+
+  SmallVector<Instruction *, 8> SortedStores = {Insts[GetSortedIdx(0)]};
+  auto *FirstPtr = Ptrs[GetSortedIdx(0)];
+  for (unsigned i = 1, N = Insts.size(); i < N; i++) {
+    unsigned SortedIdx = GetSortedIdx(i);
+    auto *Ptr = Ptrs[SortedIdx];
+    auto Diff = getPointersDiff(Ty, FirstPtr, Ty, Ptr, DL, SE);
+    assert(Diff);
+    unsigned Gaps = *Diff - i;
+    for (unsigned j = 0; j < Gaps; j++)
+      SortedStores.push_back(nullptr);
+    SortedStores.push_back(Insts[SortedIdx]);
+  }
+  while (SortedStores.size() < PowerOf2Ceil(SortedStores.size()))
+    SortedStores.push_back(nullptr);
+  return new LoadPack(SortedStores);
+}
+
+Value *LoadPack::emit(ArrayRef<Value *> Operands, InserterTy Insert) const {
+  assert(Operands.size() == 0);
+
+  auto *Load = cast<LoadInst>(Insts.front());
+  auto *VecTy = FixedVectorType::get(Load->getType(), Insts.size());
+  return Insert(new LoadInst(VecTy, Load->getPointerOperand(),
+                             Load->getName() + ".vec", false /*is volatile*/,
+                             Load->getAlign()));
+}
+
+StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
+                              const DataLayout &DL, ScalarEvolution &SE) {
+  SmallVector<Value *, 8> Ptrs;
+  for (auto *I : Insts) {
+    if (auto *SI = dyn_cast<StoreInst>(I))
+      Ptrs.push_back(SI->getPointerOperand());
+    else
+      return nullptr;
+  }
+
+  auto *Ty = cast<StoreInst>(Insts.front())->getValueOperand()->getType();
+  SmallVector<unsigned, 8> SortedIdxs;
+  if (!sortPtrAccesses(Ptrs, Ty, DL, SE, SortedIdxs))
+    return nullptr;
+
+  auto GetSortedIdx = [&SortedIdxs](unsigned i) {
+    if (SortedIdxs.empty())
+      return i;
+    return SortedIdxs[i];
+  };
+
+  SmallVector<Instruction *, 8> SortedStores = {Insts[GetSortedIdx(0)]};
+  auto *FirstPtr = Ptrs[GetSortedIdx(0)];
+  for (unsigned i = 1, N = Insts.size(); i < N; i++) {
+    unsigned SortedIdx = GetSortedIdx(i);
+    auto *Ptr = Ptrs[SortedIdx];
+    auto Diff = getPointersDiff(Ty, FirstPtr, Ty, Ptr, DL, SE);
+    assert(Diff);
+    if (*Diff - i != 0)
+      return nullptr;
+    SortedStores.push_back(Insts[SortedIdx]);
+  }
+  return new StorePack(SortedStores);
+}
+
+SmallVector<OperandPack, 2> StorePack::getOperands() const {
+  OperandPack OP;
+  for (auto *I : Insts)
+    OP.push_back(cast<StoreInst>(I)->getValueOperand());
+  return {OP};
+}
+
+Value *StorePack::emit(ArrayRef<Value *> Operands, InserterTy Insert) const {
+  assert(Operands.size() == 1);
+
+  auto *Store = cast<StoreInst>(Insts.front());
+  return Insert(new StoreInst(Operands.front(), Store->getPointerOperand(),
+                              false /*is volatile*/, Store->getAlign()));
 }
 
 raw_ostream &operator<<(raw_ostream &OS, Pack &P) {

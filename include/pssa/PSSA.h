@@ -1,8 +1,8 @@
 #ifndef PSSA_H
 #define PSSA_H
 
-#include "utils/OrderedList.h"
 #include "pssa/ControlDependence.h"
+#include "utils/OrderedList.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -10,6 +10,7 @@
 #include "llvm/IR/Instructions.h"
 
 namespace llvm {
+class LLVMContext;
 class Loop;
 class Instruction;
 class Function;
@@ -46,6 +47,8 @@ public:
   llvm::Instruction *asInstruction() const {
     return Storage.dyn_cast<llvm::Instruction *>();
   }
+  bool operator==(const Item &Other) const { return Storage == Other.Storage; }
+  bool operator!=(const Item &Other) const { return Storage != Other.Storage; }
 };
 
 struct ItemHashInfo {
@@ -99,6 +102,7 @@ public:
         BackEdgeCond(BackEdgeCond) {}
 
   using ItemIterator = decltype(Items)::iterator;
+  using ConstItemIterator = decltype(Items)::const_iterator;
 
   ItemIterator insert(llvm::Instruction *, const ControlCondition *,
                       llvm::Optional<ItemIterator> InsertBefore = llvm::None);
@@ -108,13 +112,32 @@ public:
   ItemIterator insert(VLoop *,
                       llvm::Optional<ItemIterator> InsertBefore = llvm::None);
 
-  void erase(ItemIterator It) { Items.erase(It); }
+  ItemIterator toIterator(const Item &It);
 
-  bool comesBefore(Item A, Item B) const {
+  void erase(ItemIterator It) {
+    if (auto *I = It->asInstruction())
+      InstConds.erase(I);
+    Items.erase(It);
+  }
+  void erase(const Item &It) { Items.erase(toIterator(It)); }
+
+  bool comesBefore(const Item &A, const Item &B) const {
     return Items.comesBefore(A, B);
   }
 
-  const decltype(Items) &items() const { return Items; }
+  bool contains(VLoop *) const;
+  bool contains(llvm::Instruction *) const;
+  bool contains(const Item &It) const {
+    if (auto *I = It.asInstruction())
+      return contains(I);
+    return contains(It.asLoop());
+  }
+
+  llvm::iterator_range<ConstItemIterator> items() const {
+    return llvm::make_range(Items.begin(), Items.end());
+  }
+  ConstItemIterator item_begin() const { return Items.begin(); }
+  ConstItemIterator item_end() const { return Items.end(); }
 
   const ControlCondition *getInstCond(llvm::Instruction *I) const {
     assert(InstConds.count(I));
@@ -155,6 +178,7 @@ public:
 };
 
 class PredicatedSSA {
+  llvm::LLVMContext &Ctx;
   llvm::LoopInfo &LI;
   ConditionTable CT;
   VLoop TopVL;
@@ -166,11 +190,18 @@ public:
   PredicatedSSA(llvm::Function *, llvm::LoopInfo &, llvm::DominatorTree &,
                 llvm::PostDominatorTree &);
 
+  llvm::LLVMContext &getContext() { return Ctx; }
+
   struct InsertPoint {
     VLoop *VL;
     VLoop::ItemIterator It;
     void insert(llvm::Instruction *I, const ControlCondition *C);
   };
+
+  VLoop::ItemIterator toIterator(const Item &It) {
+    assert(ItemToIteratorMap.count(It));
+    return ItemToIteratorMap.lookup(It);
+  }
 
   InsertPoint getInsertPoint(llvm::Instruction *I) {
     assert(ItemToIteratorMap.count(I));
@@ -190,18 +221,20 @@ public:
     ItemToIteratorMap[*It] = It;
   }
 
-  void mapMuToLoop(llvm::PHINode *PN, VLoop *VL) {
-    InstToVLoopMap[PN] = VL;
-  }
+  void mapMuToLoop(llvm::PHINode *PN, VLoop *VL) { InstToVLoopMap[PN] = VL; }
 
   VLoop *getLoopForInst(llvm::Instruction *I) const {
     assert(InstToVLoopMap.count(I));
     return InstToVLoopMap.lookup(I);
   }
 
-  bool contains(llvm::Instruction *I) const {
-    return InstToVLoopMap.count(I);
+  VLoop *getLoopForItem(const Item &It) const {
+    if (auto *VL = It.asLoop())
+      return VL->getParent();
+    return getLoopForInst(It.asInstruction());
   }
+
+  bool contains(llvm::Instruction *I) const { return InstToVLoopMap.count(I); }
 
   VLoop &getTopLevel() { return TopVL; }
 };
