@@ -1,3 +1,4 @@
+#include "pssa/Inserter.h"
 #include "pssa/PSSA.h"
 #include "vegen/Pack.h"
 #include "llvm/ADT/EquivalenceClasses.h"
@@ -8,6 +9,16 @@
 using namespace llvm;
 
 namespace {
+
+bool mayReadOrWriteMemory(Instruction *I) {
+  return isa<ReturnInst>(I) || I->mayReadOrWriteMemory();
+}
+
+bool mayReadOrWriteMemory(const Item &It) {
+  if (auto *I = It.asInstruction())
+    return mayReadOrWriteMemory(I);
+  return true;
+}
 
 class DependenceChecker {
   struct LoopSummary {
@@ -78,7 +89,7 @@ public:
     assert(I1 && VL2);
 
     // Don't bother if I1 doesn't touch memory
-    if (!I1->mayReadOrWriteMemory())
+    if (!mayReadOrWriteMemory(I1))
       return false;
 
     // Figure out the memory instructions in VL2
@@ -121,23 +132,6 @@ public:
     if (It == Lanes.end())
       return None;
     return It->second;
-  }
-};
-
-class Inserter {
-  VLoop *VL;
-  const ControlCondition *C;
-  VLoop::ItemIterator InsertBefore;
-
-public:
-  Inserter(VLoop *VL, const ControlCondition *C,
-           VLoop::ItemIterator InsertBefore)
-      : VL(VL), C(C), InsertBefore(InsertBefore) {}
-
-  Value *operator()(Value *V) {
-    if (auto *I = dyn_cast<Instruction>(V))
-      VL->insert(I, C, InsertBefore);
-    return V;
   }
 };
 
@@ -204,12 +198,6 @@ template <typename SequenceTy> SmallItemVector toItems(SequenceTy Seq) {
 }
 
 }; // namespace
-
-static bool mayReadOrWriteMemory(const Item &It) {
-  if (auto *I = It.asInstruction())
-    return I->mayReadOrWriteMemory();
-  return true;
-}
 
 // Move the items together while still preserving dependences
 static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
@@ -468,7 +456,7 @@ static void schedule(ArrayRef<Pack *> Packs,
 }
 
 static Value *gatherOperand(ArrayRef<Value *> Values, PackIndex &PI,
-                            InserterTy Insert) {
+                            Inserter &Insert) {
   // Special case: if all of the values are constant,
   // just build and return the constant vector.
   SmallVector<Constant *, 8> Consts;
@@ -602,6 +590,12 @@ static Value *gatherOperand(ArrayRef<Value *> Values, PackIndex &PI,
   return Acc;
 }
 
+static void remapOperands(Instruction *I, ValueMapper &Mapper) {
+  for (Use &Op : I->operands())
+    if (Value *V = Mapper.mapValue(*Op.get()))
+      Op = V;
+}
+
 void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
   // Map the packed instruction back to the pack
   DenseMap<Instruction *, Pack *> InstToPackMap;
@@ -626,7 +620,10 @@ void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
 
   while (!Worklist.empty()) {
     auto *VL = Worklist.pop_back_val();
-    for (auto &It : VL->items()) {
+    // Copy the items to a vector to
+    // avoid invalidating the iterator while we modify list of items
+    SmallVector<Item> Items(VL->item_begin(), VL->item_end());
+    for (auto &It : Items) {
       if (auto *SubVL = It.asLoop()) {
         Worklist.push_back(SubVL);
         continue;
@@ -647,10 +644,23 @@ void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
 
         auto Iterator = VL->toIterator(I);
         Inserter InsertBeforeI(VL, C, Iterator);
-        SmallVector<Value *, 8> Operands;
-        for (OperandPack OP : P->getOperands())
-          Operands.push_back(gatherOperand(OP, PI, InsertBeforeI));
-        auto *V = P->emit(Operands, InsertBeforeI);
+        Value *V = nullptr;
+        if (isa<PHIPack>(P)) {
+          // Special lowering path for phi pack
+          SmallVector<Value *, 8> Operands;
+          auto *PN = cast<PHINode>(P->values().front());
+          for (auto X : enumerate(P->getOperands())) {
+            auto *C = VL->getPhiCondition(PN, X.index());
+            Inserter Insert(VL, C, Iterator);
+            Operands.push_back(gatherOperand(X.value(), PI, Insert));
+          }
+          V = InsertBeforeI.insertPhi(Operands, VL->getPhiConditions(PN));
+        } else {
+          SmallVector<Value *, 8> Operands;
+          for (OperandPack OP : P->getOperands())
+            Operands.push_back(gatherOperand(OP, PI, InsertBeforeI));
+          V = P->emit(Operands, InsertBeforeI);
+        }
         PI.insert(V, P);
         Extracter.remember(P, V, VL, C, Iterator);
         I = cast<Instruction>(V);
@@ -658,7 +668,7 @@ void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
 
       // Fix some of the operands if need to.
       // (E.g., replacing use of scalar value w/ extract)
-      Remapper.remapInstruction(*I);
+      remapOperands(I, Remapper);
     }
   }
 

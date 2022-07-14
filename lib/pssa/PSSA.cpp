@@ -29,7 +29,7 @@ VLoop::ItemIterator VLoop::insert(PHINode *PN,
                                   const ControlCondition *C,
                                   Optional<ItemIterator> InsertBefore) {
   PhiConds[PN].assign(Conds.begin(), Conds.end());
-  return insert(PN, C);
+  return insert(PN, C, InsertBefore);
 }
 
 VLoop::ItemIterator VLoop::insert(VLoop *SubVL,

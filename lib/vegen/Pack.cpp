@@ -1,5 +1,7 @@
 #include "vegen/Pack.h"
 #include "AddrUtil.h"
+#include "pssa/PSSA.h"
+#include "pssa/Inserter.h"
 #include "llvm/Analysis/LoopAccessAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Instructions.h"
@@ -8,7 +10,7 @@
 
 using namespace llvm;
 
-Value *Pack::emit(ArrayRef<Value *>, InserterTy) const {
+Value *Pack::emit(ArrayRef<Value *>, Inserter &) const {
   llvm_unreachable("Pack::emit is not supported for arbitrary packs");
   return nullptr;
 }
@@ -19,6 +21,9 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
 
   auto *I = Insts.front();
   if (I->mayReadOrWriteMemory())
+    return nullptr;
+
+  if (isa<PHINode>(I))
     return nullptr;
 
   auto Rest = drop_begin(Insts);
@@ -37,7 +42,7 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
       return nullptr;
   }
 
-  return new SIMDPack(Insts);
+  return new SIMDPack(Insts, PK_SIMD);
 }
 
 SmallVector<OperandPack, 2> SIMDPack::getOperands() const {
@@ -53,7 +58,7 @@ SmallVector<OperandPack, 2> SIMDPack::getOperands() const {
   return Operands;
 }
 
-Value *SIMDPack::emit(ArrayRef<Value *> Operands, InserterTy Insert) const {
+Value *SIMDPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   auto *I = Insts.front();
 
   if (auto *BO = dyn_cast<BinaryOperator>(I)) {
@@ -128,10 +133,10 @@ LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
   }
   while (SortedStores.size() < PowerOf2Ceil(SortedStores.size()))
     SortedStores.push_back(nullptr);
-  return new LoadPack(SortedStores);
+  return new LoadPack(SortedStores, PK_Load);
 }
 
-Value *LoadPack::emit(ArrayRef<Value *> Operands, InserterTy Insert) const {
+Value *LoadPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   assert(Operands.size() == 0);
 
   auto *Load = cast<LoadInst>(Insts.front());
@@ -179,7 +184,7 @@ StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
       return nullptr;
     SortedStores.push_back(Insts[SortedIdx]);
   }
-  return new StorePack(SortedStores);
+  return new StorePack(SortedStores, PK_Store);
 }
 
 SmallVector<OperandPack, 2> StorePack::getOperands() const {
@@ -189,7 +194,7 @@ SmallVector<OperandPack, 2> StorePack::getOperands() const {
   return {OP};
 }
 
-Value *StorePack::emit(ArrayRef<Value *> Operands, InserterTy Insert) const {
+Value *StorePack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   assert(Operands.size() == 1);
 
   auto *Store = cast<StoreInst>(Insts.front());
@@ -202,6 +207,49 @@ Value *StorePack::emit(ArrayRef<Value *> Operands, InserterTy Insert) const {
   }
   return Insert(new StoreInst(Operands.front(), Ptr, false /*is volatile*/,
                               Store->getAlign()));
+}
+
+PHIPack *PHIPack::tryPack(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA) {
+  SmallVector<PHINode *, 8> Phis;
+  for (auto *I : Insts) {
+    auto *PN = dyn_cast<PHINode>(I);
+    if (!PN)
+      return nullptr;
+    Phis.push_back(PN);
+  }
+
+  auto *PN = Phis.front();
+  unsigned N = PN->getNumOperands();
+  auto *C = PSSA.getInstCond(PN);
+  auto Conds = PSSA.getPhiConditions(PN);
+
+  for (auto *PN2 : drop_begin(Phis)) {
+    // Check that the phis have to be control-flow equivalent
+    //
+    // FIXME: need a stronger definition of control-flow equivalent
+    // (taking the cf-eqv of the parent loops into account)
+    if (!PSSA.isEquivalent(PSSA.getInstCond(PN), C))
+      return nullptr;
+
+    // Check that the incoming phi conditions are equivalent
+    auto Conds2 = PSSA.getPhiConditions(PN2);
+    if (Conds2.size() != N)
+      return nullptr;
+    for (unsigned i = 0; i < N; i++)
+      if (!PSSA.isEquivalent(Conds[i], Conds2[i]))
+        return nullptr;
+  }
+
+  return new PHIPack(Insts, PK_PHI);
+}
+
+SmallVector<OperandPack, 2> PHIPack::getOperands() const {
+  unsigned N = Insts.front()->getNumOperands();
+  SmallVector<OperandPack, 2> Operands;
+  for (unsigned i = 0; i < N; i++)
+    Operands.emplace_back(
+        llvm::map_range(Insts, [i](auto *I) { return I->getOperand(i); }));
+  return Operands;
 }
 
 raw_ostream &operator<<(raw_ostream &OS, Pack &P) {

@@ -234,6 +234,25 @@ public:
 
   bool contains(llvm::Instruction *I) const { return InstToVLoopMap.count(I); }
 
+  const ControlCondition *getInstCond(llvm::Instruction *I) const {
+    assert(contains(I));
+    return InstToVLoopMap.lookup(I)->getInstCond(I);
+  }
+
+  const ControlCondition *getPhiCondition(llvm::PHINode *PN, unsigned i) const {
+    assert(contains(PN));
+    return InstToVLoopMap.lookup(PN)->getPhiCondition(PN, i);
+  }
+
+  llvm::ArrayRef<const ControlCondition *> getPhiConditions(llvm::PHINode *PN) {
+    assert(contains(PN));
+    return InstToVLoopMap.lookup(PN)->getPhiConditions(PN);
+  }
+
+  bool isEquivalent(const ControlCondition *C1, const ControlCondition *C2) {
+    return CT.isEquivalent(C1, C2);
+  }
+
   VLoop &getTopLevel() { return TopVL; }
 };
 
