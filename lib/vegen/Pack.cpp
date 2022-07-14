@@ -42,7 +42,7 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
       return nullptr;
   }
 
-  return new SIMDPack(Insts, PK_SIMD);
+  return new SIMDPack(Insts);
 }
 
 SmallVector<OperandPack, 2> SIMDPack::getOperands() const {
@@ -98,8 +98,22 @@ void Pack::print(raw_ostream &OS) const {
   OS << ']';
 }
 
+static bool isControlFlowEquivalent(ArrayRef<Instruction *> Insts,
+                                    PredicatedSSA &PSSA) {
+  if (Insts.empty())
+    return true;
+
+  // FIXME: use a stronger definition of control flow equivalence that takes
+  // loop nesting into account
+  auto *C = PSSA.getInstCond(Insts.front());
+  return all_of(drop_begin(Insts), [&PSSA, C](auto *I) {
+    return PSSA.isEquivalent(C, PSSA.getInstCond(I));
+  });
+}
+
 LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
-                            ScalarEvolution &SE, LoopInfo &LI) {
+                            ScalarEvolution &SE, LoopInfo &LI,
+                            PredicatedSSA &PSSA) {
   SmallVector<Value *, 8> Ptrs;
   for (auto *I : Insts) {
     if (auto *LI = dyn_cast<LoadInst>(I))
@@ -107,6 +121,9 @@ LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
     else
       return nullptr;
   }
+
+  if (!isControlFlowEquivalent(Insts, PSSA))
+    return nullptr;
 
   auto *Ty = Insts.front()->getType();
   SmallVector<unsigned, 8> SortedIdxs;
@@ -133,7 +150,7 @@ LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
   }
   while (SortedStores.size() < PowerOf2Ceil(SortedStores.size()))
     SortedStores.push_back(nullptr);
-  return new LoadPack(SortedStores, PK_Load);
+  return new LoadPack(SortedStores);
 }
 
 Value *LoadPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
@@ -153,7 +170,7 @@ Value *LoadPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
 
 StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
                               const DataLayout &DL, ScalarEvolution &SE,
-                              LoopInfo &LI) {
+                              LoopInfo &LI, PredicatedSSA &PSSA) {
   SmallVector<Value *, 8> Ptrs;
   for (auto *I : Insts) {
     if (auto *SI = dyn_cast<StoreInst>(I))
@@ -161,6 +178,9 @@ StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
     else
       return nullptr;
   }
+
+  if (!isControlFlowEquivalent(Insts, PSSA))
+    return nullptr;
 
   auto *Ty = cast<StoreInst>(Insts.front())->getValueOperand()->getType();
   SmallVector<unsigned, 8> SortedIdxs;
@@ -184,7 +204,7 @@ StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
       return nullptr;
     SortedStores.push_back(Insts[SortedIdx]);
   }
-  return new StorePack(SortedStores, PK_Store);
+  return new StorePack(SortedStores);
 }
 
 SmallVector<OperandPack, 2> StorePack::getOperands() const {
@@ -218,19 +238,14 @@ PHIPack *PHIPack::tryPack(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA) {
     Phis.push_back(PN);
   }
 
+  if (!isControlFlowEquivalent(Insts, PSSA))
+    return nullptr;
+
   auto *PN = Phis.front();
   unsigned N = PN->getNumOperands();
-  auto *C = PSSA.getInstCond(PN);
   auto Conds = PSSA.getPhiConditions(PN);
 
   for (auto *PN2 : drop_begin(Phis)) {
-    // Check that the phis have to be control-flow equivalent
-    //
-    // FIXME: need a stronger definition of control-flow equivalent
-    // (taking the cf-eqv of the parent loops into account)
-    if (!PSSA.isEquivalent(PSSA.getInstCond(PN), C))
-      return nullptr;
-
     // Check that the incoming phi conditions are equivalent
     auto Conds2 = PSSA.getPhiConditions(PN2);
     if (Conds2.size() != N)
@@ -240,7 +255,7 @@ PHIPack *PHIPack::tryPack(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA) {
         return nullptr;
   }
 
-  return new PHIPack(Insts, PK_PHI);
+  return new PHIPack(Insts);
 }
 
 SmallVector<OperandPack, 2> PHIPack::getOperands() const {
@@ -248,8 +263,70 @@ SmallVector<OperandPack, 2> PHIPack::getOperands() const {
   SmallVector<OperandPack, 2> Operands;
   for (unsigned i = 0; i < N; i++)
     Operands.emplace_back(
-        llvm::map_range(Insts, [i](auto *I) { return I->getOperand(i); }));
+        map_range(Insts, [i](auto *I) { return I->getOperand(i); }));
   return Operands;
+}
+
+OrPack *OrPack::tryPack(ArrayRef<const ControlCondition *> Conds) {
+  auto *Or = dyn_cast_or_null<ConditionOr>(Conds.front());
+  if (!Or)
+    return nullptr;
+  unsigned N = Or->Conds.size();
+  if (all_of(drop_begin(Conds), [N](auto *C) {
+        auto *Or = dyn_cast_or_null<ConditionOr>(C);
+        return Or && Or->Conds.size() == N;
+      }))
+    return new OrPack(Conds);
+  return nullptr;
+}
+
+SmallVector<VectorMask, 2> OrPack::getOperandMasks() const {
+  unsigned N = cast<ConditionOr>(Conds.front())->Conds.size();
+  SmallVector<VectorMask, 2> Masks;
+  for (unsigned i = 0; i < N; i++) {
+    Masks.emplace_back(map_range(
+        Conds, [i](auto *C) { return cast<ConditionOr>(C)->Conds[i]; }));
+  }
+  return Masks;
+}
+
+Value *OrPack::emit(ArrayRef<Value *> ReifiedMasks, ArrayRef<Value *>,
+                    Inserter &Insert) const {
+  unsigned N = cast<ConditionOr>(Conds.front())->Conds.size();
+  assert(ReifiedMasks.size() == N);
+
+  auto *Result = ReifiedMasks.front();
+  for (auto *Mask : drop_begin(ReifiedMasks))
+    Result = Insert.create<BinaryOperator>(BinaryOperator::Or, Result, Mask);
+  return Result;
+}
+
+AndPack *AndPack::tryPack(ArrayRef<const ControlCondition *> Conds) {
+  if (all_of(Conds, [](auto *C) { return isa_and_nonnull<ConditionAnd>(C); }))
+    return new AndPack(Conds);
+  return nullptr;
+}
+
+SmallVector<VectorMask, 2> AndPack::getOperandMasks() const {
+  auto ParentConds = map_range(Conds, [](const ControlCondition *C) {
+    return cast<ConditionAnd>(C)->Parent;
+  });
+  return {VectorMask(ParentConds)};
+}
+
+SmallVector<OperandPack, 2> AndPack::getOperands() const {
+  auto Operands = map_range(Conds, [](const ControlCondition *C) {
+    return cast<ConditionAnd>(C)->Cond;
+  });
+  return {OperandPack(Operands)};
+}
+
+Value *AndPack::emit(ArrayRef<Value *> ReifiedMasks, ArrayRef<Value *> Operands,
+                     Inserter &Insert) const {
+  assert(ReifiedMasks.size() == 1);
+  assert(Operands.size() == 1);
+  return Insert.create<BinaryOperator>(BinaryOperator::And,
+                                       ReifiedMasks.front(), Operands.front());
 }
 
 raw_ostream &operator<<(raw_ostream &OS, Pack &P) {
