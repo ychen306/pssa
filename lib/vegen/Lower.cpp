@@ -194,6 +194,15 @@ public:
   }
 };
 
+using SmallItemVector = SmallVector<Item, 8>;
+template <typename SequenceTy> SmallItemVector toItems(SequenceTy Seq) {
+  SmallItemVector Items;
+  for (auto *X : Seq)
+    if (X)
+      Items.push_back(X);
+  return Items;
+}
+
 }; // namespace
 
 static bool mayReadOrWriteMemory(const Item &It) {
@@ -204,6 +213,7 @@ static bool mayReadOrWriteMemory(const Item &It) {
 
 // Move the items together while still preserving dependences
 static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
+                  const DenseMap<Instruction *, Pack *> *InstToPackMap,
                   DependenceChecker &DepChecker) {
   if (Items.size() <= 1)
     return;
@@ -227,22 +237,22 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
     if (auto *I = dyn_cast<Instruction>(V))
       Visit(I);
   };
-  std::function<void(const ControlCondition *)> VisitCond = 
-    [&](const ControlCondition *C) {
-    if (!C)
-      return;
-    if (!VisitedConds.insert(C).second)
-      return;
+  std::function<void(const ControlCondition *)> VisitCond =
+      [&](const ControlCondition *C) {
+        if (!C)
+          return;
+        if (!VisitedConds.insert(C).second)
+          return;
 
-    if (auto *And = dyn_cast<ConditionAnd>(C)) {
-      VisitCond(And->Parent);
-      VisitValue(And->Cond);
-      return;
-    }
+        if (auto *And = dyn_cast<ConditionAnd>(C)) {
+          VisitCond(And->Parent);
+          VisitValue(And->Cond);
+          return;
+        }
 
-    auto *Or = cast<ConditionOr>(C);
-    for_each(Or->Conds, VisitCond);
-  };
+        auto *Or = cast<ConditionOr>(C);
+        for_each(Or->Conds, VisitCond);
+      };
 
   // FIXME: check circular dependencies
   Visit = [&](const Item &It) {
@@ -252,10 +262,18 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
     if (!Visited.insert(It).second)
       return;
 
+    ArrayRef<Item> Coupled = It;
     // Process (register) data and control dependences
     if (auto *I = It.asInstruction()) {
-      for_each(I->operand_values(), VisitValue);
-      VisitCond(VL->getInstCond(I));
+      Pack *P = InstToPackMap ? InstToPackMap->lookup(I) : nullptr;
+      // If I is packed with other instructions,
+      // we also need to check their dependences
+      ArrayRef<Instruction *> Insts = P ? P->values() : I;
+      for (auto *I : Insts) {
+        for_each(I->operand_values(), VisitValue);
+        VisitCond(VL->getInstCond(I));
+      }
+      Coupled = toItems(Insts);
     } else {
       auto *SubVL = It.asLoop();
       for_each(DepChecker.getLiveIns(SubVL), VisitValue);
@@ -266,8 +284,9 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
     if (mayReadOrWriteMemory(It)) {
       for (auto I = std::next(VL->toIterator(Earliest)), E = VL->toIterator(It);
            I != E; ++I) {
-        if (DepChecker.depends(*I, It))
-          Visit(*I);
+        for (auto &It2 : Coupled)
+          if (DepChecker.depends(*I, It))
+            Visit(*I);
       }
     }
 
@@ -335,17 +354,6 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
 
   ReinsertItems(InsertPt);
 }
-
-namespace {
-using SmallItemVector = SmallVector<Item, 8>;
-template <typename SequenceTy> SmallItemVector toItems(SequenceTy Seq) {
-  SmallItemVector Items;
-  for (auto *X : Seq)
-    if (X)
-      Items.push_back(X);
-  return Items;
-}
-} // namespace
 
 static void partitionLoops(EquivalenceClasses<VLoop *> &LoopsToFuse,
                            ArrayRef<Pack *> Packs, PredicatedSSA &PSSA) {
@@ -435,15 +443,16 @@ static void fuseLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
       SmallVector<VLoop *> Loops(LoopsToFuse.findLeader(Leader),
                                  LoopsToFuse.member_end());
       // Move the loops together first
-      merge(PSSA, toItems(Loops), DepChecker);
+      merge(PSSA, toItems(Loops), nullptr /*inst to pack map*/, DepChecker);
       auto *Fused = fuseLoops(VL, Loops, PSSA);
       DepChecker.invalidate(Fused);
     }
   }
 }
 
-static void schedule(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
-                     DependenceInfo &DI) {
+static void schedule(ArrayRef<Pack *> Packs,
+                     const DenseMap<Instruction *, Pack *> &InstToPackMap,
+                     PredicatedSSA &PSSA, DependenceInfo &DI) {
   DependenceChecker DepChecker(DI);
 
   // Figure out the loops that we need to fuse.
@@ -455,7 +464,7 @@ static void schedule(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
 
   // FIXME: Deal with packs that require fusion/co-iteration later
   for (auto *P : Packs)
-    merge(PSSA, toItems(P->values()), DepChecker);
+    merge(PSSA, toItems(P->values()), &InstToPackMap, DepChecker);
 }
 
 static Value *gatherOperand(ArrayRef<Value *> Values, PackIndex &PI,
@@ -594,9 +603,6 @@ static Value *gatherOperand(ArrayRef<Value *> Values, PackIndex &PI,
 }
 
 void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
-  // Reorder the instructions so that the packed instructions appear together
-  schedule(Packs, PSSA, DI);
-
   // Map the packed instruction back to the pack
   DenseMap<Instruction *, Pack *> InstToPackMap;
   for (auto *P : Packs) {
@@ -604,6 +610,9 @@ void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
       if (I)
         InstToPackMap[I] = P;
   }
+
+  // Reorder the instructions so that the packed instructions appear together
+  schedule(Packs, InstToPackMap, PSSA, DI);
 
   SmallVector<VLoop *> Worklist{&PSSA.getTopLevel()};
 
