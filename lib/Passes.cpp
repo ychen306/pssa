@@ -87,6 +87,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
 
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
   auto &DL = F.getParent()->getDataLayout();
+  auto &LI = AM.getResult<LoopAnalysis>(F);
 
   SmallVector<Pack *> Packs;
   for (StringRef Arg : InstsToPack) {
@@ -107,9 +108,9 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
 
     if (auto *Pack = SIMDPack::tryPack(Insts)) {
       Packs.push_back(Pack);
-    } else if (auto *LoadP = LoadPack::tryPack(Insts, DL, SE)) {
+    } else if (auto *LoadP = LoadPack::tryPack(Insts, DL, SE, LI)) {
       Packs.push_back(LoadP);
-    } else if (auto *StoreP = StorePack::tryPack(Insts, DL, SE)) {
+    } else if (auto *StoreP = StorePack::tryPack(Insts, DL, SE, LI)) {
       Packs.push_back(StoreP);
     } else {
       errs() << "failed to pack specified insts\n";
@@ -119,7 +120,6 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     errs() << "Packing " << *Packs.back() << '\n';
   }
 
-  auto &LI = AM.getResult<LoopAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
   PredicatedSSA PSSA(&F, LI, DT, PDT);

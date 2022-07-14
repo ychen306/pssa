@@ -6,32 +6,36 @@
 
 using namespace llvm;
 
-static void
-getIncomingPhiConditions(SmallVectorImpl<const ControlCondition *> &Conds,
-                         PHINode *PN, ControlDependenceAnalysis &CDA) {
+static SmallVector<const ControlCondition *, 4>
+getIncomingConditions(PHINode *PN, ControlDependenceAnalysis &CDA) {
+  SmallVector<const ControlCondition *, 4> Conds;
   for (auto *SrcBB : PN->blocks())
     Conds.push_back(CDA.getConditionForEdge(SrcBB, PN->getParent()));
+  return Conds;
 }
 
 VLoop::ItemIterator VLoop::insert(Instruction *I, const ControlCondition *C,
                                   Optional<ItemIterator> InsertBefore) {
+  assert((!isa<PHINode>(I) || isGatedPhi(cast<PHINode>(I))) &&
+         "need to register phi conds before insert");
   InstConds[I] = C;
   auto It = Items.insert(InsertBefore ? *InsertBefore : Items.end(), I);
   PSSA->mapItemToLoop(It, this);
   return It;
 }
 
-VLoop::ItemIterator VLoop::insert(PHINode *PN, const ControlCondition *C,
-                                  ControlDependenceAnalysis &CDA,
+VLoop::ItemIterator VLoop::insert(PHINode *PN,
+                                  ArrayRef<const ControlCondition *> Conds,
+                                  const ControlCondition *C,
                                   Optional<ItemIterator> InsertBefore) {
-  getIncomingPhiConditions(PhiConds[PN], PN, CDA);
+  PhiConds[PN].assign(Conds.begin(), Conds.end());
   return insert(PN, C);
 }
 
 VLoop::ItemIterator VLoop::insert(VLoop *SubVL,
                                   Optional<ItemIterator> InsertBefore) {
-  SubLoops.emplace_back(SubVL);
   auto It = Items.insert(InsertBefore ? *InsertBefore : Items.end(), SubVL);
+  SubVL->Parent = this;
   PSSA->mapItemToLoop(It, this);
   return It;
 }
@@ -42,6 +46,14 @@ bool VLoop::contains(VLoop *VL) const {
   if (!VL)
     return false;
   return contains(VL->getParent());
+}
+
+bool VLoop::comesBefore(const Item &A, const Item &B) const {
+  // Nothing comes before a mu node
+  if (isMu(dyn_cast_or_null<PHINode>(B.asInstruction())))
+    return false;
+
+  return Items.comesBefore(A, B);
 }
 
 VLoop::ItemIterator VLoop::toIterator(const Item &I) {
@@ -60,7 +72,7 @@ void PredicatedSSA::InsertPoint::insert(Instruction *I,
   VL->insert(I, C, It);
 }
 
-void VLoop::addMu(PHINode *PN) { 
+void VLoop::addMu(PHINode *PN) {
   Mus.insert(PN);
   assert(PSSA);
   PSSA->mapMuToLoop(PN, this);
@@ -85,10 +97,11 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
         if (I.isTerminator() && !isa<ReturnInst>(&I))
           continue;
 
-        if (auto *PN = dyn_cast<PHINode>(&I))
-          TopVL.insert(PN, C, CDA);
-        else
+        if (auto *PN = dyn_cast<PHINode>(&I)) {
+          TopVL.insert(PN, getIncomingConditions(PN, CDA), C);
+        } else {
           TopVL.insert(&I, C);
+        }
       }
     } else {
       // BB is contained in some loop, get the top-level loop that contains BB
@@ -159,7 +172,7 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
 
           auto *PN = dyn_cast<PHINode>(&I);
           if (PN && !VL->isMu(PN))
-            VL->insert(PN, C, CDA);
+            VL->insert(PN, getIncomingConditions(PN, CDA), C);
           else if (!PN)
             VL->insert(&I, C);
         }

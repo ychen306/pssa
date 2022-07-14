@@ -10,6 +10,7 @@ class Value;
 class raw_ostream;
 class DataLayout;
 class ScalarEvolution;
+class LoopInfo;
 } // namespace llvm
 
 using OperandPack = llvm::SmallVector<llvm::Value *, 8>;
@@ -42,7 +43,8 @@ class LoadPack : public Pack {
 
 public:
   static LoadPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
-                           const llvm::DataLayout &, llvm::ScalarEvolution &);
+                           const llvm::DataLayout &, llvm::ScalarEvolution &,
+                           llvm::LoopInfo &);
   llvm::SmallVector<OperandPack, 2> getOperands() const override { return {}; }
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, InserterTy) const override;
   llvm::ArrayRef<llvm::Instruction *> values() const override { return Insts; }
@@ -52,9 +54,11 @@ class StorePack : public Pack {
   llvm::SmallVector<llvm::Instruction *, 8> Insts;
   StorePack(llvm::ArrayRef<llvm::Instruction *> Insts)
       : Insts(Insts.begin(), Insts.end()) {}
+
 public:
   static StorePack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
-                           const llvm::DataLayout &, llvm::ScalarEvolution &);
+                            const llvm::DataLayout &, llvm::ScalarEvolution &,
+                            llvm::LoopInfo &);
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, InserterTy) const override;
   llvm::ArrayRef<llvm::Instruction *> values() const override { return Insts; }

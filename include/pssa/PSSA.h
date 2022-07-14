@@ -22,7 +22,6 @@ class PostDominatorTree;
 } // namespace llvm
 
 class ControlCondition;
-class ControlDependenceAnalysis;
 
 // This represents a special kind of gated phi
 struct OneHotPhi {
@@ -76,7 +75,6 @@ class VLoop {
                    // the whole function
 
   OrderedList<Item, ItemHashInfo> Items;
-  llvm::SmallVector<std::unique_ptr<VLoop>, 4> SubLoops;
   llvm::SmallPtrSet<llvm::PHINode *, 8> Mus;
   llvm::DenseMap<llvm::PHINode *, OneHotPhi> OneHotPhis;
   llvm::DenseMap<llvm::PHINode *,
@@ -106,8 +104,8 @@ public:
 
   ItemIterator insert(llvm::Instruction *, const ControlCondition *,
                       llvm::Optional<ItemIterator> InsertBefore = llvm::None);
-  ItemIterator insert(llvm::PHINode *, const ControlCondition *,
-                      ControlDependenceAnalysis &,
+  ItemIterator insert(llvm::PHINode *, llvm::ArrayRef<const ControlCondition *>,
+                      const ControlCondition *,
                       llvm::Optional<ItemIterator> InsertBefore = llvm::None);
   ItemIterator insert(VLoop *,
                       llvm::Optional<ItemIterator> InsertBefore = llvm::None);
@@ -121,9 +119,7 @@ public:
   }
   void erase(const Item &It) { Items.erase(toIterator(It)); }
 
-  bool comesBefore(const Item &A, const Item &B) const {
-    return Items.comesBefore(A, B);
-  }
+  bool comesBefore(const Item &A, const Item &B) const;
 
   bool contains(VLoop *) const;
   bool contains(llvm::Instruction *) const;
@@ -147,15 +143,12 @@ public:
     assert(InstConds.count(I));
     InstConds[I] = C;
   }
-  llvm::ArrayRef<std::unique_ptr<VLoop>> getSubLoops() const {
-    return SubLoops;
-  }
   const ControlCondition *getLoopCond() const { return LoopCond; }
   const ControlCondition *getBackEdgeCond() const { return BackEdgeCond; }
   void setBackEdgeCond(const ControlCondition *C) { BackEdgeCond = C; }
   void setLoopCond(const ControlCondition *C) { LoopCond = C; }
   bool isLoop() const { return !IsTopLevel; }
-  bool isMu(llvm::PHINode *PN) const { return Mus.count(PN); }
+  bool isMu(llvm::PHINode *PN) const { return PN && Mus.count(PN); }
 
   // Add a phi node as mu. Assume the first value is the init. val and second
   // rec.
@@ -171,6 +164,11 @@ public:
   const ControlCondition *getPhiCondition(llvm::PHINode *PN, unsigned i) {
     assert(PhiConds.count(PN));
     return PhiConds[PN][i];
+  }
+
+  llvm::ArrayRef<const ControlCondition *> getPhiConditions(llvm::PHINode *PN) {
+    assert(PhiConds.count(PN));
+    return PhiConds[PN];
   }
 
   VLoop *getParent() const { return Parent; }

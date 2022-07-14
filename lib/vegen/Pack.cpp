@@ -1,5 +1,7 @@
 #include "vegen/Pack.h"
+#include "AddrUtil.h"
 #include "llvm/Analysis/LoopAccessAnalysis.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
@@ -92,7 +94,7 @@ void Pack::print(raw_ostream &OS) const {
 }
 
 LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
-                            ScalarEvolution &SE) {
+                            ScalarEvolution &SE, LoopInfo &LI) {
   SmallVector<Value *, 8> Ptrs;
   for (auto *I : Insts) {
     if (auto *LI = dyn_cast<LoadInst>(I))
@@ -103,7 +105,7 @@ LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
 
   auto *Ty = Insts.front()->getType();
   SmallVector<unsigned, 8> SortedIdxs;
-  if (!sortPtrAccesses(Ptrs, Ty, DL, SE, SortedIdxs))
+  if (!sortPointers(Ptrs, Ty, DL, SE, LI, SortedIdxs))
     return nullptr;
 
   auto GetSortedIdx = [&SortedIdxs](unsigned i) {
@@ -117,7 +119,7 @@ LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
   for (unsigned i = 1, N = Insts.size(); i < N; i++) {
     unsigned SortedIdx = GetSortedIdx(i);
     auto *Ptr = Ptrs[SortedIdx];
-    auto Diff = getPointersDiff(Ty, FirstPtr, Ty, Ptr, DL, SE);
+    auto Diff = diffPointers(Ty, FirstPtr, Ty, Ptr, DL, SE, LI);
     assert(Diff);
     unsigned Gaps = *Diff - i;
     for (unsigned j = 0; j < Gaps; j++)
@@ -134,13 +136,19 @@ Value *LoadPack::emit(ArrayRef<Value *> Operands, InserterTy Insert) const {
 
   auto *Load = cast<LoadInst>(Insts.front());
   auto *VecTy = FixedVectorType::get(Load->getType(), Insts.size());
-  return Insert(new LoadInst(VecTy, Load->getPointerOperand(),
-                             Load->getName() + ".vec", false /*is volatile*/,
-                             Load->getAlign()));
+  auto *Ptr = Load->getPointerOperand();
+  auto *PtrTy = Ptr->getType();
+  if (!cast<PointerType>(PtrTy)->isOpaque()) {
+    Ptr = Insert(new BitCastInst(
+        Ptr, PointerType::get(VecTy, Load->getPointerAddressSpace())));
+  }
+  return Insert(new LoadInst(VecTy, Ptr, Load->getName() + ".vec",
+                             false /*is volatile*/, Load->getAlign()));
 }
 
 StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
-                              const DataLayout &DL, ScalarEvolution &SE) {
+                              const DataLayout &DL, ScalarEvolution &SE,
+                              LoopInfo &LI) {
   SmallVector<Value *, 8> Ptrs;
   for (auto *I : Insts) {
     if (auto *SI = dyn_cast<StoreInst>(I))
@@ -151,7 +159,7 @@ StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
 
   auto *Ty = cast<StoreInst>(Insts.front())->getValueOperand()->getType();
   SmallVector<unsigned, 8> SortedIdxs;
-  if (!sortPtrAccesses(Ptrs, Ty, DL, SE, SortedIdxs))
+  if (!sortPointers(Ptrs, Ty, DL, SE, LI, SortedIdxs))
     return nullptr;
 
   auto GetSortedIdx = [&SortedIdxs](unsigned i) {
@@ -165,7 +173,7 @@ StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
   for (unsigned i = 1, N = Insts.size(); i < N; i++) {
     unsigned SortedIdx = GetSortedIdx(i);
     auto *Ptr = Ptrs[SortedIdx];
-    auto Diff = getPointersDiff(Ty, FirstPtr, Ty, Ptr, DL, SE);
+    auto Diff = diffPointers(Ty, FirstPtr, Ty, Ptr, DL, SE, LI);
     assert(Diff);
     if (*Diff - i != 0)
       return nullptr;
@@ -185,8 +193,15 @@ Value *StorePack::emit(ArrayRef<Value *> Operands, InserterTy Insert) const {
   assert(Operands.size() == 1);
 
   auto *Store = cast<StoreInst>(Insts.front());
-  return Insert(new StoreInst(Operands.front(), Store->getPointerOperand(),
-                              false /*is volatile*/, Store->getAlign()));
+  auto *Ptr = Store->getPointerOperand();
+  auto *PtrTy = Ptr->getType();
+  if (!cast<PointerType>(PtrTy)->isOpaque()) {
+    Ptr = Insert(new BitCastInst(
+        Ptr, PointerType::get(Operands.front()->getType(),
+                              Store->getPointerAddressSpace())));
+  }
+  return Insert(new StoreInst(Operands.front(), Ptr, false /*is volatile*/,
+                              Store->getAlign()));
 }
 
 raw_ostream &operator<<(raw_ostream &OS, Pack &P) {

@@ -28,6 +28,7 @@ class DependenceChecker {
         processLoop(SubVL);
         auto &SubSummary = Summaries[SubVL];
         Summary.MemoryInsts.append(SubSummary.MemoryInsts);
+        // FIXME: also consider control deps
         for (auto *I : SubSummary.LiveIns)
           if (!VL->contains(I))
             Summary.LiveIns.push_back(I);
@@ -50,6 +51,7 @@ class DependenceChecker {
 
 public:
   DependenceChecker(DependenceInfo &DI) : DI(DI) {}
+  void invalidate(VLoop *VL) { Summaries.erase(VL); }
   // Check if there's any *memory dependence* from It1 to It2 (assuming It1
   // comes before It2), assuming It1 and It2 have the same parent.
   bool depends(const Item &It1, const Item &It2) {
@@ -217,12 +219,29 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
   Item Latest = *std::max_element(Items.begin(), Items.end(), ComesBefore);
 
   DenseSet<Item, ItemHashInfo> Visited;
+  DenseSet<const ControlCondition *> VisitedConds;
   SmallVector<Item> Depended;
   // Do DFS on a given item
   std::function<void(const Item &)> Visit;
-  std::function<void(Value *)> VisitValue = [&Visit](Value *V) {
+  auto VisitValue = [&Visit](Value *V) {
     if (auto *I = dyn_cast<Instruction>(V))
       Visit(I);
+  };
+  std::function<void(const ControlCondition *)> VisitCond = 
+    [&](const ControlCondition *C) {
+    if (!C)
+      return;
+    if (!VisitedConds.insert(C).second)
+      return;
+
+    if (auto *And = dyn_cast<ConditionAnd>(C)) {
+      VisitCond(And->Parent);
+      VisitValue(And->Cond);
+      return;
+    }
+
+    auto *Or = cast<ConditionOr>(C);
+    for_each(Or->Conds, VisitCond);
   };
 
   // FIXME: check circular dependencies
@@ -233,13 +252,15 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
     if (!Visited.insert(It).second)
       return;
 
-    // Visit the register dependencies
-    if (auto *I = It.asInstruction())
+    // Process (register) data and control dependences
+    if (auto *I = It.asInstruction()) {
       for_each(I->operand_values(), VisitValue);
-    else
-      for_each(DepChecker.getLiveIns(It.asLoop()), VisitValue);
-
-    // FIXME: also check control dependences
+      VisitCond(VL->getInstCond(I));
+    } else {
+      auto *SubVL = It.asLoop();
+      for_each(DepChecker.getLiveIns(SubVL), VisitValue);
+      VisitCond(SubVL->getLoopCond());
+    }
 
     // Scan the memory dependences between Earliest and It
     if (mayReadOrWriteMemory(It)) {
@@ -256,6 +277,7 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
   // Do DFS to find out dependences of the Items that appear after Earliest
   for_each(Items, Visit);
 
+  // FIXME: refactor this out as an BatchItemMover
   ////// Utilities to erase items in batch and re-insert them later //////
   SmallVector<Item> Removed;
   SmallVector<const ControlCondition *> ItemConds;
@@ -293,7 +315,7 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
   // and after which the items will look like
   // [before earliest][earliest][items and non deps between earliest and latest]
   DenseSet<Item, ItemHashInfo> ItemSet(Items.begin(), Items.end());
-  for (const auto &It : llvm::reverse(Depended)) {
+  for (const auto &It : Depended) {
     if (ItemSet.count(It))
       continue;
     RemoveItem(It);
@@ -314,22 +336,142 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
   ReinsertItems(InsertPt);
 }
 
+namespace {
+using SmallItemVector = SmallVector<Item, 8>;
+template <typename SequenceTy> SmallItemVector toItems(SequenceTy Seq) {
+  SmallItemVector Items;
+  for (auto *X : Seq)
+    if (X)
+      Items.push_back(X);
+  return Items;
+}
+} // namespace
+
+static void partitionLoops(EquivalenceClasses<VLoop *> &LoopsToFuse,
+                           ArrayRef<Pack *> Packs, PredicatedSSA &PSSA) {
+  SmallVector<SmallItemVector> Worklist(
+      llvm::map_range(Packs, [](Pack *P) { return toItems(P->values()); }));
+
+  auto *TopVL = &PSSA.getTopLevel();
+
+  while (!Worklist.empty()) {
+    auto Items = Worklist.pop_back_val();
+
+    SmallItemVector ParentLoops;
+    VLoop *PrevVL = nullptr;
+    bool Fused = false;
+    for (auto &It : Items) {
+      auto *VL = PSSA.getLoopForItem(It);
+      assert(VL);
+      if (PrevVL && !LoopsToFuse.isEquivalent(VL, PrevVL)) {
+        LoopsToFuse.unionSets(VL, PrevVL);
+        Fused = true;
+      }
+      // Also collect the parent loops so we fuse them if need to
+      auto *Parent = VL->getParent();
+      if (Parent && Parent != TopVL)
+        ParentLoops.push_back(VL->getParent());
+      PrevVL = VL;
+    }
+    if (Fused)
+      Worklist.push_back(ParentLoops);
+  }
+}
+
+// Fuse loops and return the final loop
+static VLoop *fuseLoops(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
+                        PredicatedSSA &PSSA) {
+  assert(Loops.size() > 1);
+  assert(all_of(Loops,
+                [ParentVL](VLoop *VL) { return VL->getParent() == ParentVL; }));
+
+  // The loop that will eventually contain all of the loops
+  VLoop *Leader = Loops.front();
+  for (auto *VL : drop_begin(Loops)) {
+    // Transfer the mu nodes
+    for (auto *Mu : VL->mus())
+      Leader->addMu(Mu);
+    // Transfer the loop items
+    for (auto &It : VL->items()) {
+      if (auto *I = It.asInstruction()) {
+        auto *C = VL->getInstCond(I);
+        if (auto *PN = dyn_cast<PHINode>(I)) {
+          assert(VL->isGatedPhi(PN));
+          Leader->insert(PN, VL->getPhiConditions(PN), C);
+        } else {
+          Leader->insert(I, C);
+        }
+      } else {
+        Leader->insert(It.asLoop());
+      }
+    }
+    ParentVL->erase(VL);
+    delete VL;
+  }
+
+  return Leader;
+}
+
+static void fuseLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
+                      PredicatedSSA &PSSA, DependenceChecker &DepChecker) {
+  SmallVector<VLoop *> Worklist{&PSSA.getTopLevel()};
+
+  while (!Worklist.empty()) {
+    auto *VL = Worklist.pop_back_val();
+
+    // First pass: identify loops that we want to fuse
+    DenseSet<VLoop *> Leaders;
+    for (auto &It : VL->items()) {
+      auto *SubVL = It.asLoop();
+      if (!SubVL)
+        continue;
+      auto LeaderIt = LoopsToFuse.findLeader(SubVL);
+      if (LeaderIt != LoopsToFuse.member_end())
+        Leaders.insert(*LeaderIt);
+    }
+
+    // Second pass: fuse the loops
+    for (VLoop *Leader : Leaders) {
+      SmallVector<VLoop *> Loops(LoopsToFuse.findLeader(Leader),
+                                 LoopsToFuse.member_end());
+      // Move the loops together first
+      merge(PSSA, toItems(Loops), DepChecker);
+      auto *Fused = fuseLoops(VL, Loops, PSSA);
+      DepChecker.invalidate(Fused);
+    }
+  }
+}
+
 static void schedule(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
                      DependenceInfo &DI) {
   DependenceChecker DepChecker(DI);
 
+  // Figure out the loops that we need to fuse.
+  EquivalenceClasses<VLoop *> LoopsToFuse;
+  partitionLoops(LoopsToFuse, Packs, PSSA);
+
+  // Fuse the loops top-down
+  fuseLoops(LoopsToFuse, PSSA, DepChecker);
+
   // FIXME: Deal with packs that require fusion/co-iteration later
-  for (auto *P : Packs) {
-    SmallVector<Item, 8> Items;
-    for (auto *I : P->values())
-      if (I)
-        Items.push_back(I);
-    merge(PSSA, Items, DepChecker);
-  }
+  for (auto *P : Packs)
+    merge(PSSA, toItems(P->values()), DepChecker);
 }
 
 static Value *gatherOperand(ArrayRef<Value *> Values, PackIndex &PI,
                             InserterTy Insert) {
+  // Special case: if all of the values are constant,
+  // just build and return the constant vector.
+  SmallVector<Constant *, 8> Consts;
+  for (auto *V : Values) {
+    auto *C = dyn_cast<Constant>(V);
+    if (!C)
+      break;
+    Consts.push_back(C);
+  }
+  if (Consts.size() == Values.size())
+    return ConstantVector::get(Consts);
+
   struct GatherEdge {
     unsigned SrcIndex;
     unsigned DestIndex;
@@ -452,6 +594,7 @@ static Value *gatherOperand(ArrayRef<Value *> Values, PackIndex &PI,
 }
 
 void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
+  // Reorder the instructions so that the packed instructions appear together
   schedule(Packs, PSSA, DI);
 
   // Map the packed instruction back to the pack
