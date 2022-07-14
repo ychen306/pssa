@@ -18,6 +18,18 @@ public:
                            llvm::ArrayRef<const ControlCondition *> Conds);
 
   PredicatedSSA *getPSSA() const { return VL->getPSSA(); }
+
+  // Wrapper around <InstType>::Create
+  template<typename InstType, typename ...ArgTypes>
+  llvm::Value *create(ArgTypes &&... Args) {
+    return (*this)(InstType::Create(std::forward<ArgTypes>(Args)...));
+  }
+
+  // Wrapper around <InstType> constructor
+  template<typename InstType, typename ...ArgTypes>
+  llvm::Value *make(ArgTypes &&... Args) {
+    return (*this)(new InstType(std::forward<ArgTypes>(Args)...));
+  }
 };
 
 #endif // PSSA_INSERTER_H

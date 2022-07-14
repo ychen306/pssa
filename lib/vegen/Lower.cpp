@@ -544,8 +544,8 @@ static Value *gatherOperand(ArrayRef<Value *> Values, PackIndex &PI,
     if (SrcSize == NumValues && ShuffleVectorInst::isIdentityMask(Mask))
       Gather = Src;
     else
-      Gather = Insert(
-          new ShuffleVectorInst(Src, UndefValue::get(Src->getType()), Mask));
+      Gather = Insert.make<ShuffleVectorInst>(
+          Src, UndefValue::get(Src->getType()), Mask);
 
     PartialGathers.push_back({DefinedBits, Gather});
   }
@@ -564,8 +564,8 @@ static Value *gatherOperand(ArrayRef<Value *> Values, PackIndex &PI,
       // Select from the partial gather
       for (unsigned Idx : PG.DefinedBits.set_bits())
         Mask[Idx] = ConstantInt::get(Int32Ty, NumValues + Idx);
-      Acc = Insert(
-          new ShuffleVectorInst(Acc, PG.Gather, ConstantVector::get(Mask)));
+      Acc = Insert.make<ShuffleVectorInst>(Acc, PG.Gather,
+                                           ConstantVector::get(Mask));
 
       assert(!DefinedBits.anyCommon(PG.DefinedBits));
       DefinedBits |= PG.DefinedBits;
@@ -583,7 +583,7 @@ static Value *gatherOperand(ArrayRef<Value *> Values, PackIndex &PI,
     Value *V = KV.first;
     auto &Indices = KV.second;
     for (unsigned Idx : Indices)
-      Acc = Insert(InsertElementInst::Create(Acc, V, toInt64(Ctx, Idx)));
+      Acc = Insert.create<InsertElementInst>(Acc, V, toInt64(Ctx, Idx));
   }
 
   assert(Acc);

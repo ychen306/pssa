@@ -1,7 +1,7 @@
 #include "vegen/Pack.h"
 #include "AddrUtil.h"
-#include "pssa/PSSA.h"
 #include "pssa/Inserter.h"
+#include "pssa/PSSA.h"
 #include "llvm/Analysis/LoopAccessAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Instructions.h"
@@ -63,8 +63,8 @@ Value *SIMDPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
 
   if (auto *BO = dyn_cast<BinaryOperator>(I)) {
     assert(Operands.size() == 2);
-    return Insert(
-        BinaryOperator::Create(BO->getOpcode(), Operands[0], Operands[1]));
+    return Insert.create<BinaryOperator>(BO->getOpcode(), Operands[0],
+                                         Operands[1]);
   }
 
   if (auto *Cmp = dyn_cast<CmpInst>(I)) {
@@ -73,13 +73,13 @@ Value *SIMDPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
     assert(all_of(Insts, [Pred](auto *I) {
       return cast<CmpInst>(I)->getPredicate() == Pred;
     }));
-    return Insert(
-        CmpInst::Create(Cmp->getOpcode(), Pred, Operands[0], Operands[1]));
+    return Insert.create<CmpInst>(Cmp->getOpcode(), Pred, Operands[0],
+                                  Operands[1]);
   }
 
   if (isa<SelectInst>(I)) {
     assert(Operands.size() == 3);
-    return Insert(SelectInst::Create(Operands[0], Operands[1], Operands[2]));
+    return Insert.create<SelectInst>(Operands[0], Operands[1], Operands[2]);
   }
 
   llvm_unreachable("unsupported opcode");
@@ -144,11 +144,11 @@ Value *LoadPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   auto *Ptr = Load->getPointerOperand();
   auto *PtrTy = Ptr->getType();
   if (!cast<PointerType>(PtrTy)->isOpaque()) {
-    Ptr = Insert(new BitCastInst(
-        Ptr, PointerType::get(VecTy, Load->getPointerAddressSpace())));
+    Ptr = Insert.make<BitCastInst>(
+        Ptr, PointerType::get(VecTy, Load->getPointerAddressSpace()));
   }
-  return Insert(new LoadInst(VecTy, Ptr, Load->getName() + ".vec",
-                             false /*is volatile*/, Load->getAlign()));
+  return Insert.make<LoadInst>(VecTy, Ptr, Load->getName() + ".vec",
+                               false /*is volatile*/, Load->getAlign());
 }
 
 StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
@@ -201,12 +201,12 @@ Value *StorePack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   auto *Ptr = Store->getPointerOperand();
   auto *PtrTy = Ptr->getType();
   if (!cast<PointerType>(PtrTy)->isOpaque()) {
-    Ptr = Insert(new BitCastInst(
+    Ptr = Insert.make<BitCastInst>(
         Ptr, PointerType::get(Operands.front()->getType(),
-                              Store->getPointerAddressSpace())));
+                              Store->getPointerAddressSpace()));
   }
-  return Insert(new StoreInst(Operands.front(), Ptr, false /*is volatile*/,
-                              Store->getAlign()));
+  return Insert.make<StoreInst>(Operands.front(), Ptr, false /*is volatile*/,
+                                Store->getAlign());
 }
 
 PHIPack *PHIPack::tryPack(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA) {
