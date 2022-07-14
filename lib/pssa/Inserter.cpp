@@ -10,8 +10,8 @@ Value *Inserter::operator()(Value *V) {
   return V;
 }
 
-PHINode *Inserter::insertPhi(ArrayRef<Value *> Values,
-                             ArrayRef<const ControlCondition *> Conds) {
+PHINode *Inserter::makePhi(ArrayRef<Value *> Values,
+                           ArrayRef<const ControlCondition *> Conds) {
   assert(Values.size() == Conds.size());
   auto *PN = PHINode::Create(Values.front()->getType(), Values.size());
   PN->setNumHungOffUseOperands(Values.size());

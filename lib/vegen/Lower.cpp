@@ -654,7 +654,7 @@ void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
             Inserter Insert(VL, C, Iterator);
             Operands.push_back(gatherOperand(X.value(), PI, Insert));
           }
-          V = InsertBeforeI.insertPhi(Operands, VL->getPhiConditions(PN));
+          V = InsertBeforeI.makePhi(Operands, VL->getPhiConditions(PN));
         } else {
           SmallVector<Value *, 8> Operands;
           for (OperandPack OP : P->getOperands())
