@@ -179,9 +179,6 @@ StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
       return nullptr;
   }
 
-  if (!isControlFlowEquivalent(Insts, PSSA))
-    return nullptr;
-
   auto *Ty = cast<StoreInst>(Insts.front())->getValueOperand()->getType();
   SmallVector<unsigned, 8> SortedIdxs;
   if (!sortPointers(Ptrs, Ty, DL, SE, LI, SortedIdxs))
@@ -204,7 +201,14 @@ StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
       return nullptr;
     SortedStores.push_back(Insts[SortedIdx]);
   }
-  return new StorePack(SortedStores);
+
+  SmallVector<const ControlCondition *> Conds(
+      map_range(Insts, [&PSSA](auto *I) { return PSSA.getInstCond(I); }));
+  auto *C = Conds.front();
+  if (all_of(drop_begin(Conds),
+             [&](auto *C2) { return PSSA.isEquivalent(C, C2); }))
+    return new StorePack(SortedStores);
+  return new StorePack(SortedStores, Conds);
 }
 
 SmallVector<OperandPack, 2> StorePack::getOperands() const {
@@ -215,7 +219,8 @@ SmallVector<OperandPack, 2> StorePack::getOperands() const {
 }
 
 Value *StorePack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
-  assert(Operands.size() == 1);
+  assert(!Mask.empty() || Operands.size() == 1);
+  assert(Mask.empty() || Operands.size() == 2);
 
   auto *Store = cast<StoreInst>(Insts.front());
   auto *Ptr = Store->getPointerOperand();
@@ -225,8 +230,11 @@ Value *StorePack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
         Ptr, PointerType::get(Operands.front()->getType(),
                               Store->getPointerAddressSpace()));
   }
-  return Insert.make<StoreInst>(Operands.front(), Ptr, false /*is volatile*/,
-                                Store->getAlign());
+  if (Mask.empty())
+    return Insert.make<StoreInst>(Operands.front(), Ptr, false /*is volatile*/,
+                                  Store->getAlign());
+  return Insert.createMaskedStore(Operands.front(), Ptr, Store->getAlign(),
+                                  Operands.back());
 }
 
 PHIPack *PHIPack::tryPack(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA) {

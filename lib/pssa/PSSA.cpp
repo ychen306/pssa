@@ -80,7 +80,7 @@ void VLoop::addMu(PHINode *PN) {
 
 PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
                              PostDominatorTree &PDT)
-    : Ctx(F->getContext()), LI(LI), TopVL(this) {
+    : F(F), LI(LI), TopVL(this) {
   ControlDependenceAnalysis CDA(LI, DT, PDT, CT);
 
   ReversePostOrderTraversal<Function *> RPO(F);

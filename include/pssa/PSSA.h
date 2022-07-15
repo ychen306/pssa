@@ -176,7 +176,7 @@ public:
 };
 
 class PredicatedSSA {
-  llvm::LLVMContext &Ctx;
+  llvm::Function *F;
   llvm::LoopInfo &LI;
   ConditionTable CT;
   VLoop TopVL;
@@ -188,7 +188,8 @@ public:
   PredicatedSSA(llvm::Function *, llvm::LoopInfo &, llvm::DominatorTree &,
                 llvm::PostDominatorTree &);
 
-  llvm::LLVMContext &getContext() { return Ctx; }
+  llvm::LLVMContext &getContext() { return F->getContext(); }
+  llvm::Function *getFunction() { return F; }
 
   struct InsertPoint {
     VLoop *VL;

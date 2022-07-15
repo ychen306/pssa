@@ -457,9 +457,36 @@ static void schedule(ArrayRef<Pack *> Packs,
 
 Value *materializeValue(Value *V, Inserter &) { return V; }
 
-// TODO: finish this
-Value *materializeValue(const ControlCondition *C, Inserter &) {
-  return nullptr;
+// TODO: complete this
+Value *materializeValue(const ControlCondition *C, Inserter &Insert) {
+  if (auto *And = dyn_cast<ConditionAnd>(C)) {
+    assert(!And->Parent);
+    if (And->IsTrue)
+      return And->Cond;
+    return Insert(BinaryOperator::CreateNot(And->Cond));
+  }
+  llvm_unreachable("not implemented");
+}
+
+bool matchConstants(ArrayRef<Value *> Values,
+                    SmallVectorImpl<Constant *> &Consts, LLVMContext &) {
+  for (auto *V : Values) {
+    auto *C = dyn_cast<Constant>(V);
+    if (!C)
+      return false;
+    Consts.push_back(C);
+  }
+  return true;
+}
+
+bool matchConstants(ArrayRef<const ControlCondition *> Conds,
+                    SmallVectorImpl<Constant *> &Consts, LLVMContext &Ctx) {
+  for (auto *C : Conds) {
+    if (C)
+      return false;
+    Consts.push_back(ConstantInt::getTrue(Ctx));
+  }
+  return true;
 }
 
 template <typename ValueType>
@@ -468,13 +495,7 @@ Value *gatherOperand(ArrayRef<ValueType> Values,
   // Special case: if all of the values are constant,
   // just build and return the constant vector.
   SmallVector<Constant *, 8> Consts;
-  for (auto *V : Values) {
-    auto *C = dyn_cast<Constant>(materializeValue(V, Insert));
-    if (!C)
-      break;
-    Consts.push_back(C);
-  }
-  if (Consts.size() == Values.size())
+  if (matchConstants(Values, Consts, Insert.getContext()))
     return ConstantVector::get(Consts);
 
   struct GatherEdge {
@@ -485,7 +506,7 @@ Value *gatherOperand(ArrayRef<ValueType> Values,
   // Mapping vector -> subset of its elements that we are gathering
   SmallDenseMap<Value *, SmallVector<GatherEdge, 4>> SrcPacks;
   // Mapping scalar -> index that we need to insert into
-  SmallDenseMap<Value *, SmallVector<unsigned, 4>> SrcScalars;
+  SmallVector<std::pair<Value *, unsigned>, 8> SrcScalars;
 
   // Figure out sources of the values in `Values`
   for (auto &X : enumerate(Values)) {
@@ -500,14 +521,14 @@ Value *gatherOperand(ArrayRef<ValueType> Values,
       SrcPacks[L->Vec].push_back({L->Idx, i});
     } else {
       // Remember that we need to insert `V` as the `i`th element
-      SrcScalars[materializeValue(V, Insert)].push_back(i);
+      SrcScalars.emplace_back(materializeValue(V, Insert), i);
     }
   }
 
   using ShuffleMaskTy = SmallVector<Constant *, 8>;
   const unsigned NumValues = Values.size();
   Value *SomeValue =
-      SrcPacks.empty() ? SrcScalars.begin()->first : SrcPacks.begin()->first;
+      SrcPacks.empty() ? SrcScalars.front().first : SrcPacks.begin()->first;
   auto &Ctx = SomeValue->getContext();
 
   ShuffleMaskTy Undefs(NumValues);
@@ -584,17 +605,16 @@ Value *gatherOperand(ArrayRef<ValueType> Values,
     }
   } else {
     assert(!SrcScalars.empty());
-    Type *ScalarTy = SrcScalars.begin()->first->getType();
+    Type *ScalarTy = SrcScalars.front().first->getType();
     auto *VecTy = FixedVectorType::get(ScalarTy, Values.size());
     Acc = UndefValue::get(VecTy);
   }
 
   // 3) Insert the scalar values
-  for (auto &KV : SrcScalars) {
-    Value *V = KV.first;
-    auto &Indices = KV.second;
-    for (unsigned Idx : Indices)
-      Acc = Insert.create<InsertElementInst>(Acc, V, toInt64(Ctx, Idx));
+  for (const auto &Pair : SrcScalars) {
+    Value *V = Pair.first;
+    unsigned Idx = Pair.second;
+    Acc = Insert.create<InsertElementInst>(Acc, V, toInt64(Ctx, Idx));
   }
 
   assert(Acc);
@@ -628,6 +648,7 @@ void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
   SmallVector<Instruction *> DeadInsts;
   DenseSet<Pack *> Lowered;
   ValueIndex<Value *> ValueIdx;
+  ValueIndex<const ControlCondition *> MaskIdx;
 
   while (!Worklist.empty()) {
     auto *VL = Worklist.pop_back_val();
@@ -656,7 +677,14 @@ void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
         auto Iterator = VL->toIterator(I);
         Inserter InsertBeforeI(VL, C, Iterator);
         Value *V = nullptr;
-        if (isa<PHIPack>(P)) {
+        auto *StoreP = dyn_cast<StorePack>(P);
+        if (StoreP && !StoreP->mask().empty()) {
+          auto *Operand = gatherOperand<Value *>(StoreP->getOperands().front(),
+                                                 ValueIdx, InsertBeforeI);
+          auto *Mask = gatherOperand<const ControlCondition *>(
+              StoreP->mask(), MaskIdx, InsertBeforeI);
+          V = StoreP->emit({Operand, Mask}, InsertBeforeI);
+        } else if (isa<PHIPack>(P)) {
           // Special lowering path for phi pack
           SmallVector<Value *, 8> Operands;
           auto *PN = cast<PHINode>(P->values().front());
@@ -666,7 +694,7 @@ void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
             Operands.push_back(
                 gatherOperand<Value *>(X.value(), ValueIdx, Insert));
           }
-          V = InsertBeforeI.makePhi(Operands, VL->getPhiConditions(PN));
+          V = InsertBeforeI.createPhi(Operands, VL->getPhiConditions(PN));
         } else {
           SmallVector<Value *, 8> Operands;
           for (OperandPack OP : P->getOperands())

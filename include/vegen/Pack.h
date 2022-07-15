@@ -79,6 +79,7 @@ public:
 
 class SIMDPack : public Pack {
   SIMDPack(llvm::ArrayRef<llvm::Instruction *> Insts) : Pack(Insts, PK_SIMD) {}
+
 public:
   static SIMDPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts);
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
@@ -88,6 +89,7 @@ public:
 
 class LoadPack : public Pack {
   LoadPack(llvm::ArrayRef<llvm::Instruction *> Insts) : Pack(Insts, PK_Load) {}
+
 public:
   static LoadPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                            const llvm::DataLayout &, llvm::ScalarEvolution &,
@@ -98,9 +100,13 @@ public:
 };
 
 class StorePack : public Pack {
-  StorePack(llvm::ArrayRef<llvm::Instruction *> Insts)
-      : Pack(Insts, PK_Store) {}
+  VectorMask Mask;
+  StorePack(llvm::ArrayRef<llvm::Instruction *> Insts,
+            llvm::ArrayRef<const ControlCondition *> Conds = llvm::None)
+      : Pack(Insts, PK_Store), Mask(Conds.begin(), Conds.end()) {}
+
 public:
+  llvm::ArrayRef<const ControlCondition *> mask() const { return Mask; }
   static StorePack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                             const llvm::DataLayout &, llvm::ScalarEvolution &,
                             llvm::LoopInfo &, PredicatedSSA &);
@@ -112,6 +118,7 @@ public:
 // A pack of *convergent* phi
 class PHIPack : public Pack {
   PHIPack(llvm::ArrayRef<llvm::Instruction *> Insts) : Pack(Insts, PK_PHI) {}
+
 public:
   static PHIPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                           PredicatedSSA &PSSA);
