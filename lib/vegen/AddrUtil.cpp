@@ -64,7 +64,7 @@ static Loop *getLoopForValue(Value *V, LoopInfo &LI) {
   return nullptr;
 }
 
-// Get a the SCEV two PtrA and PtrB. 
+// Get a the SCEV two PtrA and PtrB.
 // If they come from different loop nests,
 // rewrite PtrB as if it comes from the same loop nest as PtrB
 static Optional<std::pair<const SCEV *, const SCEV *>>

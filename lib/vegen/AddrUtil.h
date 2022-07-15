@@ -14,7 +14,8 @@ template <typename T> class SmallVectorImpl;
 } // namespace llvm
 
 // Re-implementations of llvm::getPointersDiff and llvm::sortPtrAccesses
-// to support pointers coming from different loop nests (which we may fuse later)
+// to support pointers coming from different loop nests (which we may fuse
+// later)
 
 llvm::Optional<int> diffPointers(llvm::Type *ElemTyA, llvm::Value *PtrA,
                                  llvm::Type *ElemTyB, llvm::Value *PtrB,

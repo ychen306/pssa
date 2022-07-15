@@ -1,11 +1,11 @@
 #ifndef CONTROL_DEPENDENCE_H
 #define CONTROL_DEPENDENCE_H
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/ArrayRef.h"
 
 #include <map>
 
@@ -91,7 +91,6 @@ template <> struct DenseMapInfo<BinaryInstruction> {
 };
 } // namespace llvm
 
-
 class ConditionTable {
   llvm::EquivalenceClasses<const ControlCondition *> EquivalentConds;
   llvm::DenseMap<std::pair<const ControlCondition *, const ControlCondition *>,
@@ -107,6 +106,7 @@ class ConditionTable {
   llvm::DenseMap<BinaryInstruction, llvm::Value *> CanonicalInsts;
   llvm::DenseMap<llvm::Value *, llvm::Value *> CanonicalValues;
   const ControlCondition *getCanonicalCondition(const ControlCondition *);
+
 public:
   llvm::Value *getCanonicalValue(llvm::Value *);
   const ControlCondition *getAnd(const ControlCondition *, llvm::Value *, bool);

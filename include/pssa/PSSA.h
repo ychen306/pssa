@@ -11,7 +11,6 @@
 
 namespace llvm {
 class LLVMContext;
-class Loop;
 class Value;
 class DominatorTree;
 class PostDominatorTree;

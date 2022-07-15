@@ -1,7 +1,7 @@
 #include "pssa/Lower.h"
 #include "pssa/PSSA.h"
-#include "vegen/Pack.h"
 #include "vegen/Lower.h"
+#include "vegen/Pack.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MustExecute.h" // mayContainIrreducibleControl
@@ -27,7 +27,8 @@ namespace {
 cl::opt<bool> TestCodeGen("test-pssa-lowering", cl::desc("Test PSSA Lowering"),
                           cl::init(false));
 
-cl::list<std::string> InstsToPack("p", cl::desc("<comma-separted list of instructions to pack>"));
+cl::list<std::string>
+    InstsToPack("p", cl::desc("<comma-separted list of instructions to pack>"));
 
 struct PSSAEntry : public PassInfoMixin<PSSAEntry> {
   PreservedAnalyses run(Function &, FunctionAnalysisManager &);
@@ -95,7 +96,8 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     for (StringRef Name : Names) {
       Instruction *I = nullptr;
       if (Name.startswith("storeOf:")) {
-        I = NameToStoreMap.lookup(Name.drop_front(StringRef("storeOf:").size()));
+        I = NameToStoreMap.lookup(
+            Name.drop_front(StringRef("storeOf:").size()));
       } else {
         I = NameToInstMap.lookup(Name);
       }

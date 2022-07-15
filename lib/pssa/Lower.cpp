@@ -1,11 +1,11 @@
 #include "BlockBuilder.h"
 #include "pssa/PSSA.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/IR/Constants.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 

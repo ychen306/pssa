@@ -57,3 +57,5 @@ configure_file(
   ${CMAKE_SOURCE_DIR}/utils/pssa-opt.in
   ${CMAKE_BINARY_DIR}/pssa-opt
 )
+
+include(fmt.cmake)

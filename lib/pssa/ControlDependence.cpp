@@ -119,9 +119,8 @@ ConditionTable::getCanonicalCondition(const ControlCondition *C) {
   return getOr(Conds);
 }
 
-const ControlCondition *
-ConditionTable::getAnd(const ControlCondition *Parent, Value *Cond,
-                                  bool IsTrue) {
+const ControlCondition *ConditionTable::getAnd(const ControlCondition *Parent,
+                                               Value *Cond, bool IsTrue) {
   AndKeyT Key(Parent, Cond);
   auto &Slot = IsTrue ? UniqueAndOfTrue[Key] : UniqueAndOfFalse[Key];
   if (!Slot) {
@@ -186,9 +185,8 @@ ControlDependenceAnalysis::getConditionForEdge(BasicBlock *Src,
                                LI.getLoopFor(Dst));
 }
 
-const ControlCondition *
-ConditionTable::concat(const ControlCondition *CondA,
-                                  const ControlCondition *CondB) {
+const ControlCondition *ConditionTable::concat(const ControlCondition *CondA,
+                                               const ControlCondition *CondB) {
   if (!CondA)
     return CondB;
   if (!CondB)
@@ -248,7 +246,8 @@ ControlDependenceAnalysis::getConditionForBlock(BasicBlock *BB) {
   // Use this rule to propagate conditions for exit-block/edge
   if (auto *Pred = BB->getUniquePredecessor()) {
     auto *C = getConditionForEdge(Pred, BB);
-    LLVM_DEBUG(dbgs() << "Condition for " << BB->getName() << " is " << *C << '\n');
+    LLVM_DEBUG(dbgs() << "Condition for " << BB->getName() << " is " << *C
+                      << '\n');
     return C;
   }
 
@@ -275,7 +274,8 @@ ControlDependenceAnalysis::getConditionForBlock(BasicBlock *BB) {
 
   sort(CondsToJoin);
   auto *C = CT.getOr(CondsToJoin);
-  LLVM_DEBUG(dbgs() << "Condition for " << BB->getName() << " is " << *C << '\n');
+  LLVM_DEBUG(dbgs() << "Condition for " << BB->getName() << " is " << *C
+                    << '\n');
   return BlockConditions[BB] = C;
 }
 
