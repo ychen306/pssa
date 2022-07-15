@@ -12,16 +12,10 @@
 namespace llvm {
 class LLVMContext;
 class Loop;
-class Instruction;
-class Function;
 class Value;
-class LoopInfo;
-class PHINode;
 class DominatorTree;
 class PostDominatorTree;
 } // namespace llvm
-
-class ControlCondition;
 
 // This represents a special kind of gated phi
 struct OneHotPhi {

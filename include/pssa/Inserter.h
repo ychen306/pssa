@@ -5,7 +5,6 @@
 #include "llvm/Support/Alignment.h"
 
 namespace llvm {
-class CallInst;
 class LLVMContext;
 }; // namespace llvm
 

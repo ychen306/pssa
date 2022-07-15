@@ -4,7 +4,6 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/Support/Casting.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/ArrayRef.h"
 
@@ -16,9 +15,7 @@ class BasicBlock;
 class PostDominatorTree;
 class LoopInfo;
 class DominatorTree;
-class PHINode;
 class raw_ostream;
-class Function;
 class BranchInst;
 class Loop;
 } // namespace llvm

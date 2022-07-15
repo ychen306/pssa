@@ -3,7 +3,6 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Support/Debug.h"
 
 using namespace llvm;
