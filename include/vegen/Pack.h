@@ -63,7 +63,7 @@ protected:
       : Conds(Conds.begin(), Conds.end()), Kind(Kind) {}
 
 public:
-  llvm::ArrayRef<const ControlCondition *> conditions() { return Conds; }
+  llvm::ArrayRef<const ControlCondition *> values() { return Conds; }
   // Return the vector mask required by this operation.
   // For example, for a pack of ORs,
   // this returns the pack conditions that it's OR'ing together

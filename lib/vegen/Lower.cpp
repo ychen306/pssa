@@ -109,7 +109,7 @@ public:
 };
 
 // Keep track of the values produced by a lowered pack
-class PackIndex {
+template <typename ValueType> class ValueIndex {
 public:
   struct Lane {
     unsigned Idx;
@@ -119,7 +119,7 @@ public:
 
 private:
   // Mapping a scalar value to the vector lane that contains the value
-  DenseMap<Value *, Lane> Lanes;
+  DenseMap<ValueType, Lane> Lanes;
 
 public:
   void insert(Value *VecVal, Pack *P) {
@@ -127,7 +127,7 @@ public:
       if (X.value())
         Lanes.try_emplace(X.value(), (unsigned)X.index(), VecVal);
   }
-  Optional<Lane> getLane(Value *V) const {
+  Optional<Lane> getLane(ValueType V) const {
     auto It = Lanes.find(V);
     if (It == Lanes.end())
       return None;
@@ -455,13 +455,21 @@ static void schedule(ArrayRef<Pack *> Packs,
     merge(PSSA, toItems(P->values()), &InstToPackMap, DepChecker);
 }
 
-static Value *gatherOperand(ArrayRef<Value *> Values, PackIndex &PI,
-                            Inserter &Insert) {
+Value *materializeValue(Value *V, Inserter &) { return V; }
+
+// TODO: finish this
+Value *materializeValue(const ControlCondition *C, Inserter &) {
+  return nullptr;
+}
+
+template <typename ValueType>
+Value *gatherOperand(ArrayRef<ValueType> Values,
+                     const ValueIndex<ValueType> &ValueIdx, Inserter &Insert) {
   // Special case: if all of the values are constant,
   // just build and return the constant vector.
   SmallVector<Constant *, 8> Consts;
   for (auto *V : Values) {
-    auto *C = dyn_cast<Constant>(V);
+    auto *C = dyn_cast<Constant>(materializeValue(V, Insert));
     if (!C)
       break;
     Consts.push_back(C);
@@ -474,7 +482,9 @@ static Value *gatherOperand(ArrayRef<Value *> Values, PackIndex &PI,
     unsigned DestIndex;
   };
 
+  // Mapping vector -> subset of its elements that we are gathering
   SmallDenseMap<Value *, SmallVector<GatherEdge, 4>> SrcPacks;
+  // Mapping scalar -> index that we need to insert into
   SmallDenseMap<Value *, SmallVector<unsigned, 4>> SrcScalars;
 
   // Figure out sources of the values in `Values`
@@ -485,18 +495,20 @@ static Value *gatherOperand(ArrayRef<Value *> Values, PackIndex &PI,
     // Null means don't care/undef
     if (!V)
       continue;
-    if (auto L = PI.getLane(V)) {
+    if (auto L = ValueIdx.getLane(V)) {
       // Remember we need to gather from this vector to the `i`th element
       SrcPacks[L->Vec].push_back({L->Idx, i});
     } else {
       // Remember that we need to insert `V` as the `i`th element
-      SrcScalars[V].push_back(i);
+      SrcScalars[materializeValue(V, Insert)].push_back(i);
     }
   }
 
   using ShuffleMaskTy = SmallVector<Constant *, 8>;
   const unsigned NumValues = Values.size();
-  auto &Ctx = Values.front()->getContext();
+  Value *SomeValue =
+      SrcPacks.empty() ? SrcScalars.begin()->first : SrcPacks.begin()->first;
+  auto &Ctx = SomeValue->getContext();
 
   ShuffleMaskTy Undefs(NumValues);
   auto *Int32Ty = Type::getInt32Ty(Ctx);
@@ -571,9 +583,8 @@ static Value *gatherOperand(ArrayRef<Value *> Values, PackIndex &PI,
       DefinedBits |= PG.DefinedBits;
     }
   } else {
-    auto *ScalarTy = Values.front()->getType();
-    assert(all_of(drop_begin(Values),
-                  [ScalarTy](auto *V) { return V->getType() == ScalarTy; }));
+    assert(!SrcScalars.empty());
+    Type *ScalarTy = SrcScalars.begin()->first->getType();
     auto *VecTy = FixedVectorType::get(ScalarTy, Values.size());
     Acc = UndefValue::get(VecTy);
   }
@@ -616,7 +627,7 @@ void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
 
   SmallVector<Instruction *> DeadInsts;
   DenseSet<Pack *> Lowered;
-  PackIndex PI;
+  ValueIndex<Value *> ValueIdx;
 
   while (!Worklist.empty()) {
     auto *VL = Worklist.pop_back_val();
@@ -652,16 +663,18 @@ void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
           for (auto X : enumerate(P->getOperands())) {
             auto *C = VL->getPhiCondition(PN, X.index());
             Inserter Insert(VL, C, Iterator);
-            Operands.push_back(gatherOperand(X.value(), PI, Insert));
+            Operands.push_back(
+                gatherOperand<Value *>(X.value(), ValueIdx, Insert));
           }
           V = InsertBeforeI.makePhi(Operands, VL->getPhiConditions(PN));
         } else {
           SmallVector<Value *, 8> Operands;
           for (OperandPack OP : P->getOperands())
-            Operands.push_back(gatherOperand(OP, PI, InsertBeforeI));
+            Operands.push_back(
+                gatherOperand<Value *>(OP, ValueIdx, InsertBeforeI));
           V = P->emit(Operands, InsertBeforeI);
         }
-        PI.insert(V, P);
+        ValueIdx.insert(V, P);
         Extracter.remember(P, V, VL, C, Iterator);
         I = cast<Instruction>(V);
       }
