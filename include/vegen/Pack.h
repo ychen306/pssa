@@ -77,16 +77,18 @@ public:
                             Inserter &) const = 0;
 };
 
-struct SIMDPack : public Pack {
+class SIMDPack : public Pack {
   SIMDPack(llvm::ArrayRef<llvm::Instruction *> Insts) : Pack(Insts, PK_SIMD) {}
+public:
   static SIMDPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts);
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_SIMD; }
 };
 
-struct LoadPack : public Pack {
+class LoadPack : public Pack {
   LoadPack(llvm::ArrayRef<llvm::Instruction *> Insts) : Pack(Insts, PK_Load) {}
+public:
   static LoadPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                            const llvm::DataLayout &, llvm::ScalarEvolution &,
                            llvm::LoopInfo &, PredicatedSSA &);
@@ -95,9 +97,10 @@ struct LoadPack : public Pack {
   static bool classof(const Pack *P) { return P->getKind() == PK_Load; }
 };
 
-struct StorePack : public Pack {
+class StorePack : public Pack {
   StorePack(llvm::ArrayRef<llvm::Instruction *> Insts)
       : Pack(Insts, PK_Store) {}
+public:
   static StorePack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                             const llvm::DataLayout &, llvm::ScalarEvolution &,
                             llvm::LoopInfo &, PredicatedSSA &);
@@ -107,8 +110,9 @@ struct StorePack : public Pack {
 };
 
 // A pack of *convergent* phi
-struct PHIPack : public Pack {
+class PHIPack : public Pack {
   PHIPack(llvm::ArrayRef<llvm::Instruction *> Insts) : Pack(Insts, PK_PHI) {}
+public:
   static PHIPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                           PredicatedSSA &PSSA);
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
