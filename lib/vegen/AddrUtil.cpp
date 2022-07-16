@@ -86,7 +86,7 @@ getSCEVs(Value *PtrA, Value *PtrB, ScalarEvolution &SE, LoopInfo &LI) {
 
   // Rewrite B to use A's nesting
   AddRecLoopRewriter::LoopToLoopMap LoopMapping;
-  for (const auto [LoopA, LoopB]: zip(LoopNestA, LoopNestB))
+  for (const auto [LoopA, LoopB] : zip(LoopNestA, LoopNestB))
     if (LoopA != LoopB)
       LoopMapping[LoopB] = LoopA;
 
@@ -148,7 +148,7 @@ Optional<int> diffPointers(Type *ElemTyA, Value *PtrA, Type *ElemTyB,
     if (auto Result = getSCEVs(PtrA, PtrB, SE, LI)) {
       auto [PtrSCEVA, PtrSCEVB] = *Result;
       const auto *Diff =
-        dyn_cast<SCEVConstant>(SE.getMinusSCEV(PtrSCEVB, PtrSCEVA));
+          dyn_cast<SCEVConstant>(SE.getMinusSCEV(PtrSCEVB, PtrSCEVA));
       if (!Diff)
         return None;
       Val = Diff->getAPInt().getSExtValue();

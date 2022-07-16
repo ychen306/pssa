@@ -78,7 +78,7 @@ static void fixDefUseDominance(Function *F, DominatorTree &DT) {
     for (User *U : I.users()) {
       // Special case when the user is a phi-node
       if (auto *PN = dyn_cast<PHINode>(U)) {
-        for (auto [BB, V]: zip(PN->blocks(), PN->incoming_values())) {
+        for (auto [BB, V] : zip(PN->blocks(), PN->incoming_values())) {
           if (V == &I && !DT.dominates(I.getParent(), BB)) {
             BrokenUseDefs[&I].push_back(PN);
             break;

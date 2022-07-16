@@ -303,7 +303,7 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
   // Re-insert the removed items at InsertPoint
   auto ReinsertItems = [&Removed, &ItemConds,
                         VL](VLoop::ItemIterator InsertPt) {
-    for (const auto &[It, C]  : llvm::zip(Removed, ItemConds)) {
+    for (const auto &[It, C] : llvm::zip(Removed, ItemConds)) {
       if (auto *I = It.asInstruction())
         VL->insert(I, C, InsertPt);
       else
@@ -554,7 +554,7 @@ Value *gatherOperand(ArrayRef<ValueType> Values,
   };
   std::vector<PartialGather> PartialGathers;
 
-  for (const auto &[Src, GatherEdges]: SrcPacks) {
+  for (const auto &[Src, GatherEdges] : SrcPacks) {
     BitVector DefinedBits(NumValues);
     // Figure out which values we want to gather
     ShuffleMaskTy MaskValues = Undefs;
