@@ -214,16 +214,16 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
 }
 
 void PSSALowering::run(VLoop *TopLevelVL) {
-  // demote the phi nodes to make lowering easier (so we don't have to consider
-  // them)
+  // Demote the phi nodes to make lowering easier 
+  // so that we don't have to consider them.
   SmallVector<PHINode *> Phis;
   SmallVector<VLoop *> Worklist{TopLevelVL};
   while (!Worklist.empty()) {
     auto *VL = Worklist.pop_back_val();
     for (auto &InstOrLoop : VL->items()) {
       if (auto *PN = dyn_cast_or_null<PHINode>(InstOrLoop.asInstruction())) {
-        if (!VL->isMu(PN))
-          Phis.push_back(PN);
+        assert(!VL->isMu(PN) && "mu nodes shouldn't be items");
+        Phis.push_back(PN);
       } else if (auto *SubVL = InstOrLoop.asLoop()) {
         Worklist.push_back(SubVL);
       }
