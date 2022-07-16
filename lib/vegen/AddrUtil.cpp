@@ -86,12 +86,10 @@ getSCEVs(Value *PtrA, Value *PtrB, ScalarEvolution &SE, LoopInfo &LI) {
 
   // Rewrite B to use A's nesting
   AddRecLoopRewriter::LoopToLoopMap LoopMapping;
-  for (const auto &Pair : zip(LoopNestA, LoopNestB)) {
-    const Loop *LoopA, *LoopB;
-    std::tie(LoopA, LoopB) = Pair;
+  for (const auto [LoopA, LoopB]: zip(LoopNestA, LoopNestB))
     if (LoopA != LoopB)
       LoopMapping[LoopB] = LoopA;
-  }
+
   SCEVB = AddRecLoopRewriter::rewrite(SE, SCEVB, LoopMapping);
 
   return std::make_pair(SCEVA, SCEVB);
@@ -147,17 +145,16 @@ Optional<int> diffPointers(Type *ElemTyA, Value *PtrA, Type *ElemTyB,
     Val = OffsetB.getSExtValue();
   } else {
     // Otherwise compute the distance with SCEV between the base pointers.
-    const SCEV *PtrSCEVA, *PtrSCEVB;
-    if (auto Result = getSCEVs(PtrA, PtrB, SE, LI))
-      std::tie(PtrSCEVA, PtrSCEVB) = *Result;
-    else
-      return None;
-
-    const auto *Diff =
+    if (auto Result = getSCEVs(PtrA, PtrB, SE, LI)) {
+      auto [PtrSCEVA, PtrSCEVB] = *Result;
+      const auto *Diff =
         dyn_cast<SCEVConstant>(SE.getMinusSCEV(PtrSCEVB, PtrSCEVA));
-    if (!Diff)
+      if (!Diff)
+        return None;
+      Val = Diff->getAPInt().getSExtValue();
+    } else {
       return None;
-    Val = Diff->getAPInt().getSExtValue();
+    }
   }
   int Size = DL.getTypeStoreSize(ElemTyA);
   int Dist = Val / Size;

@@ -56,10 +56,9 @@ void PSSALowering::demotePhi(PredicatedSSA *PSSA, PHINode *PN) {
 
   auto InsertPt = PSSA->getInsertPoint(PN);
   auto *VL = InsertPt.VL;
-  for (unsigned i = 0; i < PN->getNumIncomingValues(); i++) {
-    auto *SI = new StoreInst(PN->getIncomingValue(i), Alloca,
-                             false /*isVolatile*/, Align());
-    InsertPt.insert(SI, VL->getPhiCondition(PN, i));
+  for (auto [C, V] : zip(VL->getPhiConditions(PN), PN->incoming_values())) {
+    auto *SI = new StoreInst(V, Alloca, false /*isVolatile*/, Align());
+    InsertPt.insert(SI, C);
   }
 
   auto *Reload = new LoadInst(PN->getType(), Alloca, PN->getName() + ".reload",
@@ -79,12 +78,8 @@ static void fixDefUseDominance(Function *F, DominatorTree &DT) {
     for (User *U : I.users()) {
       // Special case when the user is a phi-node
       if (auto *PN = dyn_cast<PHINode>(U)) {
-        BasicBlock *IncomingBlock;
-        Value *IncomingValue;
-        for (auto Incoming : zip(PN->blocks(), PN->incoming_values())) {
-          std::tie(IncomingBlock, IncomingValue) = Incoming;
-          if (IncomingValue == &I &&
-              !DT.dominates(I.getParent(), IncomingBlock)) {
+        for (auto [BB, V]: zip(PN->blocks(), PN->incoming_values())) {
+          if (V == &I && !DT.dominates(I.getParent(), BB)) {
             BrokenUseDefs[&I].push_back(PN);
             break;
           }
@@ -99,10 +94,7 @@ static void fixDefUseDominance(Function *F, DominatorTree &DT) {
   }
 
   SmallVector<AllocaInst *> Allocas;
-  for (auto &KV : BrokenUseDefs) {
-    Instruction *I = KV.first;
-    ArrayRef<Instruction *> Users = KV.second;
-
+  for (const auto &[I, Users] : BrokenUseDefs) {
     auto *Alloca = new AllocaInst(I->getType(), 0, I->getName() + ".mem",
                                   &*F->getEntryBlock().getFirstInsertionPt());
     new StoreInst(I, Alloca, I->getNextNode());
@@ -188,10 +180,9 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
   for (auto &InstOrLoop : VL->items()) {
     // Emit the sub-loop recursively
     if (auto *SubVL = InstOrLoop.asLoop()) {
-      BasicBlock *SubLoopHeader, *SubLoopExit;
       auto *LoopCond = SubVL->getLoopCond();
       BasicBlock *Preheader = BBuilder.getBlockFor(LoopCond);
-      std::tie(SubLoopHeader, SubLoopExit) = lower(SubVL, Preheader);
+      auto [SubLoopHeader, SubLoopExit] = lower(SubVL, Preheader);
       BBuilder.setBlockForCondition(SubLoopExit, LoopCond);
     } else {
       auto *I = InstOrLoop.asInstruction();
@@ -251,8 +242,8 @@ void PSSALowering::run(VLoop *TopLevelVL) {
   lower(TopLevelVL, nullptr /* preheader */);
 
   // Kill all of the forward phis which we've replaced with allocas
-  for (auto &KV : ReplacedPhis)
-    delete KV.first;
+  for (PHINode *PN : make_first_range(ReplacedPhis))
+    delete PN;
 
   auto *RetTy = F->getReturnType();
   for (auto &BB : *F) {

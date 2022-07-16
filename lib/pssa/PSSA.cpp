@@ -119,9 +119,7 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
   }
 
   while (!Worklist.empty()) {
-    VLoop *VL;
-    Loop *L;
-    std::tie(VL, L) = Worklist.pop_back_val();
+    auto [VL, L] = Worklist.pop_back_val();
 
     assert(L->isRotatedForm());
     VL->setLoopCond(CDA.getConditionForBlock(L->getLoopPreheader()));

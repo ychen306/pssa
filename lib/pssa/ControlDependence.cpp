@@ -141,9 +141,7 @@ ConditionTable::getOr(ArrayRef<const ControlCondition *> Conds) {
   if (Conds.size() == 1)
     return Conds.front();
 
-  decltype(UniqueOrs)::iterator It;
-  bool Inserted;
-  std::tie(It, Inserted) = UniqueOrs.try_emplace(OrKeyT(Conds), nullptr);
+  auto [It, Inserted] = UniqueOrs.try_emplace(OrKeyT(Conds), nullptr);
   if (Inserted) {
     It->second.reset(new ConditionOr(Conds));
     It->first = It->second->Conds;

@@ -16,7 +16,9 @@ class DominatorTree;
 class PostDominatorTree;
 } // namespace llvm
 
-// This represents a special kind of gated phi
+// This represents a special kind of gated phi of the form
+//  `phi (C : IfTrue, not C : IfFalse)`.
+// The complement, `not C` is represented implicitly.
 struct OneHotPhi {
   const ControlCondition *C;
   llvm::Value *IfTrue;
