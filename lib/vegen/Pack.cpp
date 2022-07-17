@@ -61,8 +61,7 @@ Value *SIMDPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
 
   if (auto *BO = dyn_cast<BinaryOperator>(I)) {
     assert(Operands.size() == 2);
-    return Insert.create<BinaryOperator>(BO->getOpcode(), Operands[0],
-                                         Operands[1]);
+    return Insert.CreateBinOp(BO->getOpcode(), Operands[0], Operands[1]);
   }
 
   if (auto *Cmp = dyn_cast<CmpInst>(I)) {
@@ -308,7 +307,7 @@ Value *OrPack::emit(ArrayRef<Value *> ReifiedMasks, ArrayRef<Value *>,
 
   auto *Result = ReifiedMasks.front();
   for (auto *Mask : drop_begin(ReifiedMasks))
-    Result = Insert.create<BinaryOperator>(BinaryOperator::Or, Result, Mask);
+    Result = Insert.CreateBinOp(BinaryOperator::Or, Result, Mask);
   return Result;
 }
 
@@ -350,17 +349,9 @@ Value *AndPack::emit(ArrayRef<Value *> ReifiedMasks, ArrayRef<Value *> Operands,
     auto *VecTy = cast<FixedVectorType>(Operand->getType());
     auto AllTrue =
         ConstantVector::getSplat(VecTy->getElementCount(), Insert.getTrue());
-    Operand =
-        Insert.create<BinaryOperator>(BinaryOperator::Xor, Operand, AllTrue);
+    Operand = Insert.CreateBinOp(BinaryOperator::Xor, Operand, AllTrue);
   }
-  // Constant-fold if we are and'ing with an all true mask
-  if (auto *CV = dyn_cast<ConstantVector>(ReifiedMasks.front())) {
-    auto *SplatVal = CV->getSplatValue();
-    if (SplatVal && SplatVal == Insert.getTrue())
-      return Operand;
-  }
-  return Insert.create<BinaryOperator>(BinaryOperator::And,
-                                       ReifiedMasks.front(), Operand);
+  return Insert.CreateBinOp(BinaryOperator::And, ReifiedMasks.front(), Operand);
 }
 
 raw_ostream &operator<<(raw_ostream &OS, Pack &P) {

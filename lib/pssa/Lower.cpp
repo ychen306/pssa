@@ -265,6 +265,7 @@ void PSSALowering::run(VLoop *TopLevelVL) {
   // Restore SSA
   DominatorTree DT(*F);
   PromoteMemToReg(Allocas, DT);
+  F->dump();
   fixDefUseDominance(F, DT);
 }
 

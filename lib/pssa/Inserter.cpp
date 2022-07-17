@@ -41,8 +41,13 @@ PHINode *Inserter::createPhi(ArrayRef<Value *> Values,
   return PN;
 }
 
-PHINode *Inserter::createOneHotPhi(const ControlCondition *GateC, Value *IfTrue,
-                                   Value *IfFalse) const {
+Value *Inserter::createOneHotPhi(const ControlCondition *GateC, Value *IfTrue,
+                                 Value *IfFalse) const {
+  // Constant-fold away the phi if the gating condition
+  // is implied by the condition of the phi node,
+  if (isImplied(GateC, C))
+    return IfTrue;
+
   auto It = VL->insert(GateC, IfTrue, IfFalse, C, InsertBefore);
   return cast<PHINode>(It->asInstruction());
 }
@@ -68,4 +73,28 @@ Value *Inserter::createMaskedStore(Value *Val, Value *Ptr, Align Alignment,
   Module *M = VL->getPSSA()->getFunction()->getParent();
   return createMaskedIntrinsic(M, Intrinsic::masked_store, Ops,
                                OverloadedTypes);
+}
+
+Value *Inserter::CreateInsertElement(Value *Vec, Value *Elt, Value *Idx) {
+  if (auto *V = Folder.FoldInsertElement(Vec, Elt, Idx))
+    return V;
+  return create<InsertElementInst>(Vec, Elt, Idx);
+}
+
+static bool isOne(Value *V) {
+  auto *C = dyn_cast<Constant>(V);
+  return C && C->isOneValue();
+}
+
+Value *Inserter::CreateBinOp(Instruction::BinaryOps Opc, Value *A, Value *B) {
+  if (auto *V = Folder.FoldBinOp(Opc, A, B))
+    return V;
+  // Try harder to constant-fold away `AND X, true`
+  if (Opc == Instruction::And) {
+    if (isOne(A))
+      return B;
+    if (isOne(B))
+      return A;
+  }
+  return create<BinaryOperator>(Opc, A, B);
 }

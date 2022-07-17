@@ -534,8 +534,10 @@ Value *VectorGen::materializeValue(Value *V) { return Remapper.mapValue(*V); }
 
 Value *VectorGen::materializeValue(const ControlCondition *C,
                                    Inserter &Insert) {
-  if (!C)
+  if (isImplied(C, Insert.getCondition()))
     return Insert.getTrue();
+
+  assert(C);
 
   // Fast path when the condition is just a boolean IR value
   if (auto *And = dyn_cast<ConditionAnd>(C); And && !And->Parent) {
@@ -548,37 +550,10 @@ Value *VectorGen::materializeValue(const ControlCondition *C,
   return Insert.createOneHotPhi(C, Insert.getTrue(), Insert.getFalse());
 }
 
-bool matchConstants(ArrayRef<Value *> Values,
-                    SmallVectorImpl<Constant *> &Consts, LLVMContext &) {
-  for (auto *V : Values) {
-    auto *C = dyn_cast<Constant>(V);
-    if (!C)
-      return false;
-    Consts.push_back(C);
-  }
-  return true;
-}
-
-bool matchConstants(ArrayRef<const ControlCondition *> Conds,
-                    SmallVectorImpl<Constant *> &Consts, LLVMContext &Ctx) {
-  for (auto *C : Conds) {
-    if (C)
-      return false;
-    Consts.push_back(ConstantInt::getTrue(Ctx));
-  }
-  return true;
-}
-
 template <typename ValueType, typename PackType>
 Value *VectorGen::gatherValues(ArrayRef<ValueType> Values,
                                const ValueIndex<ValueType, PackType> &ValueIdx,
                                Inserter &Insert) {
-  // Special case: if all of the values are constant,
-  // just build and return the constant vector.
-  SmallVector<Constant *, 8> Consts;
-  if (matchConstants(Values, Consts, Insert.getContext()))
-    return ConstantVector::get(Consts);
-
   struct GatherEdge {
     unsigned SrcIndex;
     unsigned DestIndex;
@@ -595,7 +570,7 @@ Value *VectorGen::gatherValues(ArrayRef<ValueType> Values,
     unsigned i = X.index();
 
     // Null means don't care/undef
-    if (!V)
+    if (std::is_same<Value *, ValueType>::value && !V)
       continue;
     if (auto L = ValueIdx.getLane(V)) {
       // Remember we need to gather from this vector to the `i`th element
@@ -687,7 +662,7 @@ Value *VectorGen::gatherValues(ArrayRef<ValueType> Values,
 
   // 3) Insert the scalar values
   for (const auto [V, Idx] : SrcScalars)
-    Acc = Insert.create<InsertElementInst>(Acc, V, toInt64(Ctx, Idx));
+    Acc = Insert.CreateInsertElement(Acc, V, toInt64(Ctx, Idx));
 
   assert(Acc);
   return Acc;
@@ -755,8 +730,8 @@ static void packConditions(ArrayRef<VectorMask> Masks,
     if (!Visited.insert(Mask).second)
       continue;
 
-    // Ignore masks that are all true
-    if (!Mask.front() && is_splat(Mask))
+    // Don't bother packing identical conditions
+    if (is_splat(Mask))
       continue;
 
     ConditionPack *CP = AndPack::tryPack(Mask);
