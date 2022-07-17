@@ -2,8 +2,8 @@
 #include "AddrUtil.h"
 #include "pssa/Inserter.h"
 #include "pssa/PSSA.h"
-#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -348,9 +348,10 @@ Value *AndPack::emit(ArrayRef<Value *> ReifiedMasks, ArrayRef<Value *> Operands,
   auto *Operand = Operands.front();
   if (!isTrue(Conds.front())) {
     auto *VecTy = cast<FixedVectorType>(Operand->getType());
-    auto AllTrue = ConstantVector::getSplat(VecTy->getElementCount(), Insert.getTrue());
-    Operand = Insert.create<BinaryOperator>(BinaryOperator::Xor, Operand,
-                                            AllTrue);
+    auto AllTrue =
+        ConstantVector::getSplat(VecTy->getElementCount(), Insert.getTrue());
+    Operand =
+        Insert.create<BinaryOperator>(BinaryOperator::Xor, Operand, AllTrue);
   }
   // Constant-fold if we are and'ing with an all true mask
   if (auto *CV = dyn_cast<ConstantVector>(ReifiedMasks.front())) {
