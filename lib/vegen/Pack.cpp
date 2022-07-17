@@ -3,6 +3,7 @@
 #include "pssa/Inserter.h"
 #include "pssa/PSSA.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -311,8 +312,17 @@ Value *OrPack::emit(ArrayRef<Value *> ReifiedMasks, ArrayRef<Value *>,
   return Result;
 }
 
+static bool isTrue(const ControlCondition *C) {
+  auto *And = dyn_cast_or_null<ConditionAnd>(C);
+  return And && And->IsTrue;
+}
+
 AndPack *AndPack::tryPack(ArrayRef<const ControlCondition *> Conds) {
-  if (all_of(Conds, [](auto *C) { return isa_and_nonnull<ConditionAnd>(C); }))
+  bool IsTrue = isTrue(Conds.front());
+  if (all_of(Conds, [IsTrue](auto *C) {
+        auto *And = dyn_cast_or_null<ConditionAnd>(C);
+        return And && And->IsTrue == IsTrue;
+      }))
     return new AndPack(Conds);
   return nullptr;
 }
@@ -335,8 +345,21 @@ Value *AndPack::emit(ArrayRef<Value *> ReifiedMasks, ArrayRef<Value *> Operands,
                      Inserter &Insert) const {
   assert(ReifiedMasks.size() == 1);
   assert(Operands.size() == 1);
+  auto *Operand = Operands.front();
+  if (!isTrue(Conds.front())) {
+    auto *VecTy = cast<FixedVectorType>(Operand->getType());
+    auto AllTrue = ConstantVector::getSplat(VecTy->getElementCount(), Insert.getTrue());
+    Operand = Insert.create<BinaryOperator>(BinaryOperator::Xor, Operand,
+                                            AllTrue);
+  }
+  // Constant-fold if we are and'ing with an all true mask
+  if (auto *CV = dyn_cast<ConstantVector>(ReifiedMasks.front())) {
+    auto *SplatVal = CV->getSplatValue();
+    if (SplatVal && SplatVal == Insert.getTrue())
+      return Operand;
+  }
   return Insert.create<BinaryOperator>(BinaryOperator::And,
-                                       ReifiedMasks.front(), Operands.front());
+                                       ReifiedMasks.front(), Operand);
 }
 
 raw_ostream &operator<<(raw_ostream &OS, Pack &P) {

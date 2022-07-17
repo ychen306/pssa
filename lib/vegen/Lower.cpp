@@ -1,14 +1,21 @@
 #include "pssa/Inserter.h"
 #include "pssa/PSSA.h"
+#include "pssa/VectorHashInfo.h"
 #include "vegen/Pack.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
+#include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
 
 namespace {
+
+cl::opt<bool>
+    DontPackConditions("disable-cond-packing",
+                       cl::desc("disable secondary (condition) packing"),
+                       cl::init(false));
 
 bool mayReadOrWriteMemory(Instruction *I) {
   return isa<ReturnInst>(I) || I->mayReadOrWriteMemory();
@@ -109,7 +116,7 @@ public:
 };
 
 // Keep track of the values produced by a lowered pack
-template <typename ValueType> class ValueIndex {
+template <typename ValueType, typename PackType> class ValueIndex {
 public:
   struct Lane {
     unsigned Idx;
@@ -122,7 +129,7 @@ private:
   DenseMap<ValueType, Lane> Lanes;
 
 public:
-  void insert(Value *VecVal, Pack *P) {
+  void insert(Value *VecVal, const PackType *P) {
     for (auto X : enumerate(P->values()))
       if (X.value())
         Lanes.try_emplace(X.value(), (unsigned)X.index(), VecVal);
@@ -198,8 +205,12 @@ template <typename SequenceTy> SmallItemVector toItems(SequenceTy Seq) {
 }
 
 class VectorGen {
-  ValueIndex<Value *> ValueIdx;
-  ValueIndex<const ControlCondition *> MaskIdx;
+  ValueIndex<Value *, Pack> ValueIdx;
+  ValueIndex<const ControlCondition *, ConditionPack> MaskIdx;
+
+  template <typename ValueType, typename PackType>
+    Value *gatherValues(ArrayRef<ValueType>,
+        const ValueIndex<ValueType, PackType> &, Inserter &Insert);
   Value *gatherOperand(ArrayRef<Value *>, Inserter &);
   Value *gatherMask(ArrayRef<const ControlCondition *>, Inserter &);
 
@@ -209,8 +220,58 @@ class VectorGen {
     return gatherOperand(Values, InsertBefore);
   }
 
+  DenseSet<Instruction *> Processed;
+  void markAsProcessed(Instruction *I) { Processed.insert(I); }
+
+  DenseSet<const ControlCondition *> ReadyConds;
+
+  // Check wether the data dependences of C has been processed
+  bool isReady(const ControlCondition *C) {
+    if (!C || ReadyConds.count(C))
+      return true;
+    if (auto *And = dyn_cast<ConditionAnd>(C)) {
+      auto *I = dyn_cast<Instruction>(And->Cond);
+      return (!I || Processed.count(I)) && isReady(And->Parent);
+    }
+    auto *Or = dyn_cast<ConditionOr>(C);
+    return all_of(Or->Conds, [this](auto *C) { return isReady(C); });
+  }
+
+  bool isReady(ConditionPack *CP) {
+    return all_of(CP->values(), [this](auto *C) { return isReady(C); });
+  }
+
+  // Mapping conditions -> masks that produce them
+  DenseMap<const ControlCondition *, ConditionPack *> CondToPackMap;
+  DenseSet<const ConditionPack *> ProcessedCondPacks;
+
+  void emitConditionPack(const ConditionPack *, Inserter &);
+
+  // Util for replacing use of scalar values with extracted vector values
+  ExtractMaterializer Extracter;
+  ValueToValueMapTy VM;
+  ValueMapper Remapper;
+
+  Value *materializeValue(Value *);
+  // Keep a uniform interface together with `materialize(const ControlCondition *, Inserter)`
+  // This is needed to make gatherValues work.
+  Value *materializeValue(Value *V, Inserter &) { return materializeValue(V); }
+  Value *materializeValue(const ControlCondition *, Inserter &);
+
 public:
+  VectorGen() : Remapper(VM, RF_None, nullptr, &Extracter) {}
   void run(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI);
+};
+
+template <typename ContainerTy> class DeleteGuard {
+  ContainerTy &Container;
+
+public:
+  DeleteGuard(ContainerTy &Container) : Container(Container) {}
+  ~DeleteGuard() {
+    for (auto *X : Container)
+      delete X;
+  }
 };
 
 }; // namespace
@@ -468,14 +529,20 @@ static void schedule(ArrayRef<Pack *> Packs,
     merge(PSSA, toItems(P->values()), &InstToPackMap, DepChecker);
 }
 
-Value *materializeValue(Value *V, Inserter &) { return V; }
+Value *VectorGen::materializeValue(Value *V) { 
+  return Remapper.mapValue(*V);
+}
 
-Value *materializeValue(const ControlCondition *C, Inserter &Insert) {
+Value *VectorGen::materializeValue(const ControlCondition *C, Inserter &Insert) {
+  if (!C)
+    return Insert.getTrue();
+
   // Fast path when the condition is just a boolean IR value
   if (auto *And = dyn_cast<ConditionAnd>(C); And && !And->Parent) {
+    auto *Cond = materializeValue(And->Cond);
     if (And->IsTrue)
-      return And->Cond;
-    return Insert(BinaryOperator::CreateNot(And->Cond));
+      return Cond;
+    return Insert(BinaryOperator::CreateNot(Cond));
   }
 
   return Insert.createOneHotPhi(C, Insert.getTrue(), Insert.getFalse());
@@ -502,9 +569,9 @@ bool matchConstants(ArrayRef<const ControlCondition *> Conds,
   return true;
 }
 
-template <typename ValueType>
-Value *gatherValues(ArrayRef<ValueType> Values,
-                    const ValueIndex<ValueType> &ValueIdx, Inserter &Insert) {
+template <typename ValueType, typename PackType>
+Value *VectorGen::gatherValues(ArrayRef<ValueType> Values,
+                    const ValueIndex<ValueType, PackType> &ValueIdx, Inserter &Insert) {
   // Special case: if all of the values are constant,
   // just build and return the constant vector.
   SmallVector<Constant *, 8> Consts;
@@ -632,12 +699,69 @@ static void remapOperands(Instruction *I, ValueMapper &Mapper) {
 }
 
 Value *VectorGen::gatherOperand(ArrayRef<Value *> Values, Inserter &Insert) {
-  return gatherValues<Value *>(Values, ValueIdx, Insert);
+  return gatherValues<Value *, Pack>(Values, ValueIdx, Insert);
+}
+
+// FIXME: maybe we need to adjust the condition under which we emit the condition pack?
+void VectorGen::emitConditionPack(const ConditionPack *CP, Inserter &Insert) {
+  assert(!ProcessedCondPacks.count(CP));
+  ProcessedCondPacks.insert(CP);
+
+  SmallVector<Value *> OperandMasks, Operands;
+  for (auto Mask : CP->getOperandMasks())
+    OperandMasks.push_back(gatherMask(Mask, Insert));
+  for (auto O : CP->getOperands())
+    Operands.push_back(gatherOperand(O, Insert));
+  auto *MaskValue = CP->emit(OperandMasks, Operands, Insert);
+  MaskIdx.insert(MaskValue, CP);
 }
 
 Value *VectorGen::gatherMask(ArrayRef<const ControlCondition *> Conds,
                              Inserter &Insert) {
-  return gatherValues<const ControlCondition *>(Conds, MaskIdx, Insert);
+  // Materialize the ConditionPacks that contribute to Conds
+  for (auto *C : Conds) {
+    auto *CP = CondToPackMap.lookup(C);
+    // Skip if the condition is not packed
+    // or if we've materialized the pack already
+    if (!CP || ProcessedCondPacks.count(CP))
+      continue;
+    if (isReady(CP))
+      emitConditionPack(CP, Insert);
+  }
+
+  return gatherValues<const ControlCondition *, ConditionPack>(Conds, MaskIdx, Insert);
+}
+
+// Figure out the mask required by the vector operation
+static void getRequiredMasks(Pack *P, SmallVectorImpl<VectorMask> &Masks) {
+  if (auto *StoreP = dyn_cast<StorePack>(P); StoreP && !StoreP->mask().empty()) {
+    Masks.emplace_back(StoreP->mask());
+  }
+}
+
+// Run the bottom-up heuristic to produce the required vector masks
+static void packConditions(ArrayRef<VectorMask> Masks,
+                           SmallVectorImpl<ConditionPack *> &CondPacks) {
+  DenseSet<VectorMask, VectorHashInfo<VectorMask>> Visited;
+  SmallVector<VectorMask> Worklist(Masks.begin(), Masks.end());
+
+  while (!Worklist.empty()) {
+    auto Mask = Worklist.pop_back_val();
+    if (!Visited.insert(Mask).second)
+      continue;
+
+    // Ignore masks that are all true
+    if (!Mask.front() && is_splat(Mask))
+      continue;
+
+    ConditionPack *CP = AndPack::tryPack(Mask);
+    if (!CP)
+      CP = OrPack::tryPack(Mask);
+    if (CP) {
+      CondPacks.push_back(CP);
+      Worklist.append(CP->getOperandMasks());
+    }
+  }
 }
 
 void VectorGen::run(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
@@ -650,14 +774,27 @@ void VectorGen::run(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
         InstToPackMap[I] = P;
   }
 
+  // Do secondary packing to pack generate the vector masks
+  // TODO: expose this as a decision for the user?
+  SmallVector<VectorMask> Masks;
+  for (auto *P : Packs)
+    getRequiredMasks(P, Masks);
+  SmallVector<ConditionPack *> CondPacks;
+  DeleteGuard DeleteLater(CondPacks);
+
+  if (!DontPackConditions) {
+    packConditions(Masks, CondPacks);
+
+    // Map each condition to the pack that produces it
+    for (auto *CP : CondPacks)
+      for (auto *C : CP->values())
+        CondToPackMap.try_emplace(C, CP);
+  }
+
   // Reorder the instructions so that the packed instructions appear together
   schedule(Packs, InstToPackMap, PSSA, DI);
 
   SmallVector<VLoop *> Worklist{&PSSA.getTopLevel()};
-
-  ExtractMaterializer Extracter;
-  ValueToValueMapTy VM;
-  ValueMapper Remapper(VM, RF_None, nullptr, &Extracter);
 
   SmallVector<Instruction *> DeadInsts;
   DenseSet<Pack *> Lowered;
@@ -675,6 +812,7 @@ void VectorGen::run(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
 
       auto *I = It.asInstruction();
       assert(I);
+      markAsProcessed(I);
       if (Pack *P = InstToPackMap.lookup(I)) {
         DeadInsts.push_back(I);
         if (!Lowered.insert(P).second)
@@ -718,11 +856,16 @@ void VectorGen::run(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
       // Fix some of the operands if need to.
       // (E.g., replacing use of scalar value w/ extract)
       remapOperands(I, Remapper);
+      
+      // FIXME: also remap the use of scalar values in the predicate
     }
   }
 
-  for (auto *I : DeadInsts)
+  // Remove the instructions killed by vectorization
+  for (auto *I : DeadInsts) {
+    I->replaceAllUsesWith(UndefValue::get(I->getType()));
     I->dropAllReferences();
+  }
   for (auto *I : DeadInsts) {
     auto InsertPt = PSSA.getInsertPoint(I);
     InsertPt.VL->erase(InsertPt.It);

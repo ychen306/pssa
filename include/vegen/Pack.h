@@ -62,7 +62,7 @@ protected:
       : Conds(Conds.begin(), Conds.end()), Kind(Kind) {}
 
 public:
-  llvm::ArrayRef<const ControlCondition *> values() { return Conds; }
+  llvm::ArrayRef<const ControlCondition *> values() const { return Conds; }
   // Return necessary condition under which the masks evaluate to true.
   // For example, suppose we want to pack `c /\ x` and `c /\ y`.
   // Instead of evaluating `vand {c, c}, {x, y}`
@@ -80,6 +80,7 @@ public:
   virtual llvm::Value *emit(llvm::ArrayRef<llvm::Value *> ReifiedMasks,
                             llvm::ArrayRef<llvm::Value *> Operands,
                             Inserter &) const = 0;
+  virtual ~ConditionPack() {}
 };
 
 class SIMDPack : public Pack {
@@ -111,7 +112,7 @@ class StorePack : public Pack {
       : Pack(Insts, PK_Store), Mask(Conds.begin(), Conds.end()) {}
 
 public:
-  llvm::ArrayRef<const ControlCondition *> mask() const { return Mask; }
+  const VectorMask &mask() const { return Mask; }
   static StorePack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                             const llvm::DataLayout &, llvm::ScalarEvolution &,
                             llvm::LoopInfo &, PredicatedSSA &);
@@ -138,7 +139,7 @@ class OrPack : public ConditionPack {
       : ConditionPack(Conds, CPK_Or) {}
 
 public:
-  OrPack *tryPack(llvm::ArrayRef<const ControlCondition *>);
+  static OrPack *tryPack(llvm::ArrayRef<const ControlCondition *>);
   llvm::SmallVector<VectorMask, 2> getOperandMasks() const override;
   llvm::SmallVector<OperandPack, 2> getOperands() const override { return {}; }
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>,
@@ -150,7 +151,7 @@ class AndPack : public ConditionPack {
       : ConditionPack(Conds, CPK_And) {}
 
 public:
-  AndPack *tryPack(llvm::ArrayRef<const ControlCondition *>);
+  static AndPack *tryPack(llvm::ArrayRef<const ControlCondition *>);
   llvm::SmallVector<VectorMask, 2> getOperandMasks() const override;
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>,

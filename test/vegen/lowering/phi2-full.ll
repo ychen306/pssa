@@ -1,22 +1,12 @@
-; RUN: %opt -passes=test-vector-codegen -disable-cond-packing %s -p storeOf:i,storeOf:i2 -p storeOf:i1,storeOf:i3 -p i,i2 -p i1,i3 -S | FileCheck %s
+; RUN: %opt -passes=test-vector-codegen %s -p storeOf:i,storeOf:i2 -p storeOf:i1,storeOf:i3 -p i,i2 -p i1,i3 -p cmp,cmp1 -S | FileCheck %s
 
 ; CHECK: entry:
 ; CHECK-NEXT:   [[B:%.*]] = load <2 x float>, ptr @b, align 16
-; CHECK-NEXT:   [[B0:%.*]] = extractelement <2 x float> [[B]], i64 0
-; CHECK-NEXT:   [[B1:%.*]] = extractelement <2 x float> [[B]], i64 1
 ; CHECK-NEXT:   [[C:%.*]] = load <2 x float>, ptr @c, align 16
-; CHECK-NEXT:   [[C0:%.*]] = extractelement <2 x float> [[C]], i64 0
-; CHECK-NEXT:   [[C1:%.*]] = extractelement <2 x float> [[C]], i64 1
-; CHECK-NEXT:   %cmp = fcmp olt float [[B0]], [[C0]]
-; CHECK-NEXT:   %cmp1 = fcmp olt float [[B1]], [[C1]]
-; CHECK-NEXT:   [[NOT:%.*]] = xor i1 %cmp, true
-; CHECK-NEXT:   [[NOT1:%.*]] = xor i1 %cmp1, true
-; CHECK-NEXT:   [[INS:%.*]] = insertelement <2 x i1> undef, i1 [[NOT]], i64 0
-; CHECK-NEXT:   [[INS1:%.*]] = insertelement <2 x i1> [[INS]], i1 [[NOT1]], i64 1
-; CHECK-NEXT:   call void @llvm.masked.store.v2f32.p0(<2 x float> [[C]], ptr @a, i32 16, <2 x i1> [[INS1]])
-; CHECK-NEXT:   [[INS2:%.*]] = insertelement <2 x i1> undef, i1 %cmp, i64 0
-; CHECK-NEXT:   [[INS3:%.*]] = insertelement <2 x i1> [[INS2]], i1 %cmp1, i64 1
-; CHECK-NEXT:   call void @llvm.masked.store.v2f32.p0(<2 x float> [[B]], ptr @a, i32 16, <2 x i1> [[INS3]])
+; CHECK-NEXT:   [[VCMP:%.*]] = fcmp olt <2 x float> [[B]], [[C]]
+; CHECK-NEXT:   [[VCMP_NOT:%.*]] = xor <2 x i1> [[VCMP]], <i1 true, i1 true>
+; CHECK-NEXT:   call void @llvm.masked.store.v2f32.p0(<2 x float> [[C]], ptr @a, i32 16, <2 x i1> [[VCMP_NOT]])
+; CHECK-NEXT:   call void @llvm.masked.store.v2f32.p0(<2 x float> [[B]], ptr @a, i32 16, <2 x i1> [[VCMP]])
 ; CHECK-NEXT:   ret void
 
 target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
