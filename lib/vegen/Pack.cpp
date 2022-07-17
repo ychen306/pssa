@@ -273,6 +273,10 @@ SmallVector<OperandPack, 2> PHIPack::getOperands() const {
   return Operands;
 }
 
+const ControlCondition *ConditionPack::preCondition() const {
+  return getGreatestCommonCondition(Conds);
+}
+
 OrPack *OrPack::tryPack(ArrayRef<const ControlCondition *> Conds) {
   auto *Or = dyn_cast_or_null<ConditionOr>(Conds.front());
   if (!Or)

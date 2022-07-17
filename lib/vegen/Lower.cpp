@@ -197,6 +197,22 @@ template <typename SequenceTy> SmallItemVector toItems(SequenceTy Seq) {
   return Items;
 }
 
+class VectorGen {
+  ValueIndex<Value *> ValueIdx;
+  ValueIndex<const ControlCondition *> MaskIdx;
+  Value *gatherOperand(ArrayRef<Value *>, Inserter &);
+  Value *gatherMask(ArrayRef<const ControlCondition *>, Inserter &);
+
+  Value *gatherOperand(ArrayRef<Value *> Values, VLoop *VL,
+                       const ControlCondition *C, VLoop::ItemIterator It) {
+    Inserter InsertBefore(VL, C, It);
+    return gatherOperand(Values, InsertBefore);
+  }
+
+public:
+  void run(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI);
+};
+
 }; // namespace
 
 // Move the items together while still preserving dependences
@@ -487,8 +503,8 @@ bool matchConstants(ArrayRef<const ControlCondition *> Conds,
 }
 
 template <typename ValueType>
-Value *gatherOperand(ArrayRef<ValueType> Values,
-                     const ValueIndex<ValueType> &ValueIdx, Inserter &Insert) {
+Value *gatherValues(ArrayRef<ValueType> Values,
+                    const ValueIndex<ValueType> &ValueIdx, Inserter &Insert) {
   // Special case: if all of the values are constant,
   // just build and return the constant vector.
   SmallVector<Constant *, 8> Consts;
@@ -618,7 +634,17 @@ static void remapOperands(Instruction *I, ValueMapper &Mapper) {
       Op = V;
 }
 
-void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
+Value *VectorGen::gatherOperand(ArrayRef<Value *> Values, Inserter &Insert) {
+  return gatherValues<Value *>(Values, ValueIdx, Insert);
+}
+
+Value *VectorGen::gatherMask(ArrayRef<const ControlCondition *> Conds,
+                             Inserter &Insert) {
+  return gatherValues<const ControlCondition *>(Conds, MaskIdx, Insert);
+}
+
+void VectorGen::run(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
+                    DependenceInfo &DI) {
   // Map the packed instruction back to the pack
   DenseMap<Instruction *, Pack *> InstToPackMap;
   for (auto *P : Packs) {
@@ -638,8 +664,6 @@ void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
 
   SmallVector<Instruction *> DeadInsts;
   DenseSet<Pack *> Lowered;
-  ValueIndex<Value *> ValueIdx;
-  ValueIndex<const ControlCondition *> MaskIdx;
 
   while (!Worklist.empty()) {
     auto *VL = Worklist.pop_back_val();
@@ -670,10 +694,9 @@ void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
         Value *V = nullptr;
         auto *StoreP = dyn_cast<StorePack>(P);
         if (StoreP && !StoreP->mask().empty()) {
-          auto *Operand = gatherOperand<Value *>(StoreP->getOperands().front(),
-                                                 ValueIdx, InsertBeforeI);
-          auto *Mask = gatherOperand<const ControlCondition *>(
-              StoreP->mask(), MaskIdx, InsertBeforeI);
+          auto *Operand =
+              gatherOperand(StoreP->getOperands().front(), InsertBeforeI);
+          auto *Mask = gatherMask(StoreP->mask(), InsertBeforeI);
           V = StoreP->emit({Operand, Mask}, InsertBeforeI);
         } else if (isa<PHIPack>(P)) {
           // Special lowering path for phi pack
@@ -681,16 +704,13 @@ void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
           auto *PN = cast<PHINode>(P->values().front());
           for (auto X : enumerate(P->getOperands())) {
             auto *C = VL->getPhiCondition(PN, X.index());
-            Inserter Insert(VL, C, Iterator);
-            Operands.push_back(
-                gatherOperand<Value *>(X.value(), ValueIdx, Insert));
+            Operands.push_back(gatherOperand(X.value(), VL, C, Iterator));
           }
           V = InsertBeforeI.createPhi(Operands, VL->getPhiConditions(PN));
         } else {
           SmallVector<Value *, 8> Operands;
           for (OperandPack OP : P->getOperands())
-            Operands.push_back(
-                gatherOperand<Value *>(OP, ValueIdx, InsertBeforeI));
+            Operands.push_back(gatherOperand(OP, InsertBeforeI));
           V = P->emit(Operands, InsertBeforeI);
         }
         ValueIdx.insert(V, P);
@@ -712,4 +732,9 @@ void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
     if (I->getParent())
       I->eraseFromParent();
   }
+}
+
+void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
+  VectorGen Gen;
+  Gen.run(Packs, PSSA, DI);
 }

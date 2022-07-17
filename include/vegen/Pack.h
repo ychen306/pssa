@@ -63,6 +63,12 @@ protected:
 
 public:
   llvm::ArrayRef<const ControlCondition *> values() { return Conds; }
+  // Return necessary condition under which the masks evaluate to true.
+  // For example, suppose we want to pack `c /\ x` and `c /\ y`.
+  // Instead of evaluating `vand {c, c}, {x, y}`
+  // we would probably want to only evaluate the vector {x, y}
+  // while leaving `c` as the pre-condition.
+  virtual const ControlCondition *preCondition() const;
   // Return the vector mask required by this operation.
   // For example, for a pack of ORs,
   // this returns the pack conditions that it's OR'ing together
