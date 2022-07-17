@@ -33,6 +33,12 @@ PHINode *Inserter::createPhi(ArrayRef<Value *> Values,
   return PN;
 }
 
+PHINode *Inserter::createOneHotPhi(const ControlCondition *GateC, Value *IfTrue,
+                                   Value *IfFalse) const {
+  auto It = VL->insert(GateC, IfTrue, IfFalse, C, InsertBefore);
+  return cast<PHINode>(It->asInstruction());
+}
+
 // Copied from llvm::IRBuilderBase::CreateMaskedIntrinsic
 Value *Inserter::createMaskedIntrinsic(Module *M, Intrinsic::ID Id,
                                        ArrayRef<Value *> Ops,

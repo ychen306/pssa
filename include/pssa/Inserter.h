@@ -31,6 +31,9 @@ public:
   llvm::PHINode *
   createPhi(llvm::ArrayRef<llvm::Value *> Values,
             llvm::ArrayRef<const ControlCondition *> Conds) const;
+  llvm::PHINode *createOneHotPhi(const ControlCondition *GateC,
+                                 llvm::Value *IfTrue,
+                                 llvm::Value *IfFalse) const;
 
   llvm::Value *createMaskedStore(llvm::Value *Val, llvm::Value *Ptr,
                                  llvm::Align, llvm::Value *Mask) const;

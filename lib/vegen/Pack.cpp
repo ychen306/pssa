@@ -238,7 +238,8 @@ PHIPack *PHIPack::tryPack(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA) {
   SmallVector<PHINode *, 8> Phis;
   for (auto *I : Insts) {
     auto *PN = dyn_cast<PHINode>(I);
-    if (!PN)
+    // Don't deal with one-hot phi for now
+    if (!PN || PSSA.isOneHotPhi(PN))
       return nullptr;
     Phis.push_back(PN);
   }

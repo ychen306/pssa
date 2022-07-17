@@ -52,13 +52,17 @@ struct ItemHashInfo {
 class PredicatedSSA;
 class VLoop {
   friend class PredicatedSSA;
-
   PredicatedSSA *PSSA;
   bool IsTopLevel; // True if this VLoop doesn't represent any actual loop but
                    // the whole function
 
   OrderedList<Item, ItemHashInfo> Items;
   llvm::SmallPtrSet<llvm::PHINode *, 8> Mus;
+  // One-hot phis are a special class of phi nodes of the form:
+  //    `phi (C : v, not C v')`
+  // Where `not C` is represented implicitly.
+  // We canonicalize the one-hot phis so that the first operand is `v'`.
+  // We maintain the invariant, `C === getPhiCondition(PN, 1)`.
   llvm::DenseSet<llvm::PHINode *> OneHotPhis;
   llvm::DenseMap<llvm::PHINode *, std::vector<const ControlCondition *>>
       PhiConds;
@@ -84,21 +88,24 @@ public:
   using ItemIterator = decltype(Items)::iterator;
   using ConstItemIterator = decltype(Items)::const_iterator;
 
+  // Insert a generic, non-phi instruction
   ItemIterator insert(llvm::Instruction *, const ControlCondition *,
                       llvm::Optional<ItemIterator> InsertBefore = llvm::None);
+  // Insert a gated-phi instruction
   ItemIterator insert(llvm::PHINode *, llvm::ArrayRef<const ControlCondition *>,
                       const ControlCondition *,
                       llvm::Optional<ItemIterator> InsertBefore = llvm::None);
+  // Insert a one-hot phi
+  ItemIterator insert(const ControlCondition *GateC, llvm::Value *IfTrue,
+                      llvm::Value *IfFalse, const ControlCondition *,
+                      llvm::Optional<ItemIterator> InsertBefore = llvm::None);
+  // Insert a loop
   ItemIterator insert(VLoop *,
                       llvm::Optional<ItemIterator> InsertBefore = llvm::None);
 
   ItemIterator toIterator(const Item &It);
 
-  void erase(ItemIterator It) {
-    if (auto *I = It->asInstruction())
-      InstConds.erase(I);
-    Items.erase(It);
-  }
+  void erase(ItemIterator It);
   void erase(const Item &It) { Items.erase(toIterator(It)); }
 
   bool comesBefore(const Item &A, const Item &B) const;
@@ -141,6 +148,8 @@ public:
   }
 
   bool isGatedPhi(llvm::PHINode *PN) const { return PhiConds.count(PN); }
+
+  bool isOneHotPhi(llvm::PHINode *PN) const { return OneHotPhis.count(PN); }
 
   // Get the incoming condition if the ith phi value
   const ControlCondition *getPhiCondition(llvm::PHINode *PN, unsigned i) {
@@ -225,6 +234,11 @@ public:
   const ControlCondition *getPhiCondition(llvm::PHINode *PN, unsigned i) const {
     assert(contains(PN));
     return InstToVLoopMap.lookup(PN)->getPhiCondition(PN, i);
+  }
+
+  bool isOneHotPhi(llvm::PHINode *PN) const {
+    assert(contains(PN));
+    return InstToVLoopMap.lookup(PN)->isOneHotPhi(PN);
   }
 
   llvm::ArrayRef<const ControlCondition *> getPhiConditions(llvm::PHINode *PN) {

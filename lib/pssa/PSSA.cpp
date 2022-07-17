@@ -32,12 +32,36 @@ VLoop::ItemIterator VLoop::insert(PHINode *PN,
   return insert(PN, C, InsertBefore);
 }
 
+VLoop::ItemIterator VLoop::insert(const ControlCondition *GateC, Value *IfTrue,
+                                  Value *IfFalse, const ControlCondition *C,
+                                  Optional<ItemIterator> InsertBefore) {
+  assert(IfTrue->getType() == IfFalse->getType());
+  auto *PN = PHINode::Create(IfTrue->getType(), 2);
+  PN->setNumHungOffUseOperands(2);
+  // By default, set the true value/condition last.
+  PN->setIncomingValue(0, IfFalse);
+  PN->setIncomingValue(1, IfTrue);
+  OneHotPhis.insert(PN);
+  return insert(PN, {C, GateC}, C, InsertBefore);
+}
+
 VLoop::ItemIterator VLoop::insert(VLoop *SubVL,
                                   Optional<ItemIterator> InsertBefore) {
   auto It = Items.insert(InsertBefore ? *InsertBefore : Items.end(), SubVL);
   SubVL->Parent = this;
   PSSA->mapItemToLoop(It, this);
   return It;
+}
+
+void VLoop::erase(ItemIterator It) {
+  if (auto *I = It->asInstruction()) {
+    InstConds.erase(I);
+    if (auto *PN = dyn_cast<PHINode>(I)) {
+      OneHotPhis.erase(PN);
+      PhiConds.erase(PN);
+    }
+  }
+  Items.erase(It);
 }
 
 bool VLoop::contains(VLoop *VL) const {

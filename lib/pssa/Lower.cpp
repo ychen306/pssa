@@ -56,6 +56,13 @@ void PSSALowering::demotePhi(PredicatedSSA *PSSA, PHINode *PN) {
 
   auto InsertPt = PSSA->getInsertPoint(PN);
   auto *VL = InsertPt.VL;
+  // Because we place the default (IfFalse) value
+  // first the IfTrue assignment (which comes later)
+  // will override the IfFalse initialization.
+  assert((!VL->isOneHotPhi(PN) ||
+          VL->getPhiConditions(PN).front() == VL->getInstCond(PN)) &&
+         "one-hot phis should the IfTrue value last");
+
   for (auto [C, V] : zip(VL->getPhiConditions(PN), PN->incoming_values())) {
     auto *SI = new StoreInst(V, Alloca, false /*isVolatile*/, Align());
     InsertPt.insert(SI, C);
@@ -214,7 +221,7 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
 }
 
 void PSSALowering::run(VLoop *TopLevelVL) {
-  // Demote the phi nodes to make lowering easier 
+  // Demote the phi nodes to make lowering easier
   // so that we don't have to consider them.
   SmallVector<PHINode *> Phis;
   SmallVector<VLoop *> Worklist{TopLevelVL};
