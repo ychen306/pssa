@@ -5,8 +5,8 @@
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/Transforms/Utils/ValueMapper.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
 
 using namespace llvm;
 
@@ -209,8 +209,9 @@ class VectorGen {
   ValueIndex<const ControlCondition *, ConditionPack> MaskIdx;
 
   template <typename ValueType, typename PackType>
-    Value *gatherValues(ArrayRef<ValueType>,
-        const ValueIndex<ValueType, PackType> &, Inserter &Insert);
+  Value *gatherValues(ArrayRef<ValueType>,
+                      const ValueIndex<ValueType, PackType> &,
+                      Inserter &Insert);
   Value *gatherOperand(ArrayRef<Value *>, Inserter &);
   Value *gatherMask(ArrayRef<const ControlCondition *>, Inserter &);
 
@@ -253,8 +254,8 @@ class VectorGen {
   ValueMapper Remapper;
 
   Value *materializeValue(Value *);
-  // Keep a uniform interface together with `materialize(const ControlCondition *, Inserter)`
-  // This is needed to make gatherValues work.
+  // Keep a uniform interface together with `materialize(const ControlCondition
+  // *, Inserter)` This is needed to make gatherValues work.
   Value *materializeValue(Value *V, Inserter &) { return materializeValue(V); }
   Value *materializeValue(const ControlCondition *, Inserter &);
 
@@ -529,11 +530,10 @@ static void schedule(ArrayRef<Pack *> Packs,
     merge(PSSA, toItems(P->values()), &InstToPackMap, DepChecker);
 }
 
-Value *VectorGen::materializeValue(Value *V) { 
-  return Remapper.mapValue(*V);
-}
+Value *VectorGen::materializeValue(Value *V) { return Remapper.mapValue(*V); }
 
-Value *VectorGen::materializeValue(const ControlCondition *C, Inserter &Insert) {
+Value *VectorGen::materializeValue(const ControlCondition *C,
+                                   Inserter &Insert) {
   if (!C)
     return Insert.getTrue();
 
@@ -571,7 +571,8 @@ bool matchConstants(ArrayRef<const ControlCondition *> Conds,
 
 template <typename ValueType, typename PackType>
 Value *VectorGen::gatherValues(ArrayRef<ValueType> Values,
-                    const ValueIndex<ValueType, PackType> &ValueIdx, Inserter &Insert) {
+                               const ValueIndex<ValueType, PackType> &ValueIdx,
+                               Inserter &Insert) {
   // Special case: if all of the values are constant,
   // just build and return the constant vector.
   SmallVector<Constant *, 8> Consts;
@@ -702,7 +703,8 @@ Value *VectorGen::gatherOperand(ArrayRef<Value *> Values, Inserter &Insert) {
   return gatherValues<Value *, Pack>(Values, ValueIdx, Insert);
 }
 
-// FIXME: maybe we need to adjust the condition under which we emit the condition pack?
+// FIXME: maybe we need to adjust the condition under which we emit the
+// condition pack?
 void VectorGen::emitConditionPack(const ConditionPack *CP, Inserter &Insert) {
   assert(!ProcessedCondPacks.count(CP));
   ProcessedCondPacks.insert(CP);
@@ -729,12 +731,15 @@ Value *VectorGen::gatherMask(ArrayRef<const ControlCondition *> Conds,
       emitConditionPack(CP, Insert);
   }
 
-  return gatherValues<const ControlCondition *, ConditionPack>(Conds, MaskIdx, Insert);
+  return gatherValues<const ControlCondition *, ConditionPack>(Conds, MaskIdx,
+                                                               Insert);
 }
 
 // Figure out the mask required by the vector operation
+// FIXME: finish this
 static void getRequiredMasks(Pack *P, SmallVectorImpl<VectorMask> &Masks) {
-  if (auto *StoreP = dyn_cast<StorePack>(P); StoreP && !StoreP->mask().empty()) {
+  if (auto *StoreP = dyn_cast<StorePack>(P);
+      StoreP && !StoreP->mask().empty()) {
     Masks.emplace_back(StoreP->mask());
   }
 }
@@ -856,7 +861,7 @@ void VectorGen::run(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
       // Fix some of the operands if need to.
       // (E.g., replacing use of scalar value w/ extract)
       remapOperands(I, Remapper);
-      
+
       // FIXME: also remap the use of scalar values in the predicate
     }
   }
