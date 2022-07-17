@@ -11,6 +11,14 @@ LLVMContext &Inserter::getContext() const {
 
 Type *Inserter::getInt32Ty() const { return Type::getInt32Ty(getContext()); }
 
+Constant *Inserter::getTrue() const {
+  return ConstantInt::getTrue(getContext());
+}
+
+Constant *Inserter::getFalse() const {
+  return ConstantInt::getFalse(getContext());
+}
+
 Constant *Inserter::getInt32(int32_t V) const {
   return ConstantInt::get(getInt32Ty(), V);
 }

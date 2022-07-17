@@ -470,15 +470,15 @@ static void schedule(ArrayRef<Pack *> Packs,
 
 Value *materializeValue(Value *V, Inserter &) { return V; }
 
-// TODO: complete this
 Value *materializeValue(const ControlCondition *C, Inserter &Insert) {
-  if (auto *And = dyn_cast<ConditionAnd>(C)) {
-    assert(!And->Parent);
+  // Fast path when the condition is just a boolean IR value
+  if (auto *And = dyn_cast<ConditionAnd>(C); And && !And->Parent) {
     if (And->IsTrue)
       return And->Cond;
     return Insert(BinaryOperator::CreateNot(And->Cond));
   }
-  llvm_unreachable("not implemented");
+
+  return Insert.createOneHotPhi(C, Insert.getTrue(), Insert.getFalse());
 }
 
 bool matchConstants(ArrayRef<Value *> Values,
@@ -544,11 +544,8 @@ Value *gatherValues(ArrayRef<ValueType> Values,
       SrcPacks.empty() ? SrcScalars.front().first : SrcPacks.begin()->first;
   auto &Ctx = SomeValue->getContext();
 
-  ShuffleMaskTy Undefs(NumValues);
   auto *Int32Ty = Type::getInt32Ty(Ctx);
-  auto *UndefInt32 = UndefValue::get(Int32Ty);
-  for (auto &U : Undefs)
-    U = UndefInt32;
+  ShuffleMaskTy Undefs(NumValues, UndefValue::get(Int32Ty));
 
   // Here's the codegen strategy we will use.
   //

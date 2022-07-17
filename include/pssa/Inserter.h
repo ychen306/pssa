@@ -28,9 +28,14 @@ public:
   llvm::LLVMContext &getContext() const;
 
   llvm::Value *operator()(llvm::Value *) const;
+
+  llvm::Constant *getTrue() const;
+  llvm::Constant *getFalse() const;
+
   llvm::PHINode *
   createPhi(llvm::ArrayRef<llvm::Value *> Values,
             llvm::ArrayRef<const ControlCondition *> Conds) const;
+
   llvm::PHINode *createOneHotPhi(const ControlCondition *GateC,
                                  llvm::Value *IfTrue,
                                  llvm::Value *IfFalse) const;
