@@ -17,12 +17,14 @@ class PredicatedSSA;
 class Inserter;
 
 using OperandPack = llvm::SmallVector<llvm::Value *, 8>;
+class ControlCondition;
+using VectorMask = llvm::SmallVector<const ControlCondition *, 8>;
 
 // This models a vector operation that
 // produces the values of multiple instructions in parallel
 class Pack {
 public:
-  enum PackKind { PK_SIMD, PK_Load, PK_Store, PK_PHI };
+  enum PackKind { PK_SIMD, PK_Load, PK_Store, PK_PHI, PK_Blend };
 
 private:
   const PackKind Kind;
@@ -40,10 +42,9 @@ public:
   virtual llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const;
   virtual void print(llvm::raw_ostream &) const;
   virtual ~Pack() {}
+  // Override for masked load/store and blending, etc
+  virtual llvm::ArrayRef<VectorMask> masks() const { return llvm::None; }
 };
-
-class ControlCondition;
-using VectorMask = llvm::SmallVector<const ControlCondition *, 8>;
 
 // This models a vector operation that *reifies*
 // multiple ControlConditions into a vector mask value
@@ -112,7 +113,9 @@ class StorePack : public Pack {
       : Pack(Insts, PK_Store), Mask(Conds.begin(), Conds.end()) {}
 
 public:
-  const VectorMask &mask() const { return Mask; }
+  llvm::ArrayRef<VectorMask> masks() const override {
+    return Mask.empty() ? llvm::None : llvm::ArrayRef<VectorMask>(Mask);
+  }
   static StorePack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                             const llvm::DataLayout &, llvm::ScalarEvolution &,
                             llvm::LoopInfo &, PredicatedSSA &);
@@ -129,8 +132,22 @@ public:
   static PHIPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                           PredicatedSSA &PSSA);
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
-  // We don't provide PHIPack::emit (there's a special lowering path for
-  // PHIPack)
+  // No generic ::emit for PHIPack
+  static bool classof(const Pack *P) { return P->getKind() == PK_PHI; }
+};
+
+// A pack of *divergent * phi
+class BlendPack : public Pack {
+  llvm::SmallVector<VectorMask, 2> Masks;
+  BlendPack(llvm::ArrayRef<llvm::Instruction *> Insts)
+      : Pack(Insts, PK_Blend) {}
+
+public:
+  static BlendPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
+                            PredicatedSSA &PSSA);
+  llvm::ArrayRef<VectorMask> masks() const override { return Masks; }
+  llvm::SmallVector<OperandPack, 2> getOperands() const override;
+  // No generic ::emit for BlendPack
   static bool classof(const Pack *P) { return P->getKind() == PK_PHI; }
 };
 

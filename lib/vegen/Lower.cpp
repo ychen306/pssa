@@ -710,15 +710,6 @@ Value *VectorGen::gatherMask(ArrayRef<const ControlCondition *> Conds,
                                                                Insert);
 }
 
-// Figure out the mask required by the vector operation
-// FIXME: finish this
-static void getRequiredMasks(Pack *P, SmallVectorImpl<VectorMask> &Masks) {
-  if (auto *StoreP = dyn_cast<StorePack>(P);
-      StoreP && !StoreP->mask().empty()) {
-    Masks.emplace_back(StoreP->mask());
-  }
-}
-
 // Run the bottom-up heuristic to produce the required vector masks
 static void packConditions(ArrayRef<VectorMask> Masks,
                            SmallVectorImpl<ConditionPack *> &CondPacks) {
@@ -757,8 +748,10 @@ void VectorGen::run(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
   // Do secondary packing to pack generate the vector masks
   // TODO: expose this as a decision for the user?
   SmallVector<VectorMask> Masks;
-  for (auto *P : Packs)
-    getRequiredMasks(P, Masks);
+  for (auto *P : Packs) {
+    auto Ms = P->masks();
+    Masks.append(Ms.begin(), Ms.end());
+  }
   SmallVector<ConditionPack *> CondPacks;
   DeleteGuard DeleteLater(CondPacks);
 
@@ -807,13 +800,7 @@ void VectorGen::run(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
         auto Iterator = VL->toIterator(I);
         Inserter InsertBeforeI(VL, C, Iterator);
         Value *V = nullptr;
-        auto *StoreP = dyn_cast<StorePack>(P);
-        if (StoreP && !StoreP->mask().empty()) {
-          auto *Operand =
-              gatherOperand(StoreP->getOperands().front(), InsertBeforeI);
-          auto *Mask = gatherMask(StoreP->mask(), InsertBeforeI);
-          V = StoreP->emit({Operand, Mask}, InsertBeforeI);
-        } else if (isa<PHIPack>(P)) {
+        if (isa<PHIPack>(P)) {
           // Special lowering path for phi pack
           SmallVector<Value *, 8> Operands;
           auto *PN = cast<PHINode>(P->values().front());
@@ -826,6 +813,9 @@ void VectorGen::run(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
           SmallVector<Value *, 8> Operands;
           for (OperandPack OP : P->getOperands())
             Operands.push_back(gatherOperand(OP, InsertBeforeI));
+          // Some instructions (e.g., masked store) also require masking
+          for (auto &M : P->masks())
+            Operands.push_back(gatherMask(M, InsertBeforeI));
           V = P->emit(Operands, InsertBeforeI);
         }
         ValueIdx.insert(V, P);
