@@ -273,6 +273,69 @@ SmallVector<OperandPack, 2> PHIPack::getOperands() const {
   return Operands;
 }
 
+BlendPack *BlendPack::tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
+                              PredicatedSSA &PSSA) {
+  SmallVector<PHINode *, 8> Phis;
+  for (auto *I : Insts) {
+    auto *PN = dyn_cast<PHINode>(I);
+    if (!PN)
+      return nullptr;
+    Phis.push_back(PN);
+  }
+
+  bool IsOneHot = PSSA.isOneHotPhi(Phis.front());
+  unsigned N = Phis.front()->getNumOperands();
+  for (auto *PN : drop_begin(Phis)) {
+    if (PN->getNumOperands() != N)
+      return nullptr;
+    // Either all of the packs are one hot or all not.
+    if (PSSA.isOneHotPhi(PN) != IsOneHot)
+      return nullptr;
+  }
+
+  auto *BlendP = new BlendPack(Insts, IsOneHot);
+  auto &Masks = BlendP->Masks;
+
+  // Number of masks = number of incoming values (i.e., number of operands)
+  Masks.resize(N);
+  for (auto *PN : Phis)
+    for (auto X : enumerate(PSSA.getPhiConditions(PN)))
+      Masks[X.index()].push_back(X.value());
+
+  assert((!IsOneHot || (!Masks[0][0] && is_splat(Masks[0]))) &&
+         "one-hot phis should have their first conditions be true");
+
+  return BlendP;
+}
+
+SmallVector<OperandPack, 2> BlendPack::getOperands() const {
+  SmallVector<OperandPack, 2> Operands(Masks.size());
+  for (auto *I : Insts)
+    for (auto X : enumerate(I->operand_values()))
+      Operands[X.index()].push_back(X.value());
+  return Operands;
+}
+
+Value *BlendPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
+  unsigned N = Masks.size();
+  assert(Operands.size() == N * 2);
+
+  auto Values = Operands.drop_back(N);
+  auto MaskVals = Operands.drop_front(N);
+  if (IsOneHot) {
+    assert(N == 2);
+    // The convention is the gating condition is set last for a one-hot phi
+    return Insert.create<SelectInst>(MaskVals.back(), Values.back(),
+                                     Values.front());
+  }
+
+  // Emit a chain of select
+  auto *Select = Values.back();
+  for (auto [M, V] : drop_begin(reverse(zip(MaskVals, Values))))
+    Select = Insert.create<SelectInst>(M, V, Select);
+  return Select;
+}
+
 const ControlCondition *ConditionPack::preCondition() const {
   return getGreatestCommonCondition(Conds);
 }

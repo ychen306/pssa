@@ -109,6 +109,8 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       Packs.push_back(Pack);
     } else if (auto *PhiP = PHIPack::tryPack(Insts, PSSA)) {
       Packs.push_back(PhiP);
+    } else if (auto *BlendP = BlendPack::tryPack(Insts, PSSA)) {
+      Packs.push_back(BlendP);
     } else if (auto *LoadP = LoadPack::tryPack(Insts, DL, SE, LI, PSSA)) {
       Packs.push_back(LoadP);
     } else if (auto *StoreP = StorePack::tryPack(Insts, DL, SE, LI, PSSA)) {

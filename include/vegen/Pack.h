@@ -138,16 +138,17 @@ public:
 
 // A pack of *divergent * phi
 class BlendPack : public Pack {
+  bool IsOneHot;
   llvm::SmallVector<VectorMask, 2> Masks;
-  BlendPack(llvm::ArrayRef<llvm::Instruction *> Insts)
-      : Pack(Insts, PK_Blend) {}
+  BlendPack(llvm::ArrayRef<llvm::Instruction *> Insts, bool IsOneHot)
+      : Pack(Insts, PK_Blend), IsOneHot(IsOneHot) {}
 
 public:
   static BlendPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                             PredicatedSSA &PSSA);
   llvm::ArrayRef<VectorMask> masks() const override { return Masks; }
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
-  // No generic ::emit for BlendPack
+  llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_PHI; }
 };
 
