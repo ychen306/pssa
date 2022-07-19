@@ -485,11 +485,7 @@ static VLoop *fuseLoops(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
 
 static void fuseLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
                       PredicatedSSA &PSSA, DependenceChecker &DepChecker) {
-  SmallVector<VLoop *> Worklist{&PSSA.getTopLevel()};
-
-  while (!Worklist.empty()) {
-    auto *VL = Worklist.pop_back_val();
-
+  std::function<void (VLoop *)> FuseRec = [&](VLoop *VL) {
     // First pass: identify loops that we want to fuse
     DenseSet<VLoop *> Leaders;
     for (auto &It : VL->items()) {
@@ -510,7 +506,14 @@ static void fuseLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
       auto *Fused = fuseLoops(VL, Loops, PSSA);
       DepChecker.invalidate(Fused);
     }
-  }
+
+    // Recursively fuse any of the inner loops
+    for (auto &It : VL->items())
+      if (auto *SubVL = It.asLoop())
+        FuseRec(SubVL);
+  };
+
+  FuseRec(&PSSA.getTopLevel());
 }
 
 static void schedule(ArrayRef<Pack *> Packs,
