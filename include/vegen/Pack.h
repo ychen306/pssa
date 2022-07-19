@@ -24,7 +24,7 @@ using VectorMask = llvm::SmallVector<const ControlCondition *, 8>;
 // produces the values of multiple instructions in parallel
 class Pack {
 public:
-  enum PackKind { PK_SIMD, PK_Load, PK_Store, PK_PHI, PK_Blend };
+  enum PackKind { PK_SIMD, PK_Load, PK_Store, PK_Gather, PK_PHI, PK_Blend };
 
 private:
   const PackKind Kind;
@@ -38,7 +38,8 @@ public:
   PackKind getKind() const { return Kind; }
   llvm::ArrayRef<llvm::Instruction *> values() const { return Insts; }
 
-  virtual llvm::SmallVector<OperandPack, 2> getOperands() const = 0;
+  // The default impl. zips the operands of the packed instructions together
+  virtual llvm::SmallVector<OperandPack, 2> getOperands() const;
   virtual llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const;
   virtual void print(llvm::raw_ostream &) const;
   virtual ~Pack() {}
@@ -89,7 +90,6 @@ class SIMDPack : public Pack {
 
 public:
   static SIMDPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts);
-  llvm::SmallVector<OperandPack, 2> getOperands() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_SIMD; }
 };
@@ -124,6 +124,22 @@ public:
   static bool classof(const Pack *P) { return P->getKind() == PK_Store; }
 };
 
+class GatherPack : public Pack {
+  VectorMask Mask;
+  GatherPack(llvm::ArrayRef<llvm::Instruction *> Insts,
+             llvm::ArrayRef<const ControlCondition *> Conds = llvm::None)
+      : Pack(Insts, PK_Gather), Mask(Conds.begin(), Conds.end()) {}
+
+public:
+  llvm::ArrayRef<VectorMask> masks() const override {
+    return Mask.empty() ? llvm::None : llvm::ArrayRef<VectorMask>(Mask);
+  }
+  static GatherPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
+                             PredicatedSSA &);
+  llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
+  static bool classof(const Pack *P) { return P->getKind() == PK_Store; }
+};
+
 // A pack of *convergent* phi
 class PHIPack : public Pack {
   PHIPack(llvm::ArrayRef<llvm::Instruction *> Insts) : Pack(Insts, PK_PHI) {}
@@ -147,7 +163,6 @@ public:
   static BlendPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                             PredicatedSSA &PSSA);
   llvm::ArrayRef<VectorMask> masks() const override { return Masks; }
-  llvm::SmallVector<OperandPack, 2> getOperands() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_PHI; }
 };

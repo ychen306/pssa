@@ -13,6 +13,20 @@ Value *Pack::emit(ArrayRef<Value *>, Inserter &) const {
   return nullptr;
 }
 
+// Zip the instructions operands into vectors
+SmallVector<OperandPack, 2> Pack::getOperands() const {
+  SmallVector<OperandPack, 2> Operands;
+
+  unsigned N = Insts.front()->getNumOperands();
+  for (unsigned i = 0; i < N; i++) {
+    auto &OP = Operands.emplace_back();
+    for (auto *I : Insts)
+      OP.push_back(I->getOperand(i));
+  }
+
+  return Operands;
+}
+
 SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
   if (Insts.empty())
     return nullptr;
@@ -41,19 +55,6 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
   }
 
   return new SIMDPack(Insts);
-}
-
-SmallVector<OperandPack, 2> SIMDPack::getOperands() const {
-  SmallVector<OperandPack, 2> Operands;
-
-  unsigned N = Insts.front()->getNumOperands();
-  for (unsigned i = 0; i < N; i++) {
-    auto &OP = Operands.emplace_back();
-    for (auto *I : Insts)
-      OP.push_back(I->getOperand(i));
-  }
-
-  return Operands;
 }
 
 Value *SIMDPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
@@ -234,6 +235,22 @@ Value *StorePack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
                                   Operands.back());
 }
 
+GatherPack *GatherPack::tryPack(ArrayRef<Instruction *> Insts,
+                                PredicatedSSA &PSSA) {
+  auto *Ty = Insts.front()->getType();
+
+  if (any_of(Insts,
+             [Ty](auto *I) { return !isa<PHINode>(I) || I->getType() != Ty; }))
+    return nullptr;
+
+  SmallVector<const ControlCondition *> Conds(
+      map_range(Insts, [&PSSA](auto *I) { return PSSA.getInstCond(I); }));
+  return new GatherPack(Insts, Conds);
+}
+
+Value *GatherPack::emit(ArrayRef<Value *>, Inserter &Insert) const {
+}
+
 PHIPack *PHIPack::tryPack(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA) {
   SmallVector<PHINode *, 8> Phis;
   for (auto *I : Insts) {
@@ -306,14 +323,6 @@ BlendPack *BlendPack::tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
          "one-hot phis should have their first conditions be true");
 
   return BlendP;
-}
-
-SmallVector<OperandPack, 2> BlendPack::getOperands() const {
-  SmallVector<OperandPack, 2> Operands(Masks.size());
-  for (auto *I : Insts)
-    for (auto X : enumerate(I->operand_values()))
-      Operands[X.index()].push_back(X.value());
-  return Operands;
 }
 
 Value *BlendPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
