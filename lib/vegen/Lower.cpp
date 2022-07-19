@@ -485,7 +485,10 @@ static VLoop *fuseLoops(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
 
 static void fuseLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
                       PredicatedSSA &PSSA, DependenceChecker &DepChecker) {
+  // Util to help use rewrite use of loop live-outs
   ValueToValueMapTy VMap;
+  ValueMapper Remapper(VMap, RF_None);
+
   std::function<void(VLoop *)> FuseRec = [&](VLoop *VL) {
     // First pass: identify loops that we want to fuse
     DenseSet<VLoop *> Leaders;
