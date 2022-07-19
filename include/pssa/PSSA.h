@@ -251,6 +251,16 @@ public:
   }
 
   VLoop &getTopLevel() { return TopVL; }
+
+  const ControlCondition *getAnd(const ControlCondition *ParentC,
+                                 llvm::Value *V, bool IsTrue) {
+    return CT.getAnd(ParentC, V, IsTrue);
+  }
+
+  const ControlCondition *
+  getOr(llvm::ArrayRef<const ControlCondition *> Conds) {
+    return CT.getOr(Conds);
+  }
 };
 
 #endif // end PSSA_H

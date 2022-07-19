@@ -205,6 +205,7 @@ template <typename SequenceTy> SmallItemVector toItems(SequenceTy Seq) {
 }
 
 class VectorGen {
+  PredicatedSSA &PSSA;
   ValueIndex<Value *, Pack> ValueIdx;
   ValueIndex<const ControlCondition *, ConditionPack> MaskIdx;
 
@@ -253,6 +254,33 @@ class VectorGen {
   ValueToValueMapTy VM;
   ValueMapper Remapper;
 
+  void remapInstruction(Instruction *I) {
+    for (Use &Op : I->operands())
+      if (Value *V = Remapper.mapValue(*Op.get()))
+        Op = V;
+  }
+
+  DenseMap<const ControlCondition *, const ControlCondition *> RemappedConds;
+  const ControlCondition *remapCondition(const ControlCondition *C) {
+    // true -> true
+    if (!C)
+      return nullptr;
+
+    if (auto *RemappedC = RemappedConds.lookup(C))
+      return RemappedC;
+
+    if (auto *And = dyn_cast<ConditionAnd>(C)) {
+      auto *RemappedC = PSSA.getAnd(remapCondition(And->Parent),
+                                    Remapper.mapValue(*And->Cond), And->IsTrue);
+      return RemappedConds[C] = RemappedC;
+    }
+
+    SmallVector<const ControlCondition *, 4> Conds;
+    for (auto *C2 : cast<ConditionOr>(C)->Conds)
+      Conds.push_back(remapCondition(C2));
+    return RemappedConds[C] = PSSA.getOr(Conds);
+  }
+
   Value *materializeValue(Value *);
   // Keep a uniform interface together with `materialize(const ControlCondition
   // *, Inserter)` This is needed to make gatherValues work.
@@ -260,8 +288,9 @@ class VectorGen {
   Value *materializeValue(const ControlCondition *, Inserter &);
 
 public:
-  VectorGen() : Remapper(VM, RF_None, nullptr, &Extracter) {}
-  void run(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI);
+  VectorGen(PredicatedSSA &PSSA)
+      : PSSA(PSSA), Remapper(VM, RF_None, nullptr, &Extracter) {}
+  void run(ArrayRef<Pack *> Packs, DependenceInfo &DI);
 };
 
 template <typename ContainerTy> class DeleteGuard {
@@ -675,12 +704,6 @@ Value *VectorGen::gatherValues(ArrayRef<ValueType> Values,
   return Acc;
 }
 
-static void remapOperands(Instruction *I, ValueMapper &Mapper) {
-  for (Use &Op : I->operands())
-    if (Value *V = Mapper.mapValue(*Op.get()))
-      Op = V;
-}
-
 Value *VectorGen::gatherOperand(ArrayRef<Value *> Values, Inserter &Insert) {
   return gatherValues<Value *, Pack>(Values, ValueIdx, Insert);
 }
@@ -742,8 +765,7 @@ static void packConditions(ArrayRef<VectorMask> Masks,
   }
 }
 
-void VectorGen::run(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
-                    DependenceInfo &DI) {
+void VectorGen::run(ArrayRef<Pack *> Packs, DependenceInfo &DI) {
   // Map the packed instruction back to the pack
   DenseMap<Instruction *, Pack *> InstToPackMap;
   for (auto *P : Packs) {
@@ -832,9 +854,11 @@ void VectorGen::run(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
 
       // Fix some of the operands if need to.
       // (E.g., replacing use of scalar value w/ extract)
-      remapOperands(I, Remapper);
+      remapInstruction(I);
 
-      // FIXME: also remap the use of scalar values in the predicate
+      // Similay remap the condition
+      // (e.g., the control condition may need to use a extracted value)
+      VL->setInstCond(I, remapCondition(VL->getInstCond(I)));
     }
   }
 
@@ -852,6 +876,6 @@ void VectorGen::run(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
 }
 
 void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
-  VectorGen Gen;
-  Gen.run(Packs, PSSA, DI);
+  VectorGen Gen(PSSA);
+  Gen.run(Packs, DI);
 }
