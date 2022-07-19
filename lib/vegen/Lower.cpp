@@ -4,6 +4,7 @@
 #include "vegen/Pack.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
+#include "llvm/Analysis/ValueTracking.h" // isSafeToSpeculativelyExecute
 #include "llvm/IR/Constants.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
@@ -765,6 +766,71 @@ static void packConditions(ArrayRef<VectorMask> Masks,
   }
 }
 
+static Value *getLoadStorePointer(Pack *P) {
+  if (isa<StorePack>(P) || isa<LoadPack>(P))
+    return getLoadStorePointerOperand(P->values().front());
+  return nullptr;
+}
+
+// Find a weaker condition C for I so that C *is implied by* the condition of
+// Users
+static const ControlCondition *
+findSpeculativeCond(Instruction *I, ArrayRef<Instruction *> Users,
+                    PredicatedSSA &PSSA) {
+  auto *VL = PSSA.getLoopForInst(I);
+
+  // Collect the conditions for all the users instructions
+  SmallVector<const ControlCondition *, 8> Conds{VL->getInstCond(I)};
+  for (auto *UserI : Users) {
+    // Easy case the defs and uses in the same loop
+    auto *UserVL = PSSA.getLoopForInst(UserI);
+    if (UserVL == VL) {
+      Conds.push_back(PSSA.getInstCond(UserI));
+      continue;
+    }
+
+    // Tougher case: the def is in an outer loop that contains the uses.
+    // In this case, we want the loop condition of
+    // the immediate child loop that containes the use.
+    while (UserVL && UserVL->getParent() != VL)
+      UserVL = UserVL->getParent();
+    assert(UserVL && UserVL->getParent() == VL);
+    Conds.push_back(UserVL->getLoopCond());
+  }
+
+  return getGreatestCommonCondition(Conds);
+}
+
+// Check if it's safe for us to produce V at a weaker condition C
+static bool canSpeculateAt(Value *V, const ControlCondition *C,
+                           PredicatedSSA &PSSA) {
+  auto *I = dyn_cast<Instruction>(V);
+  if (!I)
+    return true;
+
+  if (!isSafeToSpeculativelyExecute(I))
+    return false;
+
+  auto *VL = PSSA.getLoopForInst(I);
+  // It's always safe to strengthen a condition
+  if (isImplied(VL->getInstCond(I), C))
+    return true;
+
+  // Check if the operands of I are always available at condition C
+  for (auto *O : I->operand_values()) {
+    auto *OI = dyn_cast<Instruction>(O);
+    if (!OI)
+      continue;
+    auto *VL2 = PSSA.getLoopForInst(OI);
+
+    bool Available =
+        (VL == VL2 && isImplied(VL2->getInstCond(OI), C)) || VL2->contains(VL);
+    if (!Available)
+      return false;
+  }
+  return true;
+}
+
 void VectorGen::run(ArrayRef<Pack *> Packs, DependenceInfo &DI) {
   // Map the packed instruction back to the pack
   DenseMap<Instruction *, Pack *> InstToPackMap;
@@ -791,6 +857,21 @@ void VectorGen::run(ArrayRef<Pack *> Packs, DependenceInfo &DI) {
     for (auto *CP : CondPacks)
       for (auto *C : CP->values())
         CondToPackMap.try_emplace(C, CP);
+  }
+
+  // When we pack consecutive loads or stores with different
+  // conditions, we need to weaken the condition C of the address
+  // calculation so that C is implied by all the conditions
+  for (auto *P : Packs) {
+    if (P->masks().empty())
+      continue;
+    auto *Ptr = dyn_cast_or_null<Instruction>(getLoadStorePointer(P));
+    if (!Ptr)
+      continue;
+    auto *C = findSpeculativeCond(Ptr, P->values(), PSSA);
+    assert(canSpeculateAt(Ptr, C, PSSA));
+    auto *VL = PSSA.getLoopForInst(Ptr);
+    VL->setInstCond(Ptr, C);
   }
 
   // Reorder the instructions so that the packed instructions appear together
