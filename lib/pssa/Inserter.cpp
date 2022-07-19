@@ -75,6 +75,30 @@ Value *Inserter::createMaskedStore(Value *Val, Value *Ptr, Align Alignment,
                                OverloadedTypes);
 }
 
+// Copied from llvm::IRBuilderBase::CreateMaskedGather
+Value *Inserter::createMaskedGather(Type *Ty, Value *Ptrs, Align Alignment,
+                                    Value *Mask) const {
+  auto *VecTy = cast<VectorType>(Ty);
+  ElementCount NumElts = VecTy->getElementCount();
+  auto *PtrsTy = cast<VectorType>(Ptrs->getType());
+  assert(cast<PointerType>(PtrsTy->getElementType())
+             ->isOpaqueOrPointeeTypeMatches(
+                 cast<VectorType>(Ty)->getElementType()) &&
+         "Element type mismatch");
+  assert(NumElts == PtrsTy->getElementCount() && "Element count mismatch");
+
+  if (!Mask)
+    Mask = Constant::getAllOnesValue(
+        VectorType::get(Type::getInt1Ty(getContext()), NumElts));
+
+  Type *OverloadedTypes[] = {Ty, PtrsTy};
+  Value *Ops[] = {Ptrs, getInt32(Alignment.value()), Mask,
+                  UndefValue::get(Ty) /*pass through*/};
+  Module *M = VL->getPSSA()->getFunction()->getParent();
+  return createMaskedIntrinsic(M, Intrinsic::masked_gather, Ops,
+                               OverloadedTypes);
+}
+
 Value *Inserter::CreateInsertElement(Value *Vec, Value *Elt, Value *Idx) {
   if (auto *V = Folder.FoldInsertElement(Vec, Elt, Idx))
     return V;

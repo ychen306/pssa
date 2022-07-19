@@ -6,6 +6,8 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "llvm/IR/IRBuilder.h"
+
 using namespace llvm;
 
 Value *Pack::emit(ArrayRef<Value *>, Inserter &) const {
@@ -240,15 +242,32 @@ GatherPack *GatherPack::tryPack(ArrayRef<Instruction *> Insts,
   auto *Ty = Insts.front()->getType();
 
   if (any_of(Insts,
-             [Ty](auto *I) { return !isa<PHINode>(I) || I->getType() != Ty; }))
+             [Ty](auto *I) { return !isa<LoadInst>(I) || I->getType() != Ty; }))
     return nullptr;
 
   SmallVector<const ControlCondition *> Conds(
       map_range(Insts, [&PSSA](auto *I) { return PSSA.getInstCond(I); }));
+  auto *C = Conds.front();
+  if (all_of(drop_begin(Conds),
+             [&](auto *C2) { return PSSA.isEquivalent(C, C2); }))
+    return new GatherPack(Insts);
   return new GatherPack(Insts, Conds);
 }
 
-Value *GatherPack::emit(ArrayRef<Value *>, Inserter &Insert) const {
+Value *GatherPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
+  assert((Operands.size() == 1 && Mask.empty()) ||
+         (Operands.size() == 2 && !Mask.empty()));
+
+  // Figure out the common alignment
+  Align Alignment = getLoadStoreAlignment(Insts.front());
+  for (auto *I : drop_begin(Insts))
+    Alignment = std::min(Alignment, getLoadStoreAlignment(I));
+
+  Value *Ptrs = Operands.front();
+  Value *Mask = Operands.size() == 2 ? Operands.back() : nullptr;
+  auto *ScalarTy = Insts.front()->getType();
+  auto *VecTy = FixedVectorType::get(ScalarTy, Insts.size());
+  return Insert.createMaskedGather(VecTy, Ptrs, Alignment, Mask);
 }
 
 PHIPack *PHIPack::tryPack(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA) {

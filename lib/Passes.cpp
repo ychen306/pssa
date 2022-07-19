@@ -115,6 +115,8 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       Packs.push_back(LoadP);
     } else if (auto *StoreP = StorePack::tryPack(Insts, DL, SE, LI, PSSA)) {
       Packs.push_back(StoreP);
+    } else if (auto *GatherP = GatherPack::tryPack(Insts, PSSA)) {
+      Packs.push_back(GatherP);
     } else {
       errs() << "failed to pack specified insts\n";
       return PreservedAnalyses::all();
