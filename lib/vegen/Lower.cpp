@@ -526,21 +526,31 @@ static void partitionLoops(EquivalenceClasses<VLoop *> &LoopsToFuse,
   }
 }
 
+// Given an item `It` nested inside `VL` and that `It` produces `V`.
+// Insert a one-hot phi to select `V` only if `NewC` is true.
+// Assuming OrigC is implied by NewC (weaker).
+static Value *guardExitValue(VLoop *VL, Value *V, const Item &It,
+                             const ControlCondition *OrigC,
+                             const ControlCondition *NewC) {
+  auto *Ty = V->getType();
+  auto *Mu = PHINode::Create(Ty, 2);
+  Mu->setNumHungOffUseOperands(2);
+  Mu->setIncomingValue(0, UndefValue::get(Ty));
+  Inserter InsertAfter(VL, OrigC, std::next(VL->toIterator(It)));
+  auto *Guarded =
+      InsertAfter.createOneHotPhi(NewC, V /*if true*/, Mu /*if false*/);
+  Mu->setIncomingValue(1, Guarded);
+  VL->addMu(Mu);
+  return Guarded;
+}
+
 Value *ExitsRemapper::remapLoopExit(VLoop *DefVL, Instruction *I) {
   if (auto *Remapped = RemappedExits.lookup({DefVL, I}))
     return Remapped;
 
-  auto *Ty = I->getType();
-  auto *Mu = PHINode::Create(Ty, 2);
-  Mu->setNumHungOffUseOperands(2);
-  Mu->setIncomingValue(0, UndefValue::get(Ty));
-  auto *OrigC = OrigInstConds.lookup(I);
-  auto *NewC = DefVL->getInstCond(I);
-  Inserter InsertAfter(DefVL, OrigC, std::next(DefVL->toIterator(I)));
   auto *Guarded =
-      InsertAfter.createOneHotPhi(NewC, I /*if true*/, Mu /*if false*/);
-  Mu->setIncomingValue(1, Guarded);
-  DefVL->addMu(Mu);
+      guardExitValue(DefVL, I, I /*producer of I is I*/,
+                     OrigInstConds.lookup(I), DefVL->getInstCond(I));
   return RemappedExits[{DefVL, I}] = Guarded;
 }
 
@@ -548,18 +558,10 @@ Value *ExitsRemapper::remapSubLoopExit(VLoop *SubVL, Value *V) {
   if (auto *Remapped = RemappedSubLoopExits.lookup({SubVL, V}))
     return Remapped;
 
-  auto *Ty = V->getType();
-  auto *Mu = PHINode::Create(Ty, 2);
-  Mu->setNumHungOffUseOperands(2);
-  Mu->setIncomingValue(0, UndefValue::get(Ty));
-  auto *ParentVL = SubVL->getParent();
-  auto *OrigC = OrigLoopConds.lookup(SubVL);
-  auto *NewC = SubVL->getLoopCond();
-  Inserter InsertAfter(ParentVL, OrigC, std::next(ParentVL->toIterator(SubVL)));
+  assert(SubVL->getParent());
   auto *Guarded =
-      InsertAfter.createOneHotPhi(NewC, V /*if true*/, Mu /*if false*/);
-  Mu->setIncomingValue(1, Guarded);
-  ParentVL->addMu(Mu);
+      guardExitValue(SubVL->getParent(), V, SubVL, OrigLoopConds.lookup(SubVL),
+                     SubVL->getLoopCond());
   return RemappedSubLoopExits[{SubVL, V}] = Guarded;
 }
 
