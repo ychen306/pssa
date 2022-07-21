@@ -305,6 +305,53 @@ public:
   }
 };
 
+// FIXME: this has O(n^2) complexity
+static VLoop *nearestCommonParent(VLoop *UserVL, VLoop *DefVL) {
+  while (UserVL && !UserVL->contains(DefVL))
+    UserVL = UserVL->getParent();
+  assert(UserVL && UserVL->contains(DefVL));
+  return UserVL;
+}
+
+// Utility to help rewrite the use of loop exit values for co-iteration
+class ExitsRemapper {
+  PredicatedSSA &PSSA;
+  const DenseMap<Instruction *, const ControlCondition *> &OrigInstConds;
+  DenseMap<VLoop *, const ControlCondition *> OrigLoopConds;
+  DenseSet<VLoop *> LoopsWithExits;
+  // Mapping <parent of the loops with exits> -> <those loops>
+  DenseMap<VLoop *, VLoop *> ParentToChildMap;
+  DenseMap<std::pair<VLoop *, const ControlCondition *>,
+           const ControlCondition *>
+      RemappedConds;
+
+  // Mapping <loop, value exiting the loop> -> <the new value>
+  DenseMap<std::pair<VLoop *, Value *>, Value *> RemappedExits;
+  DenseMap<std::pair<VLoop *, Value *>, Value *> RemappedSubLoopExits;
+  Value *remapLoopExit(VLoop *DefVL, Instruction *I);
+  Value *remapSubLoopExit(VLoop *SubVL, Value *V);
+  Value *remapValue(VLoop *UserVL, Value *V);
+
+public:
+  ExitsRemapper(
+      PredicatedSSA &PSSA,
+      const DenseMap<Instruction *, const ControlCondition *> &OrigInstConds)
+      : PSSA(PSSA), OrigInstConds(OrigInstConds) {}
+  void trackLoop(VLoop *VL, const ControlCondition *OrigLoopCond) {
+    assert(VL->getParent());
+    LoopsWithExits.insert(VL);
+    ParentToChildMap[VL->getParent()] = VL;
+    OrigLoopConds[VL] = OrigLoopCond;
+  }
+  void remapInstruction(VLoop *UserVL, Instruction *I) {
+    for (Use &Op : I->operands())
+      if (auto *V = remapValue(UserVL, Op.get()))
+        Op = V;
+  }
+  const ControlCondition *remapCondition(VLoop *UserVL,
+                                         const ControlCondition *C);
+};
+
 }; // namespace
 
 // Move the items together while still preserving dependences
@@ -477,6 +524,89 @@ static void partitionLoops(EquivalenceClasses<VLoop *> &LoopsToFuse,
     if (Fused)
       Worklist.push_back(ParentLoops);
   }
+}
+
+Value *ExitsRemapper::remapLoopExit(VLoop *DefVL, Instruction *I) {
+  if (auto *Remapped = RemappedExits.lookup({DefVL, I}))
+    return Remapped;
+
+  auto *Ty = I->getType();
+  auto *Mu = PHINode::Create(Ty, 2);
+  Mu->setNumHungOffUseOperands(2);
+  Mu->setIncomingValue(0, UndefValue::get(Ty));
+  auto *OrigC = OrigInstConds.lookup(I);
+  auto *NewC = DefVL->getInstCond(I);
+  Inserter InsertAfter(DefVL, OrigC, std::next(DefVL->toIterator(I)));
+  auto *Guarded =
+      InsertAfter.createOneHotPhi(NewC, I /*if true*/, Mu /*if false*/);
+  Mu->setIncomingValue(1, Guarded);
+  DefVL->addMu(Mu);
+  return RemappedExits[{DefVL, I}] = Guarded;
+}
+
+Value *ExitsRemapper::remapSubLoopExit(VLoop *SubVL, Value *V) {
+  if (auto *Remapped = RemappedSubLoopExits.lookup({SubVL, V}))
+    return Remapped;
+
+  auto *Ty = V->getType();
+  auto *Mu = PHINode::Create(Ty, 2);
+  Mu->setNumHungOffUseOperands(2);
+  Mu->setIncomingValue(0, UndefValue::get(Ty));
+  auto *ParentVL = SubVL->getParent();
+  auto *OrigC = OrigLoopConds.lookup(SubVL);
+  auto *NewC = SubVL->getLoopCond();
+  Inserter InsertAfter(ParentVL, OrigC, std::next(ParentVL->toIterator(SubVL)));
+  auto *Guarded =
+      InsertAfter.createOneHotPhi(NewC, V /*if true*/, Mu /*if false*/);
+  Mu->setIncomingValue(1, Guarded);
+  ParentVL->addMu(Mu);
+  return RemappedSubLoopExits[{SubVL, V}] = Guarded;
+}
+
+Value *ExitsRemapper::remapValue(VLoop *UserVL, Value *V) {
+  if (LoopsWithExits.empty())
+    return V;
+
+  auto *I = dyn_cast<Instruction>(V);
+  if (!I)
+    return V;
+
+  auto *DefVL = PSSA.getLoopForInst(I);
+  assert(DefVL->getParent());
+  if (DefVL == UserVL)
+    return V;
+
+  UserVL = nearestCommonParent(UserVL, DefVL);
+  assert(UserVL && UserVL != DefVL && UserVL->contains(DefVL));
+
+  if (LoopsWithExits.count(DefVL))
+    V = remapLoopExit(DefVL, I);
+  // Scan the loop nest bottom-up and apply the guards
+  for (auto *VL = DefVL->getParent(); VL != UserVL; VL = VL->getParent())
+    if (LoopsWithExits.count(VL->getParent()))
+      V = remapSubLoopExit(VL, V);
+  return V;
+}
+
+const ControlCondition *
+ExitsRemapper::remapCondition(VLoop *UserVL, const ControlCondition *C) {
+  if (!C)
+    return nullptr;
+
+  if (auto *Remapped = RemappedConds.lookup({UserVL, C}))
+    return Remapped;
+
+  if (auto *And = dyn_cast<ConditionAnd>(C)) {
+    auto *Remapped = PSSA.getAnd(remapCondition(UserVL, And),
+                                 remapValue(UserVL, And->Cond), And->IsTrue);
+    return RemappedConds[{UserVL, C}] = Remapped;
+  }
+
+  auto *Or = cast<ConditionOr>(C);
+  SmallVector<const ControlCondition *, 4> Conds;
+  for (auto *C : Or->Conds)
+    Conds.push_back(remapCondition(UserVL, C));
+  return RemappedConds[{UserVL, C}] = PSSA.getOr(Conds);
 }
 
 // Fuse loops and return the final loop
