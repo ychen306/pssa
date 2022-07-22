@@ -14,7 +14,7 @@ class Inserter {
   llvm::ConstantFolder Folder;
   VLoop *VL;
   const ControlCondition *C;
-  llvm::Optional<VLoop::ItemIterator> InsertBefore;
+  VLoop::ItemIterator InsertBefore;
 
   llvm::Type *getInt32Ty() const;
   llvm::Constant *getInt32(int32_t) const;
@@ -27,8 +27,6 @@ public:
   Inserter(VLoop *VL, const ControlCondition *C,
            VLoop::ItemIterator InsertBefore)
       : VL(VL), C(C), InsertBefore(InsertBefore) {}
-  Inserter(VLoop *VL, const ControlCondition *C)
-    : VL(VL), C(C), InsertBefore(llvm::None) {}
 
   const ControlCondition *getCondition() const { return C; }
   llvm::LLVMContext &getContext() const;

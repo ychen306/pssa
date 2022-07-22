@@ -687,7 +687,7 @@ coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
   for (auto *CoVL : Loops) {
     Inserter InsertBeforeCoVL(ParentVL, CommonLoopCond,
                               ParentVL->toIterator(CoVL));
-    Inserter InsertAtEnd(CoVL, nullptr);
+    Inserter InsertAtEnd(CoVL, nullptr, CoVL->item_end());
 
     ///////// Compute the active flag for CoVL //////////
     auto *Active = PHINode::Create(Int1Ty, 2);
