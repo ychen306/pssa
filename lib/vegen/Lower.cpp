@@ -1137,26 +1137,30 @@ void VectorGen::run(ArrayRef<Pack *> Packs, DependenceInfo &DI) {
     // Lower the mu packs (if any)
     SmallVector<PHINode *> Mus(VL->mus());
     for (auto *Mu : Mus) {
-      if (Pack *P = InstToPackMap.lookup(Mu)) {
-        DeadInsts.push_back(Mu);
-        if (!Lowered.insert(P).second)
-          continue;
-        assert(isa<MuPack>(P));
-        auto Operands = P->getOperands();
-        auto *ParentVL = VL->getParent();
-        // Gather the inititial vector before entering the loop
-        auto *Init = gatherOperand(Operands[0], ParentVL, VL->getLoopCond(),
-                                   ParentVL->toIterator(VL));
-        auto *Mu = PHINode::Create(Init->getType(), 2);
-        Mu->setNumHungOffUseOperands(2);
-        Mu->setIncomingValue(0, Init);
-        // We will patch up the mu with the recursive def. later.
-        VL->addMu(Mu);
-        MusToPatch.emplace_back(Mu, P);
-
-        ValueIdx.insert(Mu, P);
-        Extracter.remember(P, Mu, VL, nullptr, VL->item_begin());
+      Pack *P = InstToPackMap.lookup(Mu);
+      if (!P) {
+        remapInstruction(Mu);
+        continue;
       }
+
+      DeadInsts.push_back(Mu);
+      if (!Lowered.insert(P).second)
+        continue;
+      assert(isa<MuPack>(P));
+      auto Operands = P->getOperands();
+      auto *ParentVL = VL->getParent();
+      // Gather the inititial vector before entering the loop
+      auto *Init = gatherOperand(Operands[0], ParentVL, VL->getLoopCond(),
+                                 ParentVL->toIterator(VL));
+      auto *VecMu = PHINode::Create(Init->getType(), 2);
+      VecMu->setNumHungOffUseOperands(2);
+      VecMu->setIncomingValue(0, Init);
+      // We will patch up the mu with the recursive def. later.
+      VL->addMu(VecMu);
+      MusToPatch.emplace_back(VecMu, P);
+
+      ValueIdx.insert(VecMu, P);
+      Extracter.remember(P, VecMu, VL, nullptr, VL->item_begin());
     }
 
     // Copy the items to a vector to
