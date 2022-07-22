@@ -380,7 +380,7 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
   DenseSet<const ControlCondition *> VisitedConds;
   SmallVector<Item> Depended;
   // Do DFS on a given item
-  std::function<void(const Item &)> Visit;
+  std::function<void(Item)> Visit;
   auto VisitValue = [&Visit](Value *V) {
     if (auto *I = dyn_cast<Instruction>(V))
       Visit(I);
@@ -403,7 +403,16 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
       };
 
   // FIXME: check circular dependencies
-  Visit = [&](const Item &It) {
+  Visit = [&](Item It) {
+    auto *ParentVL = PSSA.getLoopForItem(It);
+    if (!VL->contains(It))
+      return;
+
+    while (ParentVL != VL) {
+      It = ParentVL;
+      ParentVL = ParentVL->getParent();
+    }
+
     // Only consider items that come after Earliest
     if (!VL->contains(It) || !VL->comesBefore(Earliest, It))
       return;
