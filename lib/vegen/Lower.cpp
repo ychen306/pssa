@@ -679,6 +679,7 @@ coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
   for (auto *CoVL : Loops)
     LoopConds.push_back(CoVL->getLoopCond());
 
+  auto *LeaderVL = Loops.front();
   auto *CommonLoopCond = getGreatestCommonCondition(LoopConds);
   auto &Ctx = PSSA.getContext();
   auto *Int1Ty = Type::getInt1Ty(Ctx);
@@ -686,12 +687,12 @@ coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
   auto *False = ConstantInt::getFalse(Ctx);
   for (auto *CoVL : Loops) {
     Inserter InsertBeforeCoVL(ParentVL, CommonLoopCond,
-                              ParentVL->toIterator(CoVL));
+                              ParentVL->toIterator(LeaderVL));
     Inserter InsertAtEnd(CoVL, nullptr, CoVL->item_end());
 
     ///////// Compute the active flag for CoVL //////////
     auto *Active = PHINode::Create(Int1Ty, 2);
-    CoVL->addMu(Active);
+    Active->setName("active");
 
     auto *ShouldEnter =
         InsertBeforeCoVL.createOneHotPhi(CoVL->getLoopCond(), True, False);
@@ -701,6 +702,7 @@ coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
     Active->setNumHungOffUseOperands(2);
     Active->setIncomingValue(0, ShouldEnter);
     Active->setIncomingValue(1, ShouldCont);
+    CoVL->addMu(Active);
 
     BackEdgeConds.push_back(ContCond);
     ////////////////////////////////////////////////////
