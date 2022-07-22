@@ -10,6 +10,7 @@
 #include "llvm/IR/Instructions.h"
 
 namespace llvm {
+class Loop;
 class LLVMContext;
 class Value;
 class DominatorTree;
@@ -174,6 +175,10 @@ class PredicatedSSA {
   llvm::DenseMap<llvm::Instruction *, VLoop *> InstToVLoopMap;
   llvm::DenseMap<Item, VLoop::ItemIterator, ItemHashInfo> ItemToIteratorMap;
 
+  // Mapping <PSSA Loop> -> <LLVM Loop>
+  // Could be invalidated as PSSA is transformed.
+  llvm::DenseMap<VLoop *, llvm::Loop *> VLoopToLoopMap;
+
 public:
   // Convert from LLVM IR
   PredicatedSSA(llvm::Function *, llvm::LoopInfo &, llvm::DominatorTree &,
@@ -261,6 +266,8 @@ public:
   getOr(llvm::ArrayRef<const ControlCondition *> Conds) {
     return CT.getOr(Conds);
   }
+
+  llvm::Loop *getOrigLoop(VLoop *VL) { return VLoopToLoopMap.lookup(VL); }
 };
 
 #endif // end PSSA_H

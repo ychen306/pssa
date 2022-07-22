@@ -335,13 +335,13 @@ class ExitsRemapper {
 public:
   ExitsRemapper(
       PredicatedSSA &PSSA,
-      const DenseMap<Instruction *, const ControlCondition *> &OrigInstConds)
+      const DenseMap<Instruction *, const ControlCondition *> &OrigInstConds,
+      const DenseMap<VLoop *, const ControlCondition *> &OrigLoopConds)
       : PSSA(PSSA), OrigInstConds(OrigInstConds) {}
-  void trackLoop(VLoop *VL, const ControlCondition *OrigLoopCond) {
+  void trackLoop(VLoop *VL) {
     assert(VL->getParent());
     LoopsWithExits.insert(VL);
     ParentToChildMap[VL->getParent()] = VL;
-    OrigLoopConds[VL] = OrigLoopCond;
   }
   void remapInstruction(VLoop *UserVL, Instruction *I) {
     for (Use &Op : I->operands())
@@ -645,8 +645,8 @@ static VLoop *fuseLoops(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
   return Leader;
 }
 
-static void fuseLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
-                      PredicatedSSA &PSSA, DependenceChecker &DepChecker) {
+static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
+                       PredicatedSSA &PSSA, DependenceChecker &DepChecker) {
   // Util to help use rewrite use of loop live-outs
   ValueToValueMapTy VMap;
   ValueMapper Remapper(VMap, RF_None);
@@ -692,7 +692,7 @@ static void schedule(ArrayRef<Pack *> Packs,
   partitionLoops(LoopsToFuse, Packs, PSSA);
 
   // Fuse the loops top-down
-  fuseLoops(LoopsToFuse, PSSA, DepChecker);
+  mergeLoops(LoopsToFuse, PSSA, DepChecker);
 
   // FIXME: Deal with packs that require fusion/co-iteration later
   for (auto *P : Packs)
