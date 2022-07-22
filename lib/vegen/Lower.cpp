@@ -1,3 +1,4 @@
+#include "TripCount.h"
 #include "pssa/Inserter.h"
 #include "pssa/PSSA.h"
 #include "pssa/VectorHashInfo.h"
@@ -59,6 +60,10 @@ class DependenceChecker {
             Summary.LiveIns.push_back(OI);
         }
       }
+
+      for (auto *Mu : VL->mus())
+        if (auto *I = dyn_cast<Instruction>(Mu->getIncomingValue(0)))
+          Summary.LiveIns.push_back(I);
     }
   }
 
@@ -574,9 +579,10 @@ Value *ExitsRemapper::remapValue(VLoop *UserVL, Value *V) {
     return V;
 
   auto *DefVL = PSSA.getLoopForInst(I);
-  assert(DefVL->getParent());
-  if (DefVL == UserVL)
+  if (DefVL->contains(UserVL))
     return V;
+
+  assert(DefVL->getParent());
 
   UserVL = nearestCommonParent(UserVL, DefVL);
   assert(UserVL && UserVL != DefVL && UserVL->contains(DefVL));
@@ -599,7 +605,7 @@ ExitsRemapper::remapCondition(VLoop *UserVL, const ControlCondition *C) {
     return Remapped;
 
   if (auto *And = dyn_cast<ConditionAnd>(C)) {
-    auto *Remapped = PSSA.getAnd(remapCondition(UserVL, And),
+    auto *Remapped = PSSA.getAnd(remapCondition(UserVL, And->Parent),
                                  remapValue(UserVL, And->Cond), And->IsTrue);
     return RemappedConds[{UserVL, C}] = Remapped;
   }
@@ -612,8 +618,8 @@ ExitsRemapper::remapCondition(VLoop *UserVL, const ControlCondition *C) {
 }
 
 // Fuse loops and return the final loop
-static VLoop *fuseLoops(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
-                        PredicatedSSA &PSSA) {
+static VLoop *fuse(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
+                   PredicatedSSA &PSSA) {
   assert(Loops.size() > 1);
   assert(all_of(Loops,
                 [ParentVL](VLoop *VL) { return VL->getParent() == ParentVL; }));
@@ -645,11 +651,88 @@ static VLoop *fuseLoops(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
   return Leader;
 }
 
+// Assuming VL1 and VL2 are *independent* check if it's safe to fuse them
+static bool fusible(VLoop *VL1, VLoop *VL2, PredicatedSSA &PSSA) {
+  auto *L1 = PSSA.getOrigLoop(VL1);
+  auto *L2 = PSSA.getOrigLoop(VL2);
+  auto *SE = PSSA.getSE();
+  assert(SE);
+  return PSSA.isEquivalent(VL1->getLoopCond(), VL2->getLoopCond()) &&
+         haveIdenticalTripCounts(L1, L2, *SE);
+}
+
+static VLoop *
+coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
+          DenseMap<Instruction *, const ControlCondition *> &OrigInstConds,
+          DenseMap<VLoop *, const ControlCondition *> &OrigLoopConds,
+          PredicatedSSA &PSSA) {
+  SmallVector<const ControlCondition *> LoopConds, BackEdgeConds;
+  for (auto *CoVL : Loops)
+    LoopConds.push_back(CoVL->getLoopCond());
+
+  auto *CommonLoopCond = getGreatestCommonCondition(LoopConds);
+  auto &Ctx = PSSA.getContext();
+  auto *Int1Ty = Type::getInt1Ty(Ctx);
+  auto *True = ConstantInt::getTrue(Ctx);
+  auto *False = ConstantInt::getFalse(Ctx);
+  for (auto *CoVL : Loops) {
+    Inserter InsertBeforeCoVL(ParentVL, CommonLoopCond,
+                              ParentVL->toIterator(CoVL));
+    Inserter InsertAtEnd(CoVL, nullptr);
+
+    ///////// Compute the active flag for CoVL //////////
+    auto *Active = PHINode::Create(Int1Ty, 2);
+    CoVL->addMu(Active);
+
+    auto *ShouldEnter =
+        InsertBeforeCoVL.createOneHotPhi(CoVL->getLoopCond(), True, False);
+    auto *ContCond = PSSA.getAnd(CoVL->getBackEdgeCond(), Active, true);
+    auto *ShouldCont = InsertAtEnd.createOneHotPhi(ContCond, True, False);
+
+    Active->setNumHungOffUseOperands(2);
+    Active->setIncomingValue(0, ShouldEnter);
+    Active->setIncomingValue(1, ShouldCont);
+
+    BackEdgeConds.push_back(ContCond);
+    ////////////////////////////////////////////////////
+
+    // Strengthen the conds so the items only execute when CoVL is active
+    for (auto &It : CoVL->items()) {
+      // FIXME: also strenghten the gating condition of gated phis
+      if (auto *I = It.asInstruction()) {
+        auto *C = CoVL->getInstCond(I);
+        OrigInstConds[I] = C;
+        CoVL->setInstCond(I, PSSA.getAnd(C, Active, true));
+      } else {
+        auto *SubVL = It.asLoop();
+        assert(SubVL);
+        auto *C = SubVL->getLoopCond();
+        OrigLoopConds[SubVL] = C;
+        SubVL->setLoopCond(PSSA.getAnd(C, Active, true));
+      }
+    }
+  }
+
+  // Fuse the body of the loops together
+  auto *Fused = fuse(ParentVL, Loops, PSSA);
+
+  SmallPtrSet<const ControlCondition *, 8> Seen;
+  decltype(LoopConds) UniqueLoopConds;
+  for (auto *C : LoopConds)
+    if (Seen.insert(C).second)
+      UniqueLoopConds.push_back(C);
+
+  Fused->setLoopCond(PSSA.getOr(UniqueLoopConds));
+  Fused->setBackEdgeCond(PSSA.getOr(BackEdgeConds));
+
+  return Fused;
+}
+
 static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker) {
-  // Util to help use rewrite use of loop live-outs
-  ValueToValueMapTy VMap;
-  ValueMapper Remapper(VMap, RF_None);
+  DenseMap<Instruction *, const ControlCondition *> OrigInstConds;
+  DenseMap<VLoop *, const ControlCondition *> OrigLoopConds;
+  ExitsRemapper Remapper(PSSA, OrigInstConds, OrigLoopConds);
 
   std::function<void(VLoop *)> FuseRec = [&](VLoop *VL) {
     // First pass: identify loops that we want to fuse
@@ -669,7 +752,18 @@ static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
                                  LoopsToFuse.member_end());
       // Move the loops together first
       merge(PSSA, toItems(Loops), nullptr /*inst to pack map*/, DepChecker);
-      auto *Fused = fuseLoops(VL, Loops, PSSA);
+      VLoop *Fused = nullptr;
+      auto *LeaderVL = Loops.front();
+      bool Fusible = all_of(drop_begin(Loops), [&](auto *VL2) {
+        return fusible(LeaderVL, VL2, PSSA);
+      });
+      if (Fusible) {
+        Fused = fuse(VL, Loops, PSSA);
+      } else {
+        Fused = coIterate(VL, Loops, OrigInstConds, OrigLoopConds, PSSA);
+        // Remember to rewrite use of values live across bounary of Fused
+        Remapper.trackLoop(Fused);
+      }
       DepChecker.invalidate(Fused);
     }
 
@@ -677,6 +771,19 @@ static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
     for (auto &It : VL->items())
       if (auto *SubVL = It.asLoop())
         FuseRec(SubVL);
+
+    // Rewrite the use of values exiting co-iterating loops
+    for (auto &It : VL->items()) {
+      // FIXME: remap the conditions of gated phis
+      if (auto *I = It.asInstruction()) {
+        Remapper.remapInstruction(VL, I);
+        VL->setInstCond(I, Remapper.remapCondition(VL, VL->getInstCond(I)));
+      } else {
+        auto *SubVL = It.asLoop();
+        assert(SubVL);
+        SubVL->setLoopCond(Remapper.remapCondition(VL, SubVL->getLoopCond()));
+      }
+    }
   };
 
   FuseRec(&PSSA.getTopLevel());
@@ -1072,6 +1179,8 @@ void VectorGen::run(ArrayRef<Pack *> Packs, DependenceInfo &DI) {
       // Similay remap the condition
       // (e.g., the control condition may need to use a extracted value)
       VL->setInstCond(I, remapCondition(VL->getInstCond(I)));
+
+      // FIXME: also need to remap the conditions of (gated) phis
     }
   }
 

@@ -80,8 +80,12 @@ bool VLoop::comesBefore(const Item &A, const Item &B) const {
   return Items.comesBefore(A, B);
 }
 
-VLoop::ItemIterator VLoop::toIterator(const Item &I) {
-  return PSSA->toIterator(I);
+VLoop::ItemIterator VLoop::toIterator(const Item &It) {
+  auto *PN = dyn_cast_or_null<PHINode>(It.asInstruction());
+  if (PN && isMu(PN))
+    return Items.begin();
+
+  return PSSA->toIterator(It);
 }
 
 bool VLoop::contains(Instruction *I) const {
@@ -102,9 +106,17 @@ void VLoop::addMu(PHINode *PN) {
   PSSA->mapMuToLoop(PN, this);
 }
 
+const ControlCondition *VLoop::getInstCond(Instruction *I) const {
+  if (auto *PN = dyn_cast<PHINode>(I); PN && isMu(PN))
+    return nullptr;
+
+  assert(InstConds.count(I));
+  return InstConds.lookup(I);
+}
+
 PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
-                             PostDominatorTree &PDT)
-    : F(F), LI(LI), TopVL(this) {
+                             PostDominatorTree &PDT, ScalarEvolution *SE)
+    : F(F), TopVL(this), SE(SE) {
   ControlDependenceAnalysis CDA(LI, DT, PDT, CT);
 
   ReversePostOrderTraversal<Function *> RPO(F);

@@ -14,6 +14,7 @@ class Loop;
 class LLVMContext;
 class Value;
 class DominatorTree;
+class ScalarEvolution;
 class PostDominatorTree;
 } // namespace llvm
 
@@ -104,6 +105,8 @@ public:
   ItemIterator insert(VLoop *,
                       llvm::Optional<ItemIterator> InsertBefore = llvm::None);
 
+  // Get the iteartor pointing to It.
+  // If It is a Mu node, return Item.begin
   ItemIterator toIterator(const Item &It);
 
   void erase(ItemIterator It);
@@ -125,10 +128,7 @@ public:
   ConstItemIterator item_begin() const { return Items.begin(); }
   ConstItemIterator item_end() const { return Items.end(); }
 
-  const ControlCondition *getInstCond(llvm::Instruction *I) const {
-    assert(InstConds.count(I));
-    return InstConds.lookup(I);
-  }
+  const ControlCondition *getInstCond(llvm::Instruction *I) const;
   void setInstCond(llvm::Instruction *I, const ControlCondition *C) {
     assert(InstConds.count(I));
     InstConds[I] = C;
@@ -169,9 +169,9 @@ public:
 
 class PredicatedSSA {
   llvm::Function *F;
-  llvm::LoopInfo &LI;
   ConditionTable CT;
   VLoop TopVL;
+  llvm::ScalarEvolution *SE;
   llvm::DenseMap<llvm::Instruction *, VLoop *> InstToVLoopMap;
   llvm::DenseMap<Item, VLoop::ItemIterator, ItemHashInfo> ItemToIteratorMap;
 
@@ -182,7 +182,7 @@ class PredicatedSSA {
 public:
   // Convert from LLVM IR
   PredicatedSSA(llvm::Function *, llvm::LoopInfo &, llvm::DominatorTree &,
-                llvm::PostDominatorTree &);
+                llvm::PostDominatorTree &, llvm::ScalarEvolution *SE = nullptr);
 
   llvm::LLVMContext &getContext() { return F->getContext(); }
   llvm::Function *getFunction() { return F; }
@@ -268,6 +268,7 @@ public:
   }
 
   llvm::Loop *getOrigLoop(VLoop *VL) { return VLoopToLoopMap.lookup(VL); }
+  llvm::ScalarEvolution *getSE() { return SE; }
 };
 
 #endif // end PSSA_H

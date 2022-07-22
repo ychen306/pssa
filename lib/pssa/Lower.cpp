@@ -59,9 +59,11 @@ void PSSALowering::demotePhi(PredicatedSSA *PSSA, PHINode *PN) {
   // Because we place the default (IfFalse) value
   // first the IfTrue assignment (which comes later)
   // will override the IfFalse initialization.
+#if 0
   assert((!VL->isOneHotPhi(PN) ||
           VL->getPhiConditions(PN).front() == VL->getInstCond(PN)) &&
          "one-hot phis should the IfTrue value last");
+#endif
 
   for (auto [C, V] : zip(VL->getPhiConditions(PN), PN->incoming_values())) {
     auto *SI = new StoreInst(V, Alloca, false /*isVolatile*/, Align());

@@ -85,7 +85,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   auto &LI = AM.getResult<LoopAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
-  PredicatedSSA PSSA(&F, LI, DT, PDT);
+  PredicatedSSA PSSA(&F, LI, DT, PDT, &SE);
 
   SmallVector<Pack *> Packs;
   for (StringRef Arg : InstsToPack) {
