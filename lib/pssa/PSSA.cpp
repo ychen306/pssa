@@ -106,6 +106,12 @@ void VLoop::addMu(PHINode *PN) {
   PSSA->mapMuToLoop(PN, this);
 }
 
+void VLoop::eraseMu(PHINode *PN) {
+  Mus.erase(PN);
+  assert(PSSA);
+  // FIXME: remove PN from PSSA::InstToVLoopMap?
+}
+
 const ControlCondition *VLoop::getInstCond(Instruction *I) const {
   if (auto *PN = dyn_cast<PHINode>(I); PN && isMu(PN))
     return nullptr;

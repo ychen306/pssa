@@ -125,8 +125,8 @@ public:
   llvm::iterator_range<ConstItemIterator> items() const {
     return llvm::make_range(Items.begin(), Items.end());
   }
-  ConstItemIterator item_begin() const { return Items.begin(); }
-  ConstItemIterator item_end() const { return Items.end(); }
+  ItemIterator item_begin() { return Items.begin(); }
+  ItemIterator item_end() { return Items.end(); }
 
   const ControlCondition *getInstCond(llvm::Instruction *I) const;
   void setInstCond(llvm::Instruction *I, const ControlCondition *C) {
@@ -142,7 +142,8 @@ public:
 
   // Add a phi node as mu. Assume the first value is the init. val and second
   // rec.
-  void addMu(llvm::PHINode *PN);
+  void addMu(llvm::PHINode *);
+  void eraseMu(llvm::PHINode *);
 
   llvm::iterator_range<decltype(Mus)::iterator> mus() {
     return llvm::make_range(Mus.begin(), Mus.end());
@@ -158,9 +159,17 @@ public:
     return PhiConds[PN][i];
   }
 
+
   llvm::ArrayRef<const ControlCondition *> getPhiConditions(llvm::PHINode *PN) {
     assert(PhiConds.count(PN));
     return PhiConds[PN];
+  }
+
+  // Set the i'th gating condition
+  void setPhiCondition(llvm::PHINode *PN, unsigned i, const ControlCondition *C) {
+    assert(PhiConds.count(PN));
+    assert(i < PhiConds[PN].size());
+    PhiConds[PN][i] = C;
   }
 
   VLoop *getParent() const { return Parent; }
@@ -217,6 +226,11 @@ public:
   }
 
   void mapMuToLoop(llvm::PHINode *PN, VLoop *VL) { InstToVLoopMap[PN] = VL; }
+
+  bool isMu(llvm::PHINode *PN) {
+    auto *VL = getLoopForInst(PN);
+    return VL->isMu(PN);
+  }
 
   VLoop *getLoopForInst(llvm::Instruction *I) const {
     assert(InstToVLoopMap.count(I));

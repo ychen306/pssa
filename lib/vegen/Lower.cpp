@@ -811,8 +811,11 @@ static void schedule(ArrayRef<Pack *> Packs,
   mergeLoops(LoopsToFuse, PSSA, DepChecker);
 
   // FIXME: Deal with packs that require fusion/co-iteration later
-  for (auto *P : Packs)
+  for (auto *P : Packs) {
+    if (isa<MuPack>(P))
+      continue;
     merge(PSSA, toItems(P->values()), &InstToPackMap, DepChecker);
+  }
 }
 
 Value *VectorGen::materializeValue(Value *V) { return Remapper.mapValue(*V); }
@@ -1125,19 +1128,46 @@ void VectorGen::run(ArrayRef<Pack *> Packs, DependenceInfo &DI) {
   // Reorder the instructions so that the packed instructions appear together
   schedule(Packs, InstToPackMap, PSSA, DI);
 
-  SmallVector<VLoop *> Worklist{&PSSA.getTopLevel()};
-
   SmallVector<Instruction *> DeadInsts;
   DenseSet<Pack *> Lowered;
 
-  while (!Worklist.empty()) {
-    auto *VL = Worklist.pop_back_val();
+  std::function<void(VLoop *)> LowerLoop = [&](VLoop *VL) {
+    SmallVector<std::pair<PHINode *, Pack *>> MusToPatch;
+
+    // Lower the mu packs (if any)
+    SmallVector<PHINode *> Mus(VL->mus());
+    for (auto *Mu : Mus) {
+      if (Pack *P = InstToPackMap.lookup(Mu)) {
+        DeadInsts.push_back(Mu);
+        if (!Lowered.insert(P).second)
+          continue;
+        assert(isa<MuPack>(P));
+        auto Operands = P->getOperands();
+        auto *ParentVL = VL->getParent();
+        // Gather the inititial vector before entering the loop
+        auto *Init = gatherOperand(Operands[0], ParentVL, VL->getLoopCond(),
+                                   ParentVL->toIterator(VL));
+        auto *Mu = PHINode::Create(Init->getType(), 2);
+        Mu->setNumHungOffUseOperands(2);
+        Mu->setIncomingValue(0, Init);
+        // We will patch up the mu with the recursive def. later.
+        VL->addMu(Mu);
+        MusToPatch.emplace_back(Mu, P);
+
+        ValueIdx.insert(Mu, P);
+        Extracter.remember(P, Mu, VL, nullptr, VL->item_begin());
+      }
+    }
+
     // Copy the items to a vector to
     // avoid invalidating the iterator while we modify list of items
     SmallVector<Item> Items(VL->item_begin(), VL->item_end());
+
+    // Lower the loop items
     for (auto &It : Items) {
       if (auto *SubVL = It.asLoop()) {
-        Worklist.push_back(SubVL);
+        SubVL->setLoopCond(remapCondition(SubVL->getLoopCond()));
+        LowerLoop(SubVL);
         continue;
       }
 
@@ -1189,9 +1219,23 @@ void VectorGen::run(ArrayRef<Pack *> Packs, DependenceInfo &DI) {
       // (e.g., the control condition may need to use a extracted value)
       VL->setInstCond(I, remapCondition(VL->getInstCond(I)));
 
-      // FIXME: also need to remap the conditions of (gated) phis
+      // Also remap the conditions of (gated) phis
+      if (auto *PN = dyn_cast<PHINode>(I)) {
+        auto Conds = VL->getPhiConditions(PN);
+        for (auto X : enumerate(Conds))
+          VL->setPhiCondition(PN, X.index(), remapCondition(X.value()));
+      }
     }
-  }
+
+    VL->setBackEdgeCond(remapCondition(VL->getBackEdgeCond()));
+
+    // Gather the recursive def. of the mu nodes at the end of the loop
+    for (auto [Mu, P] : MusToPatch)
+      Mu->setIncomingValue(
+          1, gatherOperand(P->getOperands()[1], VL, nullptr, VL->item_end()));
+  };
+
+  LowerLoop(&PSSA.getTopLevel());
 
   // Remove the instructions killed by vectorization
   for (auto *I : DeadInsts) {
@@ -1199,8 +1243,15 @@ void VectorGen::run(ArrayRef<Pack *> Packs, DependenceInfo &DI) {
     I->dropAllReferences();
   }
   for (auto *I : DeadInsts) {
-    auto InsertPt = PSSA.getInsertPoint(I);
-    InsertPt.VL->erase(InsertPt.It);
+    auto *PN = dyn_cast<PHINode>(I);
+    if (PN && PSSA.isMu(PN)) {
+      auto *VL = PSSA.getLoopForInst(PN);
+      VL->eraseMu(PN);
+    } else {
+      auto InsertPt = PSSA.getInsertPoint(I);
+      InsertPt.VL->erase(InsertPt.It);
+    }
+
     if (I->getParent())
       I->eraseFromParent();
   }

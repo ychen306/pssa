@@ -30,6 +30,7 @@ public:
     PK_Store,
     PK_Gather,
     PK_PHI,
+    PK_Mu,
     PK_Blend,
     PK_GEP
   };
@@ -173,6 +174,17 @@ public:
   llvm::ArrayRef<VectorMask> masks() const override { return Masks; }
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_Blend; }
+};
+
+// A pack of mu (header phi)
+class MuPack : public Pack {
+  MuPack(llvm::ArrayRef<llvm::Instruction *> Insts)
+    : Pack(Insts, PK_Mu) {}
+public:
+  static MuPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
+                            PredicatedSSA &PSSA);
+  // No generic ::emit for MuPack
+  static bool classof(const Pack *P) { return P->getKind() == PK_Mu; }
 };
 
 // A pack of GEPs

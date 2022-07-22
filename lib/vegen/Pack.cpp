@@ -34,7 +34,8 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
     return nullptr;
 
   auto *I = Insts.front();
-  if (!isa<BinaryOperator>(I) && !isa<CmpInst>(I) && !isa<SelectInst>(I))
+  if (!isa<BinaryOperator>(I) && !isa<CmpInst>(I) && !isa<SelectInst>(I) &&
+      !isa<CastInst>(I))
     return nullptr;
 
   auto Rest = drop_begin(Insts);
@@ -49,6 +50,16 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
     auto Pred = Cmp->getPredicate();
     if (any_of(Rest, [Pred](auto *I) {
           return cast<CmpInst>(I)->getPredicate() != Pred;
+        }))
+      return nullptr;
+  }
+
+  if (auto *Cast = dyn_cast<CastInst>(I)) {
+    auto Op = Cast->getOpcode();
+    auto *SrcTy = Cast->getOperand(0)->getType();
+    if (any_of(Rest, [&](auto *I) {
+          return cast<CastInst>(I)->getOpcode() != Op ||
+                 I->getOperand(0)->getType() != SrcTy;
         }))
       return nullptr;
   }
@@ -77,6 +88,11 @@ Value *SIMDPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   if (isa<SelectInst>(I)) {
     assert(Operands.size() == 3);
     return Insert.create<SelectInst>(Operands[0], Operands[1], Operands[2]);
+  }
+
+  if (auto *Cast = dyn_cast<CastInst>(I)) {
+    auto *VecTy = FixedVectorType::get(Cast->getType(), Insts.size());
+    return Insert.create<CastInst>(Cast->getOpcode(), Operands.front(), VecTy);
   }
 
   llvm_unreachable("unsupported opcode");
@@ -269,8 +285,7 @@ PHIPack *PHIPack::tryPack(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA) {
   SmallVector<PHINode *, 8> Phis;
   for (auto *I : Insts) {
     auto *PN = dyn_cast<PHINode>(I);
-    // Don't deal with one-hot phi for now
-    if (!PN || PSSA.isOneHotPhi(PN))
+    if (!PN || PSSA.isMu(PN))
       return nullptr;
     Phis.push_back(PN);
   }
@@ -302,6 +317,15 @@ SmallVector<OperandPack, 2> PHIPack::getOperands() const {
     Operands.emplace_back(
         map_range(Insts, [i](auto *I) { return I->getOperand(i); }));
   return Operands;
+}
+
+MuPack *MuPack::tryPack(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA) {
+  for (auto *I : Insts) {
+    auto *PN = dyn_cast<PHINode>(I);
+    if (!PN || !PSSA.isMu(PN))
+      return nullptr;
+  }
+  return new MuPack(Insts);
 }
 
 BlendPack *BlendPack::tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
