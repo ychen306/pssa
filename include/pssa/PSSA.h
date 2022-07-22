@@ -159,14 +159,14 @@ public:
     return PhiConds[PN][i];
   }
 
-
   llvm::ArrayRef<const ControlCondition *> getPhiConditions(llvm::PHINode *PN) {
     assert(PhiConds.count(PN));
     return PhiConds[PN];
   }
 
   // Set the i'th gating condition
-  void setPhiCondition(llvm::PHINode *PN, unsigned i, const ControlCondition *C) {
+  void setPhiCondition(llvm::PHINode *PN, unsigned i,
+                       const ControlCondition *C) {
     assert(PhiConds.count(PN));
     assert(i < PhiConds[PN].size());
     PhiConds[PN][i] = C;

@@ -178,11 +178,11 @@ public:
 
 // A pack of mu (header phi)
 class MuPack : public Pack {
-  MuPack(llvm::ArrayRef<llvm::Instruction *> Insts)
-    : Pack(Insts, PK_Mu) {}
+  MuPack(llvm::ArrayRef<llvm::Instruction *> Insts) : Pack(Insts, PK_Mu) {}
+
 public:
   static MuPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
-                            PredicatedSSA &PSSA);
+                         PredicatedSSA &PSSA);
   // No generic ::emit for MuPack
   static bool classof(const Pack *P) { return P->getKind() == PK_Mu; }
 };
