@@ -24,7 +24,15 @@ using VectorMask = llvm::SmallVector<const ControlCondition *, 8>;
 // produces the values of multiple instructions in parallel
 class Pack {
 public:
-  enum PackKind { PK_SIMD, PK_Load, PK_Store, PK_Gather, PK_PHI, PK_Blend };
+  enum PackKind {
+    PK_SIMD,
+    PK_Load,
+    PK_Store,
+    PK_Gather,
+    PK_PHI,
+    PK_Blend,
+    PK_GEP
+  };
 
 private:
   const PackKind Kind;
@@ -164,7 +172,18 @@ public:
                             PredicatedSSA &PSSA);
   llvm::ArrayRef<VectorMask> masks() const override { return Masks; }
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
-  static bool classof(const Pack *P) { return P->getKind() == PK_PHI; }
+  static bool classof(const Pack *P) { return P->getKind() == PK_Blend; }
+};
+
+// A pack of GEPs
+class GEPPack : public Pack {
+  GEPPack(llvm::ArrayRef<llvm::Instruction *> Insts) : Pack(Insts, PK_GEP) {}
+
+public:
+  static GEPPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts);
+  llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
+  llvm::SmallVector<OperandPack, 2> getOperands() const override;
+  static bool classof(const Pack *P) { return P->getKind() == PK_GEP; }
 };
 
 class OrPack : public ConditionPack {

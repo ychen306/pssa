@@ -44,6 +44,7 @@ public:
                                  llvm::Align, llvm::Value *Mask) const;
   llvm::Value *createMaskedGather(llvm::Type *Ty, llvm::Value *Ptrs,
                                   llvm::Align, llvm::Value *Mask) const;
+  llvm::Value *createVectorSplat(unsigned NumElems, llvm::Value *V) const;
 
   // Wrapper around <InstType>::Create
   template <typename InstType, typename... ArgTypes>

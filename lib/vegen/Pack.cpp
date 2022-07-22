@@ -34,10 +34,7 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
     return nullptr;
 
   auto *I = Insts.front();
-  if (I->mayReadOrWriteMemory())
-    return nullptr;
-
-  if (isa<PHINode>(I))
+  if (!isa<BinaryOperator>(I) && !isa<CmpInst>(I) && !isa<SelectInst>(I))
     return nullptr;
 
   auto Rest = drop_begin(Insts);
@@ -143,13 +140,11 @@ LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
     auto *Ptr = Ptrs[SortedIdx];
     auto Diff = diffPointers(Ty, FirstPtr, Ty, Ptr, DL, SE, LI);
     assert(Diff);
-    unsigned Gaps = *Diff - i;
-    for (unsigned j = 0; j < Gaps; j++)
-      SortedStores.push_back(nullptr);
+    if (*Diff - i != 0)
+      return nullptr;
     SortedStores.push_back(Insts[SortedIdx]);
   }
-  while (SortedStores.size() < PowerOf2Ceil(SortedStores.size()))
-    SortedStores.push_back(nullptr);
+
   return new LoadPack(SortedStores);
 }
 
@@ -362,6 +357,76 @@ Value *BlendPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   for (auto [M, V] : drop_begin(reverse(zip(MaskVals, Values))))
     Select = Insert.create<SelectInst>(M, V, Select);
   return Select;
+}
+
+GEPPack *GEPPack::tryPack(ArrayRef<Instruction *> Insts) {
+  if (any_of(Insts, [](auto *I) { return !isa<GetElementPtrInst>(I); }))
+    return nullptr;
+
+  auto *GEP = cast<GetElementPtrInst>(Insts.front());
+  unsigned NumOperands = GEP->getNumOperands();
+  Type *Ty = GEP->getSourceElementType();
+
+  SmallVector<ConstantInt *> StructOffsets;
+  auto *CurTy = Ty;
+  for (Value *Idx : drop_begin(GEP->indices())) {
+    if (isa<StructType>(CurTy))
+      StructOffsets.push_back(cast<ConstantInt>(Idx));
+    else
+      StructOffsets.push_back(nullptr);
+    CurTy = GetElementPtrInst::getTypeAtIndex(CurTy, Idx);
+    if (!CurTy)
+      return nullptr;
+  }
+
+  for (auto *I : drop_begin(Insts)) {
+    auto *GEP2 = cast<GetElementPtrInst>(I);
+    if (GEP2->getNumOperands() != NumOperands ||
+        GEP2->getSourceElementType() != Ty)
+      return nullptr;
+    auto *CurTy = Ty;
+    for (auto Item : enumerate(drop_begin(GEP2->indices()))) {
+      unsigned i = Item.index();
+      Value *Idx = Item.value();
+      if (isa<StructType>(CurTy) && StructOffsets[i] != cast<ConstantInt>(Idx))
+        return nullptr;
+      CurTy = GetElementPtrInst::getTypeAtIndex(CurTy, Idx);
+      if (!CurTy)
+        return nullptr;
+    }
+  }
+
+  return new GEPPack(Insts);
+}
+
+SmallVector<OperandPack, 2> GEPPack::getOperands() const {
+  auto Operands = Pack::getOperands();
+  return SmallVector<OperandPack, 2>(make_filter_range(
+      Operands, [](auto &Values) { return !is_splat(Values); }));
+}
+
+Value *GEPPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
+  auto OrigOperands = Pack::getOperands();
+  auto GetOperand = [&OrigOperands, &Operands](unsigned i) -> Value * {
+    if (is_splat(OrigOperands[i]))
+      return OrigOperands[i].front();
+    auto *V = Operands.front();
+    Operands = Operands.drop_front();
+    return V;
+  };
+
+  Value *Ptr = GetOperand(0);
+  SmallVector<Value *, 4> Idxs;
+  for (unsigned i = 1, N = Insts.front()->getNumOperands(); i != N; i++)
+    Idxs.push_back(GetOperand(i));
+
+  auto *Ty = cast<GetElementPtrInst>(Insts.front())->getSourceElementType();
+  auto *GEP = Insert.create<GetElementPtrInst>(Ty, Ptr, Idxs);
+  if (GEP->getType()->isVectorTy())
+    return GEP;
+  // Sometimes we end up not needing to vectorize,
+  // in which case, we just broadcast the GEP to fix the type
+  return Insert.createVectorSplat(Insts.size(), GEP);
 }
 
 const ControlCondition *ConditionPack::preCondition() const {

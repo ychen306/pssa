@@ -122,3 +122,12 @@ Value *Inserter::CreateBinOp(Instruction::BinaryOps Opc, Value *A, Value *B) {
   }
   return create<BinaryOperator>(Opc, A, B);
 }
+
+Value *Inserter::createVectorSplat(unsigned NumElems, Value *V) const {
+  auto *Ty = V->getType();
+  auto *VecTy = FixedVectorType::get(Ty, NumElems);
+  auto *Init =
+      create<InsertElementInst>(PoisonValue::get(VecTy), V, getInt32(0));
+  SmallVector<int, 16> Zeros(NumElems, 0);
+  return make<ShuffleVectorInst>(Init, Zeros);
+}
