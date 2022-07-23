@@ -211,7 +211,10 @@ template <typename SequenceTy> SmallItemVector toItems(SequenceTy Seq) {
 }
 
 class VectorGen {
+  ArrayRef<Pack *> Packs;
   PredicatedSSA &PSSA;
+  DependenceInfo &DI;
+  DenseMap<Instruction *, Pack *> InstToPackMap;
   ValueIndex<Value *, Pack> ValueIdx;
   ValueIndex<const ControlCondition *, ConditionPack> MaskIdx;
 
@@ -293,10 +296,22 @@ class VectorGen {
   Value *materializeValue(Value *V, Inserter &) { return materializeValue(V); }
   Value *materializeValue(const ControlCondition *, Inserter &);
 
+  SmallVector<Instruction *> DeadInsts;
+  DenseSet<Pack *> Lowered;
+  void lowerLoop(VLoop *);
+
 public:
-  VectorGen(PredicatedSSA &PSSA)
-      : PSSA(PSSA), Remapper(VM, RF_None, nullptr, &Extracter) {}
-  void run(ArrayRef<Pack *> Packs, DependenceInfo &DI);
+  VectorGen(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI)
+      : Packs(Packs), PSSA(PSSA), DI(DI),
+        Remapper(VM, RF_None, nullptr, &Extracter) {
+    // Map the packed instruction back to the pack
+    for (auto *P : Packs) {
+      for (auto *I : P->values())
+        if (I)
+          InstToPackMap[I] = P;
+    }
+  }
+  void run();
 };
 
 template <typename ContainerTy> class DeleteGuard {
@@ -509,8 +524,10 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
   ReinsertItems(InsertPt);
 }
 
-static void partitionLoops(EquivalenceClasses<VLoop *> &LoopsToFuse,
-                           ArrayRef<Pack *> Packs, PredicatedSSA &PSSA) {
+static EquivalenceClasses<VLoop *> partitionLoops(ArrayRef<Pack *> Packs,
+                                                  PredicatedSSA &PSSA) {
+
+  EquivalenceClasses<VLoop *> LoopsToFuse;
   SmallVector<SmallItemVector> Worklist(
       llvm::map_range(Packs, [](Pack *P) { return toItems(P->values()); }));
 
@@ -538,6 +555,8 @@ static void partitionLoops(EquivalenceClasses<VLoop *> &LoopsToFuse,
     if (Fused)
       Worklist.push_back(ParentLoops);
   }
+
+  return LoopsToFuse;
 }
 
 // Given an item `It` nested inside `VL` and that `It` produces `V`.
@@ -797,26 +816,6 @@ static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
   };
 
   FuseRec(&PSSA.getTopLevel());
-}
-
-static void schedule(ArrayRef<Pack *> Packs,
-                     const DenseMap<Instruction *, Pack *> &InstToPackMap,
-                     PredicatedSSA &PSSA, DependenceInfo &DI) {
-  DependenceChecker DepChecker(DI);
-
-  // Figure out the loops that we need to fuse.
-  EquivalenceClasses<VLoop *> LoopsToFuse;
-  partitionLoops(LoopsToFuse, Packs, PSSA);
-
-  // Fuse the loops top-down
-  mergeLoops(LoopsToFuse, PSSA, DepChecker);
-
-  // FIXME: Deal with packs that require fusion/co-iteration later
-  for (auto *P : Packs) {
-    if (isa<MuPack>(P))
-      continue;
-    merge(PSSA, toItems(P->values()), &InstToPackMap, DepChecker);
-  }
 }
 
 Value *VectorGen::materializeValue(Value *V) { return Remapper.mapValue(*V); }
@@ -1083,34 +1082,113 @@ static bool canSpeculateAt(Value *V, const ControlCondition *C,
   return true;
 }
 
-void VectorGen::run(ArrayRef<Pack *> Packs, DependenceInfo &DI) {
-  // Map the packed instruction back to the pack
-  DenseMap<Instruction *, Pack *> InstToPackMap;
-  for (auto *P : Packs) {
-    for (auto *I : P->values())
-      if (I)
-        InstToPackMap[I] = P;
+void VectorGen::lowerLoop(VLoop *VL) {
+
+  // Lower the mu packs (if any)
+  SmallVector<std::pair<PHINode *, Pack *>> MusToPatch;
+  SmallVector<PHINode *> Mus(VL->mus());
+  for (auto *Mu : Mus) {
+    Pack *P = InstToPackMap.lookup(Mu);
+    if (!P) {
+      remapInstruction(Mu);
+      continue;
+    }
+
+    DeadInsts.push_back(Mu);
+    if (!Lowered.insert(P).second)
+      continue;
+
+    assert(isa<MuPack>(P));
+    auto Operands = P->getOperands();
+    auto *ParentVL = VL->getParent();
+    // Gather the inititial vector before entering the loop
+    auto *Init = gatherOperand(Operands[0], ParentVL, VL->getLoopCond(),
+                               ParentVL->toIterator(VL));
+    auto *VecMu = PHINode::Create(Init->getType(), 2);
+    VecMu->setNumHungOffUseOperands(2);
+    VecMu->setIncomingValue(0, Init);
+    VL->addMu(VecMu);
+    // We will patch up the mu with the recursive def. later.
+    MusToPatch.emplace_back(VecMu, P);
+
+    ValueIdx.insert(VecMu, P);
+    Extracter.remember(P, VecMu, VL, nullptr, VL->item_begin());
   }
 
-  // Do secondary packing to pack generate the vector masks
-  // TODO: expose this as a decision for the user?
-  SmallVector<VectorMask> Masks;
-  for (auto *P : Packs) {
-    auto Ms = P->masks();
-    Masks.append(Ms.begin(), Ms.end());
+  // Lower the loop items
+  SmallVector<Item> Items(VL->item_begin(), VL->item_end());
+  for (auto &It : Items) {
+    if (auto *SubVL = It.asLoop()) {
+      SubVL->setLoopCond(remapCondition(SubVL->getLoopCond()));
+      lowerLoop(SubVL);
+      continue;
+    }
+
+    auto *I = It.asInstruction();
+    assert(I);
+    markAsProcessed(I);
+    if (Pack *P = InstToPackMap.lookup(I)) {
+      DeadInsts.push_back(I);
+      if (!Lowered.insert(P).second)
+        continue;
+
+      SmallVector<const ControlCondition *, 8> Conds;
+      for (auto *I : P->values())
+        if (I)
+          Conds.push_back(VL->getInstCond(I));
+      auto *C = getGreatestCommonCondition(Conds);
+
+      auto Iterator = VL->toIterator(I);
+      Inserter InsertBeforeI(VL, C, Iterator);
+      Value *V = nullptr;
+      if (isa<PHIPack>(P)) {
+        // Special lowering path for phi pack
+        SmallVector<Value *, 8> Operands;
+        auto *PN = cast<PHINode>(P->values().front());
+        for (auto X : enumerate(P->getOperands())) {
+          auto *C = VL->getPhiCondition(PN, X.index());
+          Operands.push_back(gatherOperand(X.value(), VL, C, Iterator));
+        }
+        V = InsertBeforeI.createPhi(Operands, VL->getPhiConditions(PN));
+      } else {
+        SmallVector<Value *, 8> Operands;
+        for (OperandPack OP : P->getOperands())
+          Operands.push_back(gatherOperand(OP, InsertBeforeI));
+        // Some instructions (e.g., masked store) also require masking
+        for (auto &M : P->masks())
+          Operands.push_back(gatherMask(M, InsertBeforeI));
+        V = P->emit(Operands, InsertBeforeI);
+      }
+      ValueIdx.insert(V, P);
+      Extracter.remember(P, V, VL, C, Iterator);
+      I = cast<Instruction>(V);
+    }
+
+    // Fix some of the operands if need to.
+    // (E.g., replacing use of scalar value w/ extract)
+    remapInstruction(I);
+
+    // Similay remap the condition
+    // (e.g., the control condition may need to use a extracted value)
+    VL->setInstCond(I, remapCondition(VL->getInstCond(I)));
+
+    // Also remap the conditions of (gated) phis
+    if (auto *PN = dyn_cast<PHINode>(I)) {
+      auto Conds = VL->getPhiConditions(PN);
+      for (auto X : enumerate(Conds))
+        VL->setPhiCondition(PN, X.index(), remapCondition(X.value()));
+    }
   }
-  SmallVector<ConditionPack *> CondPacks;
-  DeleteGuard DeleteLater(CondPacks);
 
-  if (!DontPackConditions) {
-    packConditions(Masks, CondPacks);
+  VL->setBackEdgeCond(remapCondition(VL->getBackEdgeCond()));
 
-    // Map each condition to the pack that produces it
-    for (auto *CP : CondPacks)
-      for (auto *C : CP->values())
-        CondToPackMap.try_emplace(C, CP);
-  }
+  // Gather the recursive def. of the mu nodes at the end of the loop
+  for (auto [Mu, P] : MusToPatch)
+    Mu->setIncomingValue(
+        1, gatherOperand(P->getOperands()[1], VL, nullptr, VL->item_end()));
+};
 
+void VectorGen::run() {
   // When we pack consecutive loads or stores with different
   // conditions, we need to weaken the condition C of the address
   // calculation so that C is implied by all the conditions
@@ -1126,123 +1204,43 @@ void VectorGen::run(ArrayRef<Pack *> Packs, DependenceInfo &DI) {
     VL->setInstCond(Ptr, C);
   }
 
-  // Reorder the instructions so that the packed instructions appear together
-  schedule(Packs, InstToPackMap, PSSA, DI);
+  //==== Begin Scheduling ====//
+  DependenceChecker DepChecker(DI);
+  // Figure out the loops that we need to fuse.
+  EquivalenceClasses<VLoop *> LoopsToFuse = partitionLoops(Packs, PSSA);
+  // Fuse the loops top-down
+  mergeLoops(LoopsToFuse, PSSA, DepChecker);
+  // Move the packed instructions together
+  for (auto *P : Packs) {
+    if (isa<MuPack>(P))
+      continue;
+    merge(PSSA, toItems(P->values()), &InstToPackMap, DepChecker);
+  }
+  //==== End scheduling ====//
 
-  SmallVector<Instruction *> DeadInsts;
-  DenseSet<Pack *> Lowered;
+  //==== Begin secondary packing (to pack conditions) ====//
+  // TODO: expose this as a decision for the user?
+  SmallVector<VectorMask> Masks;
+  for (auto *P : Packs) {
+    auto Ms = P->masks();
+    Masks.append(Ms.begin(), Ms.end());
+  }
+  SmallVector<ConditionPack *> CondPacks;
+  DeleteGuard DeleteLater(CondPacks);
 
-  std::function<void(VLoop *)> LowerLoop = [&](VLoop *VL) {
-    SmallVector<std::pair<PHINode *, Pack *>> MusToPatch;
+  if (!DontPackConditions) {
+    packConditions(Masks, CondPacks);
+    // Map each condition to the pack that produces it
+    for (auto *CP : CondPacks)
+      for (auto *C : CP->values())
+        CondToPackMap.try_emplace(C, CP);
+  }
+  //==== End secondaryy packing ====//
 
-    // Lower the mu packs (if any)
-    SmallVector<PHINode *> Mus(VL->mus());
-    for (auto *Mu : Mus) {
-      Pack *P = InstToPackMap.lookup(Mu);
-      if (!P) {
-        remapInstruction(Mu);
-        continue;
-      }
+  //==== Generate vector code from the packs ====//
+  lowerLoop(&PSSA.getTopLevel());
 
-      DeadInsts.push_back(Mu);
-      if (!Lowered.insert(P).second)
-        continue;
-      assert(isa<MuPack>(P));
-      auto Operands = P->getOperands();
-      auto *ParentVL = VL->getParent();
-      // Gather the inititial vector before entering the loop
-      auto *Init = gatherOperand(Operands[0], ParentVL, VL->getLoopCond(),
-                                 ParentVL->toIterator(VL));
-      auto *VecMu = PHINode::Create(Init->getType(), 2);
-      VecMu->setNumHungOffUseOperands(2);
-      VecMu->setIncomingValue(0, Init);
-      // We will patch up the mu with the recursive def. later.
-      VL->addMu(VecMu);
-      MusToPatch.emplace_back(VecMu, P);
-
-      ValueIdx.insert(VecMu, P);
-      Extracter.remember(P, VecMu, VL, nullptr, VL->item_begin());
-    }
-
-    // Copy the items to a vector to
-    // avoid invalidating the iterator while we modify list of items
-    SmallVector<Item> Items(VL->item_begin(), VL->item_end());
-
-    // Lower the loop items
-    for (auto &It : Items) {
-      if (auto *SubVL = It.asLoop()) {
-        SubVL->setLoopCond(remapCondition(SubVL->getLoopCond()));
-        LowerLoop(SubVL);
-        continue;
-      }
-
-      auto *I = It.asInstruction();
-      assert(I);
-      markAsProcessed(I);
-      if (Pack *P = InstToPackMap.lookup(I)) {
-        DeadInsts.push_back(I);
-        if (!Lowered.insert(P).second)
-          continue;
-
-        SmallVector<const ControlCondition *, 8> Conds;
-        for (auto *I : P->values())
-          if (I)
-            Conds.push_back(VL->getInstCond(I));
-        auto *C = getGreatestCommonCondition(Conds);
-
-        auto Iterator = VL->toIterator(I);
-        Inserter InsertBeforeI(VL, C, Iterator);
-        Value *V = nullptr;
-        if (isa<PHIPack>(P)) {
-          // Special lowering path for phi pack
-          SmallVector<Value *, 8> Operands;
-          auto *PN = cast<PHINode>(P->values().front());
-          for (auto X : enumerate(P->getOperands())) {
-            auto *C = VL->getPhiCondition(PN, X.index());
-            Operands.push_back(gatherOperand(X.value(), VL, C, Iterator));
-          }
-          V = InsertBeforeI.createPhi(Operands, VL->getPhiConditions(PN));
-        } else {
-          SmallVector<Value *, 8> Operands;
-          for (OperandPack OP : P->getOperands())
-            Operands.push_back(gatherOperand(OP, InsertBeforeI));
-          // Some instructions (e.g., masked store) also require masking
-          for (auto &M : P->masks())
-            Operands.push_back(gatherMask(M, InsertBeforeI));
-          V = P->emit(Operands, InsertBeforeI);
-        }
-        ValueIdx.insert(V, P);
-        Extracter.remember(P, V, VL, C, Iterator);
-        I = cast<Instruction>(V);
-      }
-
-      // Fix some of the operands if need to.
-      // (E.g., replacing use of scalar value w/ extract)
-      remapInstruction(I);
-
-      // Similay remap the condition
-      // (e.g., the control condition may need to use a extracted value)
-      VL->setInstCond(I, remapCondition(VL->getInstCond(I)));
-
-      // Also remap the conditions of (gated) phis
-      if (auto *PN = dyn_cast<PHINode>(I)) {
-        auto Conds = VL->getPhiConditions(PN);
-        for (auto X : enumerate(Conds))
-          VL->setPhiCondition(PN, X.index(), remapCondition(X.value()));
-      }
-    }
-
-    VL->setBackEdgeCond(remapCondition(VL->getBackEdgeCond()));
-
-    // Gather the recursive def. of the mu nodes at the end of the loop
-    for (auto [Mu, P] : MusToPatch)
-      Mu->setIncomingValue(
-          1, gatherOperand(P->getOperands()[1], VL, nullptr, VL->item_end()));
-  };
-
-  LowerLoop(&PSSA.getTopLevel());
-
-  // Remove the instructions killed by vectorization
+  //==== Remove the instructions killed by vectorization ====//
   for (auto *I : DeadInsts) {
     I->replaceAllUsesWith(UndefValue::get(I->getType()));
     I->dropAllReferences();
@@ -1263,6 +1261,6 @@ void VectorGen::run(ArrayRef<Pack *> Packs, DependenceInfo &DI) {
 }
 
 void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
-  VectorGen Gen(PSSA);
-  Gen.run(Packs, DI);
+  VectorGen Gen(Packs, PSSA, DI);
+  Gen.run();
 }
