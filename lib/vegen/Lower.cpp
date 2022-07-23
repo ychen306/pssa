@@ -982,8 +982,7 @@ static bool canSpeculateAt(Value *V, const ControlCondition *C,
 }
 
 void VectorGen::lowerLoop(VLoop *VL) {
-
-  // Lower the mu packs (if any)
+  // Start by lowering the mu packs
   SmallVector<std::pair<PHINode *, Pack *>> MusToPatch;
   SmallVector<PHINode *> Mus(VL->mus());
   for (auto *Mu : Mus) {
