@@ -1,5 +1,5 @@
-#include "TripCount.h"
 #include "DependenceChecker.h"
+#include "TripCount.h"
 #include "pssa/Inserter.h"
 #include "pssa/PSSA.h"
 #include "pssa/VectorHashInfo.h"
