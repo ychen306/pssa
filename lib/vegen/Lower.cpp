@@ -204,10 +204,9 @@ class VectorGen {
 
 public:
   VectorGen(ArrayRef<Pack *> ThePacks, PredicatedSSA &PSSA, DependenceInfo &DI)
-      : PSSA(PSSA), DI(DI),
-        Remapper(VM, RF_None, nullptr, &Extracter) {
-          for (auto *P : ThePacks)
-            addPack(P);
+      : PSSA(PSSA), DI(DI), Remapper(VM, RF_None, nullptr, &Extracter) {
+    for (auto *P : ThePacks)
+      addPack(P);
   }
   void run();
 };
@@ -913,7 +912,22 @@ Value *VectorGen::gatherMask(ArrayRef<const ControlCondition *> Conds,
   return gatherValues(Conds, MaskIdx, Insert, Unordered);
 }
 
-// FIXME: clean this up
+// Try to produce a list of values w/ a blend pack
+static BlendPack *packAsBlends(ArrayRef<Value *> Values,
+                               DenseSet<Value *> &Packed, PredicatedSSA &PSSA) {
+  SmallVector<Instruction *> Insts;
+  for (auto *V : Values) {
+    auto *I = dyn_cast<Instruction>(V);
+    if (!I || Packed.count(I))
+      return nullptr;
+    Insts.push_back(I);
+  }
+  auto *P = BlendPack::tryPack(Insts, PSSA);
+  if (P)
+    Packed.insert(Insts.begin(), Insts.end());
+  return P;
+}
+
 // Run the bottom-up heuristic to produce the required vector masks
 // Also pack any of the active flags encountered along the way
 static void packConditions(ArrayRef<VectorMask> Masks,
@@ -935,45 +949,38 @@ static void packConditions(ArrayRef<VectorMask> Masks,
     ConditionPack *CP = AndPack::tryPack(Mask);
     if (!CP)
       CP = OrPack::tryPack(Mask);
-    if (CP) {
-      CondPacks.push_back(CP);
-      Worklist.append(CP->getOperandMasks());
-      // If the conditions uses any of the active flags,
-      // pack those active flags together
-      for (const OperandPack &O : CP->getOperands()) {
-        SmallVector<Instruction *> ActiveMus;
-        for (auto *V : O) {
-          auto *PN = dyn_cast<PHINode>(V);
-          if (!PN || !ActiveFlags.count(PN) || Packed.count(PN))
-            break;
-          assert(PSSA.isOneHotPhi(cast<PHINode>(PN->getOperand(0))));
-          assert(PSSA.isOneHotPhi(cast<PHINode>(PN->getOperand(1))));
-          ActiveMus.push_back(PN);
-        }
-        Packed.insert(ActiveMus.begin(), ActiveMus.end());
-        if (ActiveMus.size() != O.size())
+    if (!CP)
+      continue;
+
+    CondPacks.push_back(CP);
+    Worklist.append(CP->getOperandMasks());
+
+    // If the conditions uses any of the active flags,
+    // pack those active flags together
+    for (const OperandPack &O : CP->getOperands()) {
+      SmallVector<Instruction *> ActiveMus;
+      for (auto *V : O) {
+        auto *PN = dyn_cast<PHINode>(V);
+        if (!PN || !ActiveFlags.count(PN) || Packed.count(PN))
+          break;
+        ActiveMus.push_back(PN);
+      }
+
+      if (ActiveMus.size() != O.size())
+        continue;
+
+      auto *P = MuPack::tryPack(ActiveMus, PSSA);
+      if (!P)
+        continue;
+      Packs.push_back(P);
+      Packed.insert(ActiveMus.begin(), ActiveMus.end());
+      for (auto &O : P->getOperands()) {
+        auto *P2 = packAsBlends(O, Packed, PSSA);
+        if (!P2)
           continue;
-        if (auto *P = MuPack::tryPack(ActiveMus, PSSA)) {
-          Packs.push_back(P);
-          for (auto &O : P->getOperands()) {
-            SmallVector<Instruction *> Insts;
-            for (auto *V : O) {
-              auto *I = dyn_cast<Instruction>(V);
-              if (!I || Packed.count(I))
-                break;
-              Insts.push_back(I);
-            }
-            if (Insts.size() != O.size())
-              continue;
-            Packed.insert(Insts.begin(), Insts.end());
-            auto *P2 = BlendPack::tryPack(Insts, PSSA);
-            if (P2) {
-              Packs.push_back(P2);
-              auto Masks = P2->masks();
-              Worklist.append(Masks.begin(), Masks.end());
-            }
-          }
-        }
+        Packs.push_back(P2);
+        auto Masks = P2->masks();
+        Worklist.append(Masks.begin(), Masks.end());
       }
     }
   }
