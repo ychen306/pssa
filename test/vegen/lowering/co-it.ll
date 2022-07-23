@@ -13,26 +13,26 @@
 ; CHECK-NEXT:    br label %[[JOIN:.*]]
 
 ; CHECK:  [[HEADER]]:
-; CHECK-DAG:    [[SUM_OUT:%.*]] = phi <2 x i32> [ undef, %[[PREHEADER]] ], [ [[SUM_OUT_NEXT:%.*]], %latch ]
-; CHECK-DAG:    [[SUM:%.*]] = phi <2 x i32> [ zeroinitializer, %[[PREHEADER]] ], [ [[SUM_NEXT:%.*]], %latch ]
-; CHECK-DAG:    [[IDX:%.*]] = phi <2 x i32> [ zeroinitializer, %[[PREHEADER]] ], [ [[IDX_NEXT:%.*]], %latch ]
-; CHECK-DAG:    [[ACTIVE:%.*]] = phi <2 x i1> [ [[N_GT_0]], %[[PREHEADER]] ], [ [[ACTIVE_NEXT:%.*]], %latch ]
+; CHECK-DAG:    [[SUM_OUT:%.*]] = phi <2 x i32> [ undef, %[[PREHEADER]] ], [ [[SUM_OUT_NEXT:%.*]], %[[LATCH:.*]] ]
+; CHECK-DAG:    [[SUM:%.*]] = phi <2 x i32> [ <i32 1, i32 1>, %[[PREHEADER]] ], [ [[SUM_NEXT:%.*]], %[[LATCH]] ]
+; CHECK-DAG:    [[IDX:%.*]] = phi <2 x i32> [ zeroinitializer, %[[PREHEADER]] ], [ [[IDX_NEXT:%.*]], %[[LATCH]] ]
+; CHECK-DAG:    [[ACTIVE:%.*]] = phi <2 x i1> [ [[N_GT_0]], %[[PREHEADER]] ], [ [[ACTIVE_NEXT:%.*]], %[[LATCH]] ]
 ; CHECK-NEXT:    [[SUM_NEXT]] = add <2 x i32> [[SUM]], [[IDX]]
 ; CHECK-NEXT:    [[SUM_OUT_NEXT]] = select <2 x i1> [[ACTIVE]], <2 x i32> [[SUM_NEXT]], <2 x i32> [[SUM_OUT]]
 ; CHECK-NEXT:    [[IDX_NEXT]] = add <2 x i32> [[IDX]], <i32 1, i32 1>
 ; CHECK-NEXT:    [[LT_N:%.*]] = icmp slt <2 x i32> [[IDX_NEXT]], %i.vec
 ; CHECK-NEXT:    [[ACTIVE_NEXT]] = and <2 x i1> [[LT_N]], [[ACTIVE]]
 ; CHECK-NEXT:    [[CONT:%.*]] = call i1 @llvm.vector.reduce.or.v2i1(<2 x i1> [[ACTIVE_NEXT]])
-; CHECK-NEXT:    br label %latch
+; CHECK-NEXT:    br label %[[LATCH]]
 
-; CHECK:  latch:
-; CHECK-NEXT:    br i1 [[CONT]], label %[[HEADER]], label %exit
+; CHECK:  [[LATCH]]:
+; CHECK-NEXT:    br i1 [[CONT]], label %[[HEADER]], label %[[EXIT:.*]]
 
-; CHECK:  exit:
+; CHECK:  [[EXIT]]:
 ; CHECK-NEXT:    br label %[[JOIN]]
 
 ; CHECK:  [[JOIN]]:
-; CHECK-NEXT:    [[SUM_EXIT:%.*]] = phi <2 x i32> [ [[SUM_OUT_NEXT]], %exit ], [ undef, %[[SKIP]] ]
+; CHECK-NEXT:    [[SUM_EXIT:%.*]] = phi <2 x i32> [ [[SUM_OUT_NEXT]], %[[EXIT]] ], [ undef, %[[SKIP]] ]
 ; CHECK-NEXT:    [[NO_LOOP:%.*]] = xor <2 x i1> [[N_GT_0]], <i1 true, i1 true>
 ; CHECK-NEXT:    [[SUM_FINAL:%.*]] = select <2 x i1> [[NO_LOOP]], <2 x i32> zeroinitializer, <2 x i32> [[SUM_EXIT]]
 ; CHECK-NEXT:    store <2 x i32> [[SUM_FINAL]], ptr @out, align 4
@@ -55,7 +55,7 @@ for.body.preheader:                               ; preds = %entry
   br label %for.body
 
 for.body:                                         ; preds = %for.body.preheader, %for.body
-  %s.03 = phi i32 [ %add, %for.body ], [ 0, %for.body.preheader ]
+  %s.03 = phi i32 [ %add, %for.body ], [ 1, %for.body.preheader ]
   %i.02 = phi i32 [ %inc, %for.body ], [ 0, %for.body.preheader ]
   %add = add nsw i32 %s.03, %i.02
   %inc = add nsw i32 %i.02, 1
@@ -73,7 +73,7 @@ for.body5.preheader:                              ; preds = %for.end
   br label %for.body5
 
 for.body5:                                        ; preds = %for.body5.preheader, %for.body5
-  %s2.06 = phi i32 [ %add6, %for.body5 ], [ 0, %for.body5.preheader ]
+  %s2.06 = phi i32 [ %add6, %for.body5 ], [ 1, %for.body5.preheader ]
   %i1.05 = phi i32 [ %inc8, %for.body5 ], [ 0, %for.body5.preheader ]
   %add6 = add nsw i32 %s2.06, %i1.05
   %inc8 = add nsw i32 %i1.05, 1
