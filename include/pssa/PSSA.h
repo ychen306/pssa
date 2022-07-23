@@ -79,12 +79,12 @@ class VLoop {
 public:
   // Create a top-level "loop"
   VLoop(PredicatedSSA *PSSA)
-      : PSSA(PSSA), IsTopLevel(true), Parent(nullptr), LoopCond(nullptr),
-        BackEdgeCond(nullptr) {}
+      : PSSA(PSSA), IsTopLevel(true), LoopCond(nullptr), BackEdgeCond(nullptr),
+        Parent(nullptr) {}
   VLoop(PredicatedSSA *PSSA, const ControlCondition *LoopCond,
         const ControlCondition *BackEdgeCond, VLoop *Parent = nullptr)
-      : PSSA(PSSA), IsTopLevel(false), Parent(nullptr), LoopCond(LoopCond),
-        BackEdgeCond(BackEdgeCond) {}
+      : PSSA(PSSA), IsTopLevel(false), LoopCond(LoopCond),
+        BackEdgeCond(BackEdgeCond), Parent(Parent) {}
 
   using ItemIterator = decltype(Items)::iterator;
   using ConstItemIterator = decltype(Items)::const_iterator;

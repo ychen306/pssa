@@ -261,7 +261,8 @@ public:
       const DenseMap<Instruction *, const ControlCondition *> &OrigInstConds,
       const DenseMap<VLoop *, const ControlCondition *> &OrigLoopConds,
       DenseMap<Value *, Value *> &ExitGuards)
-      : PSSA(PSSA), OrigInstConds(OrigInstConds), ExitGuards(ExitGuards) {}
+      : PSSA(PSSA), OrigInstConds(OrigInstConds), OrigLoopConds(OrigLoopConds),
+        ExitGuards(ExitGuards) {}
   void trackLoop(VLoop *VL) {
     assert(VL->getParent());
     LoopsWithExits.insert(VL);
@@ -293,7 +294,6 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
   assert(all_of(Items,
                 [&](const Item &It) { return PSSA.getLoopForItem(It) == VL; }));
   Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
-  Item Latest = *std::max_element(Items.begin(), Items.end(), ComesBefore);
 
   DenseSet<Item, ItemHashInfo> Visited;
   DenseSet<const ControlCondition *> VisitedConds;
@@ -361,7 +361,7 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
       for (auto I = std::next(VL->toIterator(Earliest)), E = VL->toIterator(It);
            I != E; ++I) {
         for (auto &It2 : Coupled)
-          if (DepChecker.depends(*I, It))
+          if (DepChecker.depends(*I, It2))
             Visit(*I);
       }
     }
@@ -391,7 +391,7 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
   // Re-insert the removed items at InsertPoint
   auto ReinsertItems = [&Removed, &ItemConds,
                         VL](VLoop::ItemIterator InsertPt) {
-    for (const auto &[It, C] : llvm::zip(Removed, ItemConds)) {
+    for (const auto [It, C] : llvm::zip(Removed, ItemConds)) {
       if (auto *I = It.asInstruction())
         VL->insert(I, C, InsertPt);
       else
@@ -551,8 +551,7 @@ ExitsRemapper::remapCondition(VLoop *UserVL, const ControlCondition *C) {
 }
 
 // Fuse loops and return the final loop
-static VLoop *fuse(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
-                   PredicatedSSA &PSSA) {
+static VLoop *fuse(VLoop *ParentVL, ArrayRef<VLoop *> Loops) {
   assert(Loops.size() > 1);
   assert(all_of(Loops,
                 [ParentVL](VLoop *VL) { return VL->getParent() == ParentVL; }));
@@ -651,7 +650,7 @@ coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
   }
 
   // Fuse the body of the loops together
-  auto *Fused = fuse(ParentVL, Loops, PSSA);
+  auto *Fused = fuse(ParentVL, Loops);
 
   SmallPtrSet<const ControlCondition *, 8> Seen;
   decltype(LoopConds) UniqueLoopConds;
@@ -697,7 +696,7 @@ static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
         return fusible(LeaderVL, VL2, PSSA);
       });
       if (Fusible) {
-        Fused = fuse(VL, Loops, PSSA);
+        Fused = fuse(VL, Loops);
       } else {
         Fused = coIterate(VL, Loops, OrigInstConds, OrigLoopConds, ActiveFlags,
                           PSSA);
@@ -869,7 +868,7 @@ Value *VectorGen::gatherValues(ArrayRef<ValueType> Values,
   }
 
   // 3) Insert the scalar values
-  for (const auto [V, Idx] : SrcScalars)
+  for (const auto &[V, Idx] : SrcScalars)
     Acc = Insert.CreateInsertElement(Acc, V, toInt64(Ctx, Idx));
 
   assert(Acc);
