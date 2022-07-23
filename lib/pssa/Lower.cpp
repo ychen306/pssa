@@ -206,18 +206,31 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
   if (!VL->isLoop())
     return {nullptr, nullptr};
 
-  // Conditionally set the continue flag dependending on the backedge condition
-  assert(ShouldContinueAlloca);
-  new StoreInst(ConstantInt::getTrue(Ctx), ShouldContinueAlloca,
-                BBuilder.getBlockFor(VL->getBackEdgeCond()));
+  // Try to match a simple case where the continue condition is just boolean IR
+  // value
+  Value *ContCond = nullptr;
+  if (auto *And = dyn_cast_or_null<ConditionAnd>(VL->getBackEdgeCond());
+      And && !And->Parent && And->IsTrue) {
+    ContCond = And->Cond;
+  }
+
+  // If there's a complex continue condition ...
+  if (!ContCond) {
+    // Conditionally set the continue flag dependending on the backedge
+    // condition
+    assert(ShouldContinueAlloca);
+    new StoreInst(ConstantInt::getTrue(Ctx), ShouldContinueAlloca,
+                  BBuilder.getBlockFor(VL->getBackEdgeCond()));
+  }
 
   // Join all the control-flow to the latch
   BranchInst::Create(Latch, BBuilder.getBlockFor(nullptr));
   assert(!Latch->getTerminator());
   // Figure out whether we should exit the loop or continue
-  auto *ShouldContinue = new LoadInst(
-      Type::getInt1Ty(Ctx), ShouldContinueAlloca, "should.continue", Latch);
-  BranchInst::Create(Header, Exit, ShouldContinue, Latch);
+  if (!ContCond)
+    ContCond = new LoadInst(Type::getInt1Ty(Ctx), ShouldContinueAlloca,
+                            "should.continue", Latch);
+  BranchInst::Create(Header, Exit, ContCond, Latch);
 
   return {Header, Exit};
 }

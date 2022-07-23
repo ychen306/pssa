@@ -109,19 +109,21 @@ template <typename SequenceTy> SmallItemVector toItems(SequenceTy Seq) {
 }
 
 class VectorGen {
-  ArrayRef<Pack *> Packs;
+  std::vector<Pack *> Packs;
   PredicatedSSA &PSSA;
   DependenceInfo &DI;
   DenseMap<Instruction *, Pack *> InstToPackMap;
   ValueIndex<Value *, Pack> ValueIdx;
   ValueIndex<const ControlCondition *, ConditionPack> MaskIdx;
 
+  // Set unordered is don't care about order of the elements
   template <typename ValueType, typename PackType>
   Value *gatherValues(ArrayRef<ValueType>,
-                      const ValueIndex<ValueType, PackType> &,
-                      Inserter &Insert);
-  Value *gatherOperand(ArrayRef<Value *>, Inserter &);
-  Value *gatherMask(ArrayRef<const ControlCondition *>, Inserter &);
+                      const ValueIndex<ValueType, PackType> &, Inserter &Insert,
+                      bool Unordered);
+  Value *gatherOperand(ArrayRef<Value *>, Inserter &, bool Unordered = false);
+  Value *gatherMask(ArrayRef<const ControlCondition *>, Inserter &,
+                    bool Unordered = false);
 
   Value *gatherOperand(ArrayRef<Value *> Values, VLoop *VL,
                        const ControlCondition *C, VLoop::ItemIterator It) {
@@ -196,18 +198,15 @@ class VectorGen {
 
   SmallVector<Instruction *> DeadInsts;
   DenseSet<Pack *> Lowered;
-  void lowerLoop(VLoop *);
+  void runOnLoop(VLoop *);
+
+  void buildInstToPackMap();
 
 public:
   VectorGen(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI)
       : Packs(Packs), PSSA(PSSA), DI(DI),
         Remapper(VM, RF_None, nullptr, &Extracter) {
-    // Map the packed instruction back to the pack
-    for (auto *P : Packs) {
-      for (auto *I : P->values())
-        if (I)
-          InstToPackMap[I] = P;
-    }
+    buildInstToPackMap();
   }
   void run();
 };
@@ -236,6 +235,8 @@ class ExitsRemapper {
   PredicatedSSA &PSSA;
   const DenseMap<Instruction *, const ControlCondition *> &OrigInstConds;
   DenseMap<VLoop *, const ControlCondition *> OrigLoopConds;
+  DenseMap<Value *, Value *> &ExitGuards;
+
   DenseSet<VLoop *> LoopsWithExits;
   // Mapping <parent of the loops with exits> -> <those loops>
   DenseMap<VLoop *, VLoop *> ParentToChildMap;
@@ -246,6 +247,10 @@ class ExitsRemapper {
   // Mapping <loop, value exiting the loop> -> <the new value>
   DenseMap<std::pair<VLoop *, Value *>, Value *> RemappedExits;
   DenseMap<std::pair<VLoop *, Value *>, Value *> RemappedSubLoopExits;
+
+  Value *guardExitValue(VLoop *VL, Value *V, const Item &It,
+                        const ControlCondition *OrigC,
+                        const ControlCondition *NewC);
   Value *remapLoopExit(VLoop *DefVL, Instruction *I);
   Value *remapSubLoopExit(VLoop *SubVL, Value *V);
   Value *remapValue(VLoop *UserVL, Value *V);
@@ -254,8 +259,9 @@ public:
   ExitsRemapper(
       PredicatedSSA &PSSA,
       const DenseMap<Instruction *, const ControlCondition *> &OrigInstConds,
-      const DenseMap<VLoop *, const ControlCondition *> &OrigLoopConds)
-      : PSSA(PSSA), OrigInstConds(OrigInstConds) {}
+      const DenseMap<VLoop *, const ControlCondition *> &OrigLoopConds,
+      DenseMap<Value *, Value *> &ExitGuards)
+      : PSSA(PSSA), OrigInstConds(OrigInstConds), ExitGuards(ExitGuards) {}
   void trackLoop(VLoop *VL) {
     assert(VL->getParent());
     LoopsWithExits.insert(VL);
@@ -460,9 +466,9 @@ static EquivalenceClasses<VLoop *> partitionLoops(ArrayRef<Pack *> Packs,
 // Given an item `It` nested inside `VL` and that `It` produces `V`.
 // Insert a one-hot phi to select `V` only if `NewC` is true.
 // Assuming OrigC is implied by NewC (weaker).
-static Value *guardExitValue(VLoop *VL, Value *V, const Item &It,
-                             const ControlCondition *OrigC,
-                             const ControlCondition *NewC) {
+Value *ExitsRemapper::guardExitValue(VLoop *VL, Value *V, const Item &It,
+                                     const ControlCondition *OrigC,
+                                     const ControlCondition *NewC) {
   auto *Ty = V->getType();
   auto *Mu = PHINode::Create(Ty, 2);
   Mu->setNumHungOffUseOperands(2);
@@ -472,6 +478,7 @@ static Value *guardExitValue(VLoop *VL, Value *V, const Item &It,
       InsertAfter.createOneHotPhi(NewC, V /*if true*/, Mu /*if false*/);
   Mu->setIncomingValue(1, Guarded);
   VL->addMu(Mu);
+  ExitGuards.try_emplace(Guarded, Mu);
   return Guarded;
 }
 
@@ -563,6 +570,8 @@ static VLoop *fuse(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
         if (auto *PN = dyn_cast<PHINode>(I)) {
           assert(VL->isGatedPhi(PN));
           Leader->insert(PN, VL->getPhiConditions(PN), C);
+          if (VL->isOneHotPhi(PN))
+            Leader->markOneHot(PN);
         } else {
           Leader->insert(I, C);
         }
@@ -591,7 +600,7 @@ static VLoop *
 coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
           DenseMap<Instruction *, const ControlCondition *> &OrigInstConds,
           DenseMap<VLoop *, const ControlCondition *> &OrigLoopConds,
-          PredicatedSSA &PSSA) {
+          DenseSet<PHINode *> &ActiveFlags, PredicatedSSA &PSSA) {
   SmallVector<const ControlCondition *> LoopConds, BackEdgeConds;
   for (auto *CoVL : Loops)
     LoopConds.push_back(CoVL->getLoopCond());
@@ -609,6 +618,7 @@ coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
 
     ///////// Compute the active flag for CoVL //////////
     auto *Active = PHINode::Create(Int1Ty, 2);
+    ActiveFlags.insert(Active);
     Active->setName("active");
 
     auto *ShouldEnter =
@@ -656,10 +666,12 @@ coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
 }
 
 static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
-                       PredicatedSSA &PSSA, DependenceChecker &DepChecker) {
+                       PredicatedSSA &PSSA, DependenceChecker &DepChecker,
+                       DenseMap<Value *, Value *> &ExitGuards,
+                       DenseSet<PHINode *> &ActiveFlags) {
   DenseMap<Instruction *, const ControlCondition *> OrigInstConds;
   DenseMap<VLoop *, const ControlCondition *> OrigLoopConds;
-  ExitsRemapper Remapper(PSSA, OrigInstConds, OrigLoopConds);
+  ExitsRemapper Remapper(PSSA, OrigInstConds, OrigLoopConds, ExitGuards);
 
   std::function<void(VLoop *)> FuseRec = [&](VLoop *VL) {
     // First pass: identify loops that we want to fuse
@@ -687,7 +699,8 @@ static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
       if (Fusible) {
         Fused = fuse(VL, Loops, PSSA);
       } else {
-        Fused = coIterate(VL, Loops, OrigInstConds, OrigLoopConds, PSSA);
+        Fused = coIterate(VL, Loops, OrigInstConds, OrigLoopConds, ActiveFlags,
+                          PSSA);
         // Remember to rewrite use of values live across bounary of Fused
         Remapper.trackLoop(Fused);
       }
@@ -720,6 +733,7 @@ Value *VectorGen::materializeValue(Value *V) { return Remapper.mapValue(*V); }
 
 Value *VectorGen::materializeValue(const ControlCondition *C,
                                    Inserter &Insert) {
+  C = remapCondition(C);
   if (isImplied(C, Insert.getCondition()))
     return Insert.getTrue();
 
@@ -736,10 +750,17 @@ Value *VectorGen::materializeValue(const ControlCondition *C,
   return Insert.createOneHotPhi(C, Insert.getTrue(), Insert.getFalse());
 }
 
+static bool isPermutationMask(ArrayRef<Constant *> Consts) {
+  SmallVector<int, 8> Idxs(map_range(
+      Consts, [](auto *C) { return cast<ConstantInt>(C)->getZExtValue(); }));
+  sort(Idxs);
+  return ShuffleVectorInst::isIdentityMask(Idxs);
+}
+
 template <typename ValueType, typename PackType>
 Value *VectorGen::gatherValues(ArrayRef<ValueType> Values,
                                const ValueIndex<ValueType, PackType> &ValueIdx,
-                               Inserter &Insert) {
+                               Inserter &Insert, bool Unordered) {
   struct GatherEdge {
     unsigned SrcIndex;
     unsigned DestIndex;
@@ -808,13 +829,14 @@ Value *VectorGen::gatherValues(ArrayRef<ValueType> Values,
 
     auto *Mask = ConstantVector::get(MaskValues);
     Value *Gather;
-    // Minor optimization: avoid unnecessary shuffle.
     unsigned SrcSize = cast<FixedVectorType>(Src->getType())->getNumElements();
-    if (SrcSize == NumValues && ShuffleVectorInst::isIdentityMask(Mask))
+    if (SrcSize == NumValues && ((Unordered && isPermutationMask(MaskValues)) ||
+                                 ShuffleVectorInst::isIdentityMask(Mask))) {
       Gather = Src;
-    else
+    } else {
       Gather = Insert.make<ShuffleVectorInst>(
           Src, UndefValue::get(Src->getType()), Mask);
+    }
 
     PartialGathers.push_back({DefinedBits, Gather});
   }
@@ -854,8 +876,9 @@ Value *VectorGen::gatherValues(ArrayRef<ValueType> Values,
   return Acc;
 }
 
-Value *VectorGen::gatherOperand(ArrayRef<Value *> Values, Inserter &Insert) {
-  return gatherValues<Value *, Pack>(Values, ValueIdx, Insert);
+Value *VectorGen::gatherOperand(ArrayRef<Value *> Values, Inserter &Insert,
+                                bool Unordered) {
+  return gatherValues(Values, ValueIdx, Insert, Unordered);
 }
 
 // FIXME: maybe we need to adjust the condition under which we emit the
@@ -874,7 +897,7 @@ void VectorGen::emitConditionPack(const ConditionPack *CP, Inserter &Insert) {
 }
 
 Value *VectorGen::gatherMask(ArrayRef<const ControlCondition *> Conds,
-                             Inserter &Insert) {
+                             Inserter &Insert, bool Unordered) {
   // Materialize the ConditionPacks that contribute to Conds
   for (auto *C : Conds) {
     auto *CP = CondToPackMap.lookup(C);
@@ -886,16 +909,19 @@ Value *VectorGen::gatherMask(ArrayRef<const ControlCondition *> Conds,
       emitConditionPack(CP, Insert);
   }
 
-  return gatherValues<const ControlCondition *, ConditionPack>(Conds, MaskIdx,
-                                                               Insert);
+  return gatherValues(Conds, MaskIdx, Insert, Unordered);
 }
 
+// FIXME: clean this up
 // Run the bottom-up heuristic to produce the required vector masks
+// Also pack any of the active flags encountered along the way
 static void packConditions(ArrayRef<VectorMask> Masks,
-                           SmallVectorImpl<ConditionPack *> &CondPacks) {
+                           DenseSet<PHINode *> &ActiveFlags,
+                           SmallVectorImpl<ConditionPack *> &CondPacks,
+                           std::vector<Pack *> &Packs, PredicatedSSA &PSSA) {
   DenseSet<VectorMask, VectorHashInfo<VectorMask>> Visited;
   SmallVector<VectorMask> Worklist(Masks.begin(), Masks.end());
-
+  DenseSet<Value *> Packed;
   while (!Worklist.empty()) {
     auto Mask = Worklist.pop_back_val();
     if (!Visited.insert(Mask).second)
@@ -911,6 +937,43 @@ static void packConditions(ArrayRef<VectorMask> Masks,
     if (CP) {
       CondPacks.push_back(CP);
       Worklist.append(CP->getOperandMasks());
+      // If the conditions uses any of the active flags,
+      // pack those active flags together
+      for (const OperandPack &O : CP->getOperands()) {
+        SmallVector<Instruction *> ActiveMus;
+        for (auto *V : O) {
+          auto *PN = dyn_cast<PHINode>(V);
+          if (!PN || !ActiveFlags.count(PN) || Packed.count(PN))
+            break;
+          assert(PSSA.isOneHotPhi(cast<PHINode>(PN->getOperand(0))));
+          assert(PSSA.isOneHotPhi(cast<PHINode>(PN->getOperand(1))));
+          ActiveMus.push_back(PN);
+        }
+        Packed.insert(ActiveMus.begin(), ActiveMus.end());
+        if (ActiveMus.size() != O.size())
+          continue;
+        if (auto *P = MuPack::tryPack(ActiveMus, PSSA)) {
+          Packs.push_back(P);
+          for (auto &O : P->getOperands()) {
+            SmallVector<Instruction *> Insts;
+            for (auto *V : O) {
+              auto *I = dyn_cast<Instruction>(V);
+              if (!I || Packed.count(I))
+                break;
+              Insts.push_back(I);
+            }
+            if (Insts.size() != O.size())
+              continue;
+            Packed.insert(Insts.begin(), Insts.end());
+            auto *P2 = BlendPack::tryPack(Insts, PSSA);
+            if (P2) {
+              Packs.push_back(P2);
+              auto Masks = P2->masks();
+              Worklist.append(Masks.begin(), Masks.end());
+            }
+          }
+        }
+      }
     }
   }
 }
@@ -980,12 +1043,28 @@ static bool canSpeculateAt(Value *V, const ControlCondition *C,
   return true;
 }
 
-void VectorGen::lowerLoop(VLoop *VL) {
+void VectorGen::runOnLoop(VLoop *VL) {
+  auto IsPacked = [&](auto *C) -> bool { return CondToPackMap.count(C); };
+
+  auto *LoopCond = VL->getLoopCond();
+  if (auto *Or = dyn_cast_or_null<ConditionOr>(LoopCond);
+      Or && any_of(Or->Conds, IsPacked)) {
+    auto *ParentVL = VL->getParent();
+    assert(ParentVL);
+    Inserter InsertBefore(ParentVL, nullptr, ParentVL->toIterator(VL));
+    auto *Vec = gatherMask(Or->Conds, InsertBefore, true /*unordered*/);
+    auto *Rdx = InsertBefore.createOrReduce(Vec);
+    VL->setLoopCond(PSSA.getAnd(nullptr, Rdx, true));
+  } else {
+    VL->setLoopCond(remapCondition(VL->getLoopCond()));
+  }
+
   // Start by lowering the mu packs
   SmallVector<std::pair<PHINode *, Pack *>> MusToPatch;
   SmallVector<PHINode *> Mus(VL->mus());
   for (auto *Mu : Mus) {
     Pack *P = InstToPackMap.lookup(Mu);
+    markAsProcessed(Mu);
     if (!P) {
       remapInstruction(Mu);
       continue;
@@ -1016,8 +1095,7 @@ void VectorGen::lowerLoop(VLoop *VL) {
   SmallVector<Item> Items(VL->item_begin(), VL->item_end());
   for (auto &It : Items) {
     if (auto *SubVL = It.asLoop()) {
-      SubVL->setLoopCond(remapCondition(SubVL->getLoopCond()));
-      lowerLoop(SubVL);
+      runOnLoop(SubVL);
       continue;
     }
 
@@ -1077,13 +1155,73 @@ void VectorGen::lowerLoop(VLoop *VL) {
     }
   }
 
-  VL->setBackEdgeCond(remapCondition(VL->getBackEdgeCond()));
+  if (!VL->isLoop())
+    return;
+
+  auto *BackEdgeC = VL->getBackEdgeCond();
+  if (auto *Or = dyn_cast_or_null<ConditionOr>(BackEdgeC);
+      Or && any_of(Or->Conds, IsPacked)) {
+    Inserter InsertAtEnd(VL, nullptr, VL->item_end());
+    auto *Vec = gatherMask(Or->Conds, InsertAtEnd, true /*unordered*/);
+    auto *Rdx = InsertAtEnd.createOrReduce(Vec);
+    VL->setBackEdgeCond(PSSA.getAnd(nullptr, Rdx, true));
+  } else {
+    VL->setBackEdgeCond(remapCondition(BackEdgeC));
+  }
 
   // Gather the recursive def. of the mu nodes at the end of the loop
   for (auto [Mu, P] : MusToPatch)
     Mu->setIncomingValue(
         1, gatherOperand(P->getOperands()[1], VL, nullptr, VL->item_end()));
 };
+
+void VectorGen::buildInstToPackMap() {
+  // Map the packed instruction back to the pack
+  for (auto *P : Packs) {
+    for (auto *I : P->values())
+      if (I)
+        InstToPackMap[I] = P;
+  }
+}
+
+// Run the bottom-up heuristic but only pack exit guards
+static std::vector<Pack *>
+packExitGuards(ArrayRef<Pack *> OrigPacks,
+               DenseMap<Value *, Value *> &ExitGuards, PredicatedSSA &PSSA) {
+  std::vector<Pack *> Packs;
+  DenseSet<Value *> Packed;
+  SmallVector<Pack *> Worklist(OrigPacks.begin(), OrigPacks.end());
+  while (!Worklist.empty()) {
+    auto *P = Worklist.pop_back_val();
+    for (const OperandPack &O : P->getOperands()) {
+      SmallVector<Instruction *> Guards;
+      SmallVector<Instruction *> Mus;
+      for (auto *V : O) {
+        auto *Mu = ExitGuards.lookup(V);
+        if (!Mu)
+          break;
+        // Don't pack instructions more than once
+        if (Packed.count(V) || Packed.count(Mu))
+          break;
+        Guards.push_back(cast<Instruction>(V));
+        Mus.push_back(cast<Instruction>(Mu));
+      }
+      if (Guards.size() != O.size())
+        continue;
+      Packed.insert(Guards.begin(), Guards.end());
+      Packed.insert(Mus.begin(), Mus.end());
+      if (auto *P = BlendPack::tryPack(Guards, PSSA)) {
+        Worklist.push_back(P);
+        Packs.push_back(P);
+      }
+      if (auto *P = MuPack::tryPack(Mus, PSSA)) {
+        Worklist.push_back(P);
+        Packs.push_back(P);
+      }
+    }
+  }
+  return Packs;
+}
 
 void VectorGen::run() {
   // When we pack consecutive loads or stores with different
@@ -1106,7 +1244,9 @@ void VectorGen::run() {
   // Figure out the loops that we need to fuse.
   EquivalenceClasses<VLoop *> LoopsToFuse = partitionLoops(Packs, PSSA);
   // Fuse the loops top-down
-  mergeLoops(LoopsToFuse, PSSA, DepChecker);
+  DenseMap<Value *, Value *> ExitGuards;
+  DenseSet<PHINode *> ActiveFlags;
+  mergeLoops(LoopsToFuse, PSSA, DepChecker, ExitGuards, ActiveFlags);
   // Move the packed instructions together
   for (auto *P : Packs) {
     if (isa<MuPack>(P))
@@ -1115,7 +1255,13 @@ void VectorGen::run() {
   }
   //==== End scheduling ====//
 
-  //==== Begin secondary packing (to pack conditions) ====//
+  //==== Begin secondary packing ====//
+  // Pack the exit guards
+  for (auto *P : packExitGuards(Packs, ExitGuards, PSSA))
+    Packs.push_back(P);
+  // Rebuild the map after we added more packs
+  buildInstToPackMap();
+  // Pack the conditions
   // TODO: expose this as a decision for the user?
   SmallVector<VectorMask> Masks;
   for (auto *P : Packs) {
@@ -1124,18 +1270,18 @@ void VectorGen::run() {
   }
   SmallVector<ConditionPack *> CondPacks;
   DeleteGuard DeleteLater(CondPacks);
-
   if (!DontPackConditions) {
-    packConditions(Masks, CondPacks);
+    packConditions(Masks, ActiveFlags, CondPacks, Packs, PSSA);
+    buildInstToPackMap();
     // Map each condition to the pack that produces it
     for (auto *CP : CondPacks)
       for (auto *C : CP->values())
         CondToPackMap.try_emplace(C, CP);
   }
-  //==== End secondaryy packing ====//
+  //==== End secondary packing ====//
 
   //==== Generate vector code from the packs ====//
-  lowerLoop(&PSSA.getTopLevel());
+  runOnLoop(&PSSA.getTopLevel());
 
   //==== Remove the instructions killed by vectorization ====//
   for (auto *I : DeadInsts) {

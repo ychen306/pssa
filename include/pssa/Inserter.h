@@ -42,6 +42,7 @@ public:
   llvm::Value *createMaskedGather(llvm::Type *Ty, llvm::Value *Ptrs,
                                   llvm::Align, llvm::Value *Mask) const;
   llvm::Value *createVectorSplat(unsigned NumElems, llvm::Value *V) const;
+  llvm::Value *createOrReduce(llvm::Value *) const;
 
   // Wrapper around <InstType>::Create
   template <typename InstType, typename... ArgTypes>
@@ -56,9 +57,11 @@ public:
 
   // Specialized builder with const folding
   llvm::Value *CreateInsertElement(llvm::Value *Vec, llvm::Value *Elt,
-                                   llvm::Value *Idx);
+                                   llvm::Value *Idx) const;
   llvm::Value *CreateBinOp(llvm::Instruction::BinaryOps, llvm::Value *,
-                           llvm::Value *);
+                           llvm::Value *) const;
+  llvm::Value *CreateSelect(llvm::Value *Cond, llvm::Value *IfTrue,
+                            llvm::Value *IfFalse) const;
 };
 
 #endif // PSSA_INSERTER_H

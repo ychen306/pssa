@@ -46,6 +46,7 @@ protected:
 public:
   PackKind getKind() const { return Kind; }
   llvm::ArrayRef<llvm::Instruction *> values() const { return Insts; }
+  unsigned size() const { return Insts.size(); }
 
   // The default impl. zips the operands of the packed instructions together
   virtual llvm::SmallVector<OperandPack, 2> getOperands() const;
@@ -53,7 +54,7 @@ public:
   virtual void print(llvm::raw_ostream &) const;
   virtual ~Pack() {}
   // Override for masked load/store and blending, etc
-  virtual llvm::ArrayRef<VectorMask> masks() const { return llvm::None; }
+  virtual llvm::SmallVector<VectorMask, 2> masks() const { return {}; }
 };
 
 // This models a vector operation that *reifies*
@@ -116,15 +117,12 @@ public:
 };
 
 class StorePack : public Pack {
-  VectorMask Mask;
-  StorePack(llvm::ArrayRef<llvm::Instruction *> Insts,
-            llvm::ArrayRef<const ControlCondition *> Conds = llvm::None)
-      : Pack(Insts, PK_Store), Mask(Conds.begin(), Conds.end()) {}
+  PredicatedSSA &PSSA;
+  StorePack(llvm::ArrayRef<llvm::Instruction *> Insts, PredicatedSSA &PSSA)
+      : Pack(Insts, PK_Store), PSSA(PSSA) {}
 
 public:
-  llvm::ArrayRef<VectorMask> masks() const override {
-    return Mask.empty() ? llvm::None : llvm::ArrayRef<VectorMask>(Mask);
-  }
+  llvm::SmallVector<VectorMask, 2> masks() const override;
   static StorePack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                             const llvm::DataLayout &, llvm::ScalarEvolution &,
                             llvm::LoopInfo &, PredicatedSSA &);
@@ -134,15 +132,12 @@ public:
 };
 
 class GatherPack : public Pack {
-  VectorMask Mask;
-  GatherPack(llvm::ArrayRef<llvm::Instruction *> Insts,
-             llvm::ArrayRef<const ControlCondition *> Conds = llvm::None)
-      : Pack(Insts, PK_Gather), Mask(Conds.begin(), Conds.end()) {}
+  PredicatedSSA &PSSA;
+  GatherPack(llvm::ArrayRef<llvm::Instruction *> Insts, PredicatedSSA &PSSA)
+      : Pack(Insts, PK_Gather), PSSA(PSSA) {}
 
 public:
-  llvm::ArrayRef<VectorMask> masks() const override {
-    return Mask.empty() ? llvm::None : llvm::ArrayRef<VectorMask>(Mask);
-  }
+  llvm::SmallVector<VectorMask, 2> masks() const override;
   static GatherPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                              PredicatedSSA &);
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
@@ -164,14 +159,14 @@ public:
 // A pack of *divergent * phi
 class BlendPack : public Pack {
   bool IsOneHot;
-  llvm::SmallVector<VectorMask, 2> Masks;
-  BlendPack(llvm::ArrayRef<llvm::Instruction *> Insts, bool IsOneHot)
-      : Pack(Insts, PK_Blend), IsOneHot(IsOneHot) {}
+  PredicatedSSA &PSSA;
+  BlendPack(llvm::ArrayRef<llvm::Instruction *> Insts, bool IsOneHot, PredicatedSSA &PSSA)
+      : Pack(Insts, PK_Blend), IsOneHot(IsOneHot), PSSA(PSSA) {}
 
 public:
   static BlendPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                             PredicatedSSA &PSSA);
-  llvm::ArrayRef<VectorMask> masks() const override { return Masks; }
+  llvm::SmallVector<VectorMask, 2> masks() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_Blend; }
 };

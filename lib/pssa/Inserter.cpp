@@ -99,7 +99,7 @@ Value *Inserter::createMaskedGather(Type *Ty, Value *Ptrs, Align Alignment,
                                OverloadedTypes);
 }
 
-Value *Inserter::CreateInsertElement(Value *Vec, Value *Elt, Value *Idx) {
+Value *Inserter::CreateInsertElement(Value *Vec, Value *Elt, Value *Idx) const {
   if (auto *V = Folder.FoldInsertElement(Vec, Elt, Idx))
     return V;
   return create<InsertElementInst>(Vec, Elt, Idx);
@@ -110,7 +110,12 @@ static bool isOne(Value *V) {
   return C && C->isOneValue();
 }
 
-Value *Inserter::CreateBinOp(Instruction::BinaryOps Opc, Value *A, Value *B) {
+static bool isZero(Value *V) {
+  auto *C = dyn_cast<Constant>(V);
+  return C && C->isZeroValue();
+}
+
+Value *Inserter::CreateBinOp(Instruction::BinaryOps Opc, Value *A, Value *B) const {
   if (auto *V = Folder.FoldBinOp(Opc, A, B))
     return V;
   // Try harder to constant-fold away `AND X, true`
@@ -123,6 +128,13 @@ Value *Inserter::CreateBinOp(Instruction::BinaryOps Opc, Value *A, Value *B) {
   return create<BinaryOperator>(Opc, A, B);
 }
 
+Value *Inserter::CreateSelect(Value *Cond, Value *IfTrue, Value *IfFalse) const {
+  // select c, true, false -> c
+  if (isOne(IfTrue) && isZero(IfFalse))
+    return Cond;
+  return create<SelectInst>(Cond, IfTrue, IfFalse);
+}
+
 Value *Inserter::createVectorSplat(unsigned NumElems, Value *V) const {
   auto *Ty = V->getType();
   auto *VecTy = FixedVectorType::get(Ty, NumElems);
@@ -130,4 +142,17 @@ Value *Inserter::createVectorSplat(unsigned NumElems, Value *V) const {
       create<InsertElementInst>(PoisonValue::get(VecTy), V, getInt32(0));
   SmallVector<int, 16> Zeros(NumElems, 0);
   return make<ShuffleVectorInst>(Init, Zeros);
+}
+
+static Value *getReductionIntrinsic(Intrinsic::ID ID, Value *Src, Module *M,
+                                    const Inserter &Insert) {
+  Value *Ops[] = {Src};
+  Type *Tys[] = {Src->getType()};
+  auto Decl = Intrinsic::getDeclaration(M, ID, Tys);
+  return Insert.create<CallInst>(Decl, Ops);
+}
+
+Value *Inserter::createOrReduce(Value *Src) const {
+  Module *M = VL->getPSSA()->getFunction()->getParent();
+  return getReductionIntrinsic(Intrinsic::vector_reduce_or, Src, M, *this);
 }

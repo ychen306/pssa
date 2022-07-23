@@ -85,7 +85,7 @@ Value *SIMDPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
 
   if (isa<SelectInst>(I)) {
     assert(Operands.size() == 3);
-    return Insert.create<SelectInst>(Operands[0], Operands[1], Operands[2]);
+    return Insert.CreateSelect(Operands[0], Operands[1], Operands[2]);
   }
 
   if (auto *Cast = dyn_cast<CastInst>(I)) {
@@ -211,13 +211,18 @@ StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
     SortedStores.push_back(Insts[SortedIdx]);
   }
 
-  SmallVector<const ControlCondition *> Conds(
-      map_range(Insts, [&PSSA](auto *I) { return PSSA.getInstCond(I); }));
+  return new StorePack(SortedStores, PSSA);
+}
+
+
+SmallVector<VectorMask, 2> StorePack::masks() const {
+  VectorMask Conds(
+      map_range(Insts, [this](auto *I) { return PSSA.getInstCond(I); }));
   auto *C = Conds.front();
   if (all_of(drop_begin(Conds),
              [&](auto *C2) { return PSSA.isEquivalent(C, C2); }))
-    return new StorePack(SortedStores);
-  return new StorePack(SortedStores, Conds);
+    return {};
+  return { Conds };
 }
 
 SmallVector<OperandPack, 2> StorePack::getOperands() const {
@@ -228,8 +233,8 @@ SmallVector<OperandPack, 2> StorePack::getOperands() const {
 }
 
 Value *StorePack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
-  assert(!Mask.empty() || Operands.size() == 1);
-  assert(Mask.empty() || Operands.size() == 2);
+  bool Masking = Operands.size() == 2;
+  assert(Masking || Operands.size() == 1);
 
   auto *Store = cast<StoreInst>(Insts.front());
   auto *Ptr = Store->getPointerOperand();
@@ -239,7 +244,7 @@ Value *StorePack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
         Ptr, PointerType::get(Operands.front()->getType(),
                               Store->getPointerAddressSpace()));
   }
-  if (Mask.empty())
+  if (!Masking)
     return Insert.make<StoreInst>(Operands.front(), Ptr, false /*is volatile*/,
                                   Store->getAlign());
   return Insert.createMaskedStore(Operands.front(), Ptr, Store->getAlign(),
@@ -254,19 +259,20 @@ GatherPack *GatherPack::tryPack(ArrayRef<Instruction *> Insts,
              [Ty](auto *I) { return !isa<LoadInst>(I) || I->getType() != Ty; }))
     return nullptr;
 
-  SmallVector<const ControlCondition *> Conds(
-      map_range(Insts, [&PSSA](auto *I) { return PSSA.getInstCond(I); }));
+  return new GatherPack(Insts, PSSA);
+}
+
+SmallVector<VectorMask, 2> GatherPack::masks() const {
+  VectorMask Conds(
+      map_range(Insts, [this](auto *I) { return PSSA.getInstCond(I); }));
   auto *C = Conds.front();
   if (all_of(drop_begin(Conds),
              [&](auto *C2) { return PSSA.isEquivalent(C, C2); }))
-    return new GatherPack(Insts);
-  return new GatherPack(Insts, Conds);
+    return {};
+  return {Conds};
 }
 
 Value *GatherPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
-  assert((Operands.size() == 1 && Mask.empty()) ||
-         (Operands.size() == 2 && !Mask.empty()));
-
   // Figure out the common alignment
   Align Alignment = getLoadStoreAlignment(Insts.front());
   for (auto *I : drop_begin(Insts))
@@ -346,23 +352,27 @@ BlendPack *BlendPack::tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
       return nullptr;
   }
 
-  auto *BlendP = new BlendPack(Insts, IsOneHot);
-  auto &Masks = BlendP->Masks;
+  return new BlendPack(Insts, IsOneHot, PSSA);
+}
 
+SmallVector<VectorMask, 2> BlendPack::masks() const {
   // Number of masks = number of incoming values (i.e., number of operands)
-  Masks.resize(N);
-  for (auto *PN : Phis)
+  unsigned N = Insts.front()->getNumOperands();
+  SmallVector<VectorMask, 2> Masks(N);
+  for (auto *I : Insts) {
+    auto *PN = cast<PHINode>(I);
     for (auto X : enumerate(PSSA.getPhiConditions(PN)))
       Masks[X.index()].push_back(X.value());
+  }
 
   assert((!IsOneHot || (!Masks[0][0] && is_splat(Masks[0]))) &&
          "one-hot phis should have their first conditions be true");
 
-  return BlendP;
+  return Masks;
 }
 
 Value *BlendPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
-  unsigned N = Masks.size();
+  unsigned N = Insts.front()->getNumOperands();
   assert(Operands.size() == N * 2);
 
   auto Values = Operands.drop_back(N);
@@ -370,14 +380,14 @@ Value *BlendPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   if (IsOneHot) {
     assert(N == 2);
     // The convention is the gating condition is set last for a one-hot phi
-    return Insert.create<SelectInst>(MaskVals.back(), Values.back(),
+    return Insert.CreateSelect(MaskVals.back(), Values.back(),
                                      Values.front());
   }
 
   // Emit a chain of select
   auto *Select = Values.back();
   for (auto [M, V] : drop_begin(reverse(zip(MaskVals, Values))))
-    Select = Insert.create<SelectInst>(M, V, Select);
+    Select = Insert.CreateSelect(M, V, Select);
   return Select;
 }
 

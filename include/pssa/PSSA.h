@@ -104,6 +104,11 @@ public:
   ItemIterator insert(VLoop *,
                       llvm::Optional<ItemIterator> InsertBefore = llvm::None);
 
+  void markOneHot(llvm::PHINode *PN) {
+    assert(isGatedPhi(PN));
+    OneHotPhis.insert(PN);
+  }
+
   // Get the iteartor pointing to It.
   // If It is a Mu node, return Item.begin
   ItemIterator toIterator(const Item &It);
