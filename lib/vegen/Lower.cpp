@@ -5,7 +5,6 @@
 #include "pssa/VectorHashInfo.h"
 #include "vegen/Pack.h"
 #include "llvm/ADT/EquivalenceClasses.h"
-#include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h" // isSafeToSpeculativelyExecute
 #include "llvm/IR/Constants.h"
 #include "llvm/Support/CommandLine.h"

@@ -2,7 +2,6 @@
 #define PSSA_INSERTER_H
 
 #include "pssa/PSSA.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/IR/ConstantFolder.h"
 #include "llvm/Support/Alignment.h"
 

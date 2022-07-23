@@ -6,8 +6,6 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "llvm/IR/IRBuilder.h"
-
 using namespace llvm;
 
 Value *Pack::emit(ArrayRef<Value *>, Inserter &) const {
