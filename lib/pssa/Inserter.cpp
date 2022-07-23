@@ -115,7 +115,8 @@ static bool isZero(Value *V) {
   return C && C->isZeroValue();
 }
 
-Value *Inserter::CreateBinOp(Instruction::BinaryOps Opc, Value *A, Value *B) const {
+Value *Inserter::CreateBinOp(Instruction::BinaryOps Opc, Value *A,
+                             Value *B) const {
   if (auto *V = Folder.FoldBinOp(Opc, A, B))
     return V;
   // Try harder to constant-fold away `AND X, true`
@@ -128,7 +129,8 @@ Value *Inserter::CreateBinOp(Instruction::BinaryOps Opc, Value *A, Value *B) con
   return create<BinaryOperator>(Opc, A, B);
 }
 
-Value *Inserter::CreateSelect(Value *Cond, Value *IfTrue, Value *IfFalse) const {
+Value *Inserter::CreateSelect(Value *Cond, Value *IfTrue,
+                              Value *IfFalse) const {
   // select c, true, false -> c
   if (isOne(IfTrue) && isZero(IfFalse))
     return Cond;

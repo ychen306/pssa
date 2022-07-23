@@ -214,7 +214,6 @@ StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
   return new StorePack(SortedStores, PSSA);
 }
 
-
 SmallVector<VectorMask, 2> StorePack::masks() const {
   VectorMask Conds(
       map_range(Insts, [this](auto *I) { return PSSA.getInstCond(I); }));
@@ -222,7 +221,7 @@ SmallVector<VectorMask, 2> StorePack::masks() const {
   if (all_of(drop_begin(Conds),
              [&](auto *C2) { return PSSA.isEquivalent(C, C2); }))
     return {};
-  return { Conds };
+  return {Conds};
 }
 
 SmallVector<OperandPack, 2> StorePack::getOperands() const {
@@ -380,8 +379,7 @@ Value *BlendPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   if (IsOneHot) {
     assert(N == 2);
     // The convention is the gating condition is set last for a one-hot phi
-    return Insert.CreateSelect(MaskVals.back(), Values.back(),
-                                     Values.front());
+    return Insert.CreateSelect(MaskVals.back(), Values.back(), Values.front());
   }
 
   // Emit a chain of select

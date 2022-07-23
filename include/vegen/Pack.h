@@ -160,7 +160,8 @@ public:
 class BlendPack : public Pack {
   bool IsOneHot;
   PredicatedSSA &PSSA;
-  BlendPack(llvm::ArrayRef<llvm::Instruction *> Insts, bool IsOneHot, PredicatedSSA &PSSA)
+  BlendPack(llvm::ArrayRef<llvm::Instruction *> Insts, bool IsOneHot,
+            PredicatedSSA &PSSA)
       : Pack(Insts, PK_Blend), IsOneHot(IsOneHot), PSSA(PSSA) {}
 
 public:
