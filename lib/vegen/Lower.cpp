@@ -200,13 +200,14 @@ class VectorGen {
   DenseSet<Pack *> Lowered;
   void runOnLoop(VLoop *);
 
-  void buildInstToPackMap();
+  void addPack(Pack *);
 
 public:
-  VectorGen(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI)
-      : Packs(Packs), PSSA(PSSA), DI(DI),
+  VectorGen(ArrayRef<Pack *> ThePacks, PredicatedSSA &PSSA, DependenceInfo &DI)
+      : PSSA(PSSA), DI(DI),
         Remapper(VM, RF_None, nullptr, &Extracter) {
-    buildInstToPackMap();
+          for (auto *P : ThePacks)
+            addPack(P);
   }
   void run();
 };
@@ -1175,13 +1176,13 @@ void VectorGen::runOnLoop(VLoop *VL) {
         1, gatherOperand(P->getOperands()[1], VL, nullptr, VL->item_end()));
 };
 
-void VectorGen::buildInstToPackMap() {
+void VectorGen::addPack(Pack *P) {
   // Map the packed instruction back to the pack
-  for (auto *P : Packs) {
-    for (auto *I : P->values())
-      if (I)
-        InstToPackMap[I] = P;
+  for (auto *I : P->values()) {
+    if (I)
+      InstToPackMap[I] = P;
   }
+  Packs.push_back(P);
 }
 
 // Run the bottom-up heuristic but only pack exit guards
@@ -1258,9 +1259,7 @@ void VectorGen::run() {
   //==== Begin secondary packing ====//
   // Pack the exit guards
   for (auto *P : packExitGuards(Packs, ExitGuards, PSSA))
-    Packs.push_back(P);
-  // Rebuild the map after we added more packs
-  buildInstToPackMap();
+    addPack(P);
   // Pack the conditions
   // TODO: expose this as a decision for the user?
   SmallVector<VectorMask> Masks;
@@ -1271,8 +1270,11 @@ void VectorGen::run() {
   SmallVector<ConditionPack *> CondPacks;
   DeleteGuard DeleteLater(CondPacks);
   if (!DontPackConditions) {
-    packConditions(Masks, ActiveFlags, CondPacks, Packs, PSSA);
-    buildInstToPackMap();
+    std::vector<Pack *> AuxPacks;
+    packConditions(Masks, ActiveFlags, CondPacks, AuxPacks, PSSA);
+    // Index the auxiliary pack
+    for (auto *P : AuxPacks)
+      addPack(P);
     // Map each condition to the pack that produces it
     for (auto *CP : CondPacks)
       for (auto *C : CP->values())
