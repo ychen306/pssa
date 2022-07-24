@@ -336,7 +336,7 @@ BlendPack *BlendPack::tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
   SmallVector<PHINode *, 8> Phis;
   for (auto *I : Insts) {
     auto *PN = dyn_cast<PHINode>(I);
-    if (!PN)
+    if (!PN || !PSSA.isGatedPhi(PN))
       return nullptr;
     Phis.push_back(PN);
   }

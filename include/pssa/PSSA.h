@@ -259,6 +259,11 @@ public:
     return InstToVLoopMap.lookup(PN)->getPhiCondition(PN, i);
   }
 
+  bool isGatedPhi(llvm::PHINode *PN) const {
+    assert(contains(PN));
+    return InstToVLoopMap.lookup(PN)->isGatedPhi(PN);
+  }
+
   bool isOneHotPhi(llvm::PHINode *PN) const {
     assert(contains(PN));
     return InstToVLoopMap.lookup(PN)->isOneHotPhi(PN);
