@@ -230,16 +230,17 @@ static VLoop *nearestCommonParent(VLoop *UserVL, VLoop *DefVL) {
   return UserVL;
 }
 
+template <typename ValueT> using ItemMap = DenseMap<Item, ValueT, ItemHashInfo>;
+
 // Utility to help rewrite the use of loop exit values for co-iteration
 class ExitsRemapper {
   PredicatedSSA &PSSA;
   const DenseMap<Instruction *, const ControlCondition *> &OrigInstConds;
-  DenseMap<VLoop *, const ControlCondition *> OrigLoopConds;
+  const DenseMap<VLoop *, const ControlCondition *> &OrigLoopConds;
+  const ItemMap<Value *> &ItemToActiveMap;
   DenseMap<Value *, Value *> &ExitGuards;
 
   DenseSet<VLoop *> LoopsWithExits;
-  // Mapping <parent of the loops with exits> -> <those loops>
-  DenseMap<VLoop *, VLoop *> ParentToChildMap;
   DenseMap<std::pair<VLoop *, const ControlCondition *>,
            const ControlCondition *>
       RemappedConds;
@@ -249,8 +250,7 @@ class ExitsRemapper {
   DenseMap<std::pair<VLoop *, Value *>, Value *> RemappedSubLoopExits;
 
   Value *guardExitValue(VLoop *VL, Value *V, const Item &It,
-                        const ControlCondition *OrigC,
-                        const ControlCondition *NewC);
+                        const ControlCondition *OrigC);
   Value *remapLoopExit(VLoop *DefVL, Instruction *I);
   Value *remapSubLoopExit(VLoop *SubVL, Value *V);
   Value *remapValue(VLoop *UserVL, Value *V);
@@ -260,13 +260,13 @@ public:
       PredicatedSSA &PSSA,
       const DenseMap<Instruction *, const ControlCondition *> &OrigInstConds,
       const DenseMap<VLoop *, const ControlCondition *> &OrigLoopConds,
+      const ItemMap<Value *> &ItemToActiveMap,
       DenseMap<Value *, Value *> &ExitGuards)
       : PSSA(PSSA), OrigInstConds(OrigInstConds), OrigLoopConds(OrigLoopConds),
-        ExitGuards(ExitGuards) {}
+        ItemToActiveMap(ItemToActiveMap), ExitGuards(ExitGuards) {}
   void trackLoop(VLoop *VL) {
     assert(VL->getParent());
     LoopsWithExits.insert(VL);
-    ParentToChildMap[VL->getParent()] = VL;
   }
   void remapInstruction(VLoop *UserVL, Instruction *I) {
     for (Use &Op : I->operands())
@@ -467,15 +467,15 @@ static EquivalenceClasses<VLoop *> partitionLoops(ArrayRef<Pack *> Packs,
 // Insert a one-hot phi to select `V` only if `NewC` is true.
 // Assuming OrigC is implied by NewC (weaker).
 Value *ExitsRemapper::guardExitValue(VLoop *VL, Value *V, const Item &It,
-                                     const ControlCondition *OrigC,
-                                     const ControlCondition *NewC) {
+                                     const ControlCondition *OrigC) {
   auto *Ty = V->getType();
   auto *Mu = PHINode::Create(Ty, 2);
   Mu->setNumHungOffUseOperands(2);
   Mu->setIncomingValue(0, UndefValue::get(Ty));
   Inserter InsertAfter(VL, OrigC, std::next(VL->toIterator(It)));
-  auto *Guarded =
-      InsertAfter.createOneHotPhi(NewC, V /*if true*/, Mu /*if false*/);
+  auto *Guarded = InsertAfter.createOneHotPhi(
+      PSSA.getAnd(OrigC, ItemToActiveMap.lookup(It), true), V /*if true*/,
+      Mu /*if false*/);
   Mu->setIncomingValue(1, Guarded);
   VL->addMu(Mu);
   ExitGuards.try_emplace(Guarded, Mu);
@@ -486,9 +486,8 @@ Value *ExitsRemapper::remapLoopExit(VLoop *DefVL, Instruction *I) {
   if (auto *Remapped = RemappedExits.lookup({DefVL, I}))
     return Remapped;
 
-  auto *Guarded =
-      guardExitValue(DefVL, I, I /*producer of I is I*/,
-                     OrigInstConds.lookup(I), DefVL->getInstCond(I));
+  auto *Guarded = guardExitValue(DefVL, I, I /*producer of I is I*/,
+                                 OrigInstConds.lookup(I));
   return RemappedExits[{DefVL, I}] = Guarded;
 }
 
@@ -498,22 +497,21 @@ Value *ExitsRemapper::remapSubLoopExit(VLoop *SubVL, Value *V) {
 
   assert(SubVL->getParent());
   auto *Guarded =
-      guardExitValue(SubVL->getParent(), V, SubVL, OrigLoopConds.lookup(SubVL),
-                     SubVL->getLoopCond());
+      guardExitValue(SubVL->getParent(), V, SubVL, OrigLoopConds.lookup(SubVL));
   return RemappedSubLoopExits[{SubVL, V}] = Guarded;
 }
 
 Value *ExitsRemapper::remapValue(VLoop *UserVL, Value *V) {
   if (LoopsWithExits.empty())
-    return V;
+    return nullptr;
 
   auto *I = dyn_cast<Instruction>(V);
   if (!I)
-    return V;
+    return nullptr;
 
   auto *DefVL = PSSA.getLoopForInst(I);
   if (DefVL->contains(UserVL))
-    return V;
+    return nullptr;
 
   assert(DefVL->getParent());
 
@@ -538,8 +536,9 @@ ExitsRemapper::remapCondition(VLoop *UserVL, const ControlCondition *C) {
     return Remapped;
 
   if (auto *And = dyn_cast<ConditionAnd>(C)) {
+    auto *NewCond = remapValue(UserVL, And->Cond);
     auto *Remapped = PSSA.getAnd(remapCondition(UserVL, And->Parent),
-                                 remapValue(UserVL, And->Cond), And->IsTrue);
+                                 NewCond ? NewCond : And->Cond, And->IsTrue);
     return RemappedConds[{UserVL, C}] = Remapped;
   }
 
@@ -599,7 +598,8 @@ static VLoop *
 coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
           DenseMap<Instruction *, const ControlCondition *> &OrigInstConds,
           DenseMap<VLoop *, const ControlCondition *> &OrigLoopConds,
-          DenseSet<PHINode *> &ActiveFlags, PredicatedSSA &PSSA) {
+          ItemMap<Value *> &ItemToActiveMap, DenseSet<PHINode *> &ActiveFlags,
+          PredicatedSSA &PSSA) {
   SmallVector<const ControlCondition *> LoopConds, BackEdgeConds;
   for (auto *CoVL : Loops)
     LoopConds.push_back(CoVL->getLoopCond());
@@ -639,14 +639,18 @@ coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
         auto *C = CoVL->getInstCond(I);
         OrigInstConds[I] = C;
         CoVL->setInstCond(I, PSSA.getAnd(C, Active, true));
+        ItemToActiveMap[I] = Active;
       } else {
         auto *SubVL = It.asLoop();
         assert(SubVL);
         auto *C = SubVL->getLoopCond();
         OrigLoopConds[SubVL] = C;
         SubVL->setLoopCond(PSSA.getAnd(C, Active, true));
+        ItemToActiveMap[SubVL] = Active;
       }
     }
+    for (auto *Mu : CoVL->mus())
+      ItemToActiveMap[Mu] = Active;
   }
 
   // Fuse the body of the loops together
@@ -670,7 +674,9 @@ static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
                        DenseSet<PHINode *> &ActiveFlags) {
   DenseMap<Instruction *, const ControlCondition *> OrigInstConds;
   DenseMap<VLoop *, const ControlCondition *> OrigLoopConds;
-  ExitsRemapper Remapper(PSSA, OrigInstConds, OrigLoopConds, ExitGuards);
+  ItemMap<Value *> ItemToActiveMap;
+  ExitsRemapper Remapper(PSSA, OrigInstConds, OrigLoopConds, ItemToActiveMap,
+                         ExitGuards);
 
   std::function<void(VLoop *)> FuseRec = [&](VLoop *VL) {
     // First pass: identify loops that we want to fuse
@@ -698,8 +704,8 @@ static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
       if (Fusible) {
         Fused = fuse(VL, Loops);
       } else {
-        Fused = coIterate(VL, Loops, OrigInstConds, OrigLoopConds, ActiveFlags,
-                          PSSA);
+        Fused = coIterate(VL, Loops, OrigInstConds, OrigLoopConds,
+                          ItemToActiveMap, ActiveFlags, PSSA);
         // Remember to rewrite use of values live across bounary of Fused
         Remapper.trackLoop(Fused);
       }
