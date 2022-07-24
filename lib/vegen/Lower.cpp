@@ -923,80 +923,6 @@ Value *VectorGen::gatherMask(ArrayRef<const ControlCondition *> Conds,
   return gatherValues(Conds, MaskIdx, Insert, Unordered);
 }
 
-// Try to produce a list of values w/ a blend pack
-static BlendPack *packAsBlends(ArrayRef<Value *> Values,
-                               DenseSet<Value *> &Packed, PredicatedSSA &PSSA) {
-  SmallVector<Instruction *> Insts;
-  for (auto *V : Values) {
-    auto *I = dyn_cast<Instruction>(V);
-    if (!I || Packed.count(I))
-      return nullptr;
-    Insts.push_back(I);
-  }
-  auto *P = BlendPack::tryPack(Insts, PSSA);
-  if (P)
-    Packed.insert(Insts.begin(), Insts.end());
-  return P;
-}
-
-// Run the bottom-up heuristic to produce the required vector masks
-// Also pack any of the active flags encountered along the way
-static void packConditions(ArrayRef<VectorMask> Masks,
-                           DenseSet<PHINode *> &ActiveFlags,
-                           SmallVectorImpl<ConditionPack *> &CondPacks,
-                           std::vector<Pack *> &Packs, PredicatedSSA &PSSA) {
-  DenseSet<VectorMask, VectorHashInfo<VectorMask>> Visited;
-  SmallVector<VectorMask> Worklist(Masks.begin(), Masks.end());
-  DenseSet<Value *> Packed;
-  while (!Worklist.empty()) {
-    auto Mask = Worklist.pop_back_val();
-    if (!Visited.insert(Mask).second)
-      continue;
-
-    // Don't bother packing identical conditions
-    if (is_splat(Mask))
-      continue;
-
-    ConditionPack *CP = AndPack::tryPack(Mask);
-    if (!CP)
-      CP = OrPack::tryPack(Mask);
-    if (!CP)
-      continue;
-
-    CondPacks.push_back(CP);
-    Worklist.append(CP->getOperandMasks());
-
-    // If the conditions uses any of the active flags,
-    // pack those active flags together
-    for (const OperandPack &O : CP->getOperands()) {
-      SmallVector<Instruction *> ActiveMus;
-      for (auto *V : O) {
-        auto *PN = dyn_cast<PHINode>(V);
-        if (!PN || !ActiveFlags.count(PN) || Packed.count(PN))
-          break;
-        ActiveMus.push_back(PN);
-      }
-
-      if (ActiveMus.size() != O.size())
-        continue;
-
-      auto *P = MuPack::tryPack(ActiveMus, PSSA);
-      if (!P)
-        continue;
-      Packs.push_back(P);
-      Packed.insert(ActiveMus.begin(), ActiveMus.end());
-      for (auto &O : P->getOperands()) {
-        auto *P2 = packAsBlends(O, Packed, PSSA);
-        if (!P2)
-          continue;
-        Packs.push_back(P2);
-        auto Masks = P2->masks();
-        Worklist.append(Masks.begin(), Masks.end());
-      }
-    }
-  }
-}
-
 static Value *getLoadStorePointer(Pack *P) {
   if (isa<StorePack>(P) || isa<LoadPack>(P))
     return getLoadStorePointerOperand(P->values().front());
@@ -1203,43 +1129,143 @@ void VectorGen::addPack(Pack *P) {
   Packs.push_back(P);
 }
 
+// If any of the values are guarded, pack the exit guards
+static std::pair<BlendPack *, MuPack *>
+packExitGuard(ArrayRef<Value *> Values,
+              const DenseMap<Value *, Value *> &ExitGuards,
+              DenseSet<Value *> &Packed, PredicatedSSA &PSSA) {
+  SmallVector<Instruction *> Guards;
+  SmallVector<Instruction *> Mus;
+  for (auto *V : Values) {
+    auto *Mu = ExitGuards.lookup(V);
+    if (!Mu)
+      break;
+    // Don't pack instructions more than once
+    if (Packed.count(V) || Packed.count(Mu))
+      break;
+    Guards.push_back(cast<Instruction>(V));
+    Mus.push_back(cast<Instruction>(Mu));
+  }
+  if (Guards.size() != Values.size())
+    return {nullptr, nullptr};
+  auto *BlendP = BlendPack::tryPack(Guards, PSSA);
+  auto *MuP = MuPack::tryPack(Mus, PSSA);
+  if (BlendP)
+    Packed.insert(Guards.begin(), Guards.end());
+  if (MuP)
+    Packed.insert(Mus.begin(), Mus.end());
+  return {BlendP, MuP};
+}
+
 // Run the bottom-up heuristic but only pack exit guards
 static std::vector<Pack *>
 packExitGuards(ArrayRef<Pack *> OrigPacks,
-               DenseMap<Value *, Value *> &ExitGuards, PredicatedSSA &PSSA) {
+               const DenseMap<Value *, Value *> &ExitGuards,
+               PredicatedSSA &PSSA) {
   std::vector<Pack *> Packs;
   DenseSet<Value *> Packed;
   SmallVector<Pack *> Worklist(OrigPacks.begin(), OrigPacks.end());
   while (!Worklist.empty()) {
     auto *P = Worklist.pop_back_val();
     for (const OperandPack &O : P->getOperands()) {
-      SmallVector<Instruction *> Guards;
-      SmallVector<Instruction *> Mus;
-      for (auto *V : O) {
-        auto *Mu = ExitGuards.lookup(V);
-        if (!Mu)
-          break;
-        // Don't pack instructions more than once
-        if (Packed.count(V) || Packed.count(Mu))
-          break;
-        Guards.push_back(cast<Instruction>(V));
-        Mus.push_back(cast<Instruction>(Mu));
+      auto [P1, P2] = packExitGuard(O, ExitGuards, Packed, PSSA);
+      if (P1) {
+        Worklist.push_back(P1);
+        Packs.push_back(P1);
       }
-      if (Guards.size() != O.size())
-        continue;
-      Packed.insert(Guards.begin(), Guards.end());
-      Packed.insert(Mus.begin(), Mus.end());
-      if (auto *P = BlendPack::tryPack(Guards, PSSA)) {
-        Worklist.push_back(P);
-        Packs.push_back(P);
-      }
-      if (auto *P = MuPack::tryPack(Mus, PSSA)) {
-        Worklist.push_back(P);
-        Packs.push_back(P);
+      if (P2) {
+        Worklist.push_back(P2);
+        Packs.push_back(P2);
       }
     }
   }
   return Packs;
+}
+
+// Try to produce a list of values w/ a blend pack
+static BlendPack *packAsBlends(ArrayRef<Value *> Values,
+                               DenseSet<Value *> &Packed, PredicatedSSA &PSSA) {
+  SmallVector<Instruction *> Insts;
+  for (auto *V : Values) {
+    auto *I = dyn_cast<Instruction>(V);
+    if (!I || Packed.count(I))
+      return nullptr;
+    Insts.push_back(I);
+  }
+  auto *P = BlendPack::tryPack(Insts, PSSA);
+  if (P)
+    Packed.insert(Insts.begin(), Insts.end());
+  return P;
+}
+
+// Run the bottom-up heuristic to produce the required vector masks
+// Also pack any of the active flags encountered along the way
+static void packConditions(ArrayRef<VectorMask> Masks,
+                           const DenseMap<Value *, Value *> &ExitGuards,
+                           const DenseSet<PHINode *> &ActiveFlags,
+                           SmallVectorImpl<ConditionPack *> &CondPacks,
+                           std::vector<Pack *> &Packs, PredicatedSSA &PSSA) {
+  DenseSet<VectorMask, VectorHashInfo<VectorMask>> Visited;
+  SmallVector<VectorMask> Worklist(Masks.begin(), Masks.end());
+  DenseSet<Value *> Packed;
+  while (!Worklist.empty()) {
+    auto Mask = Worklist.pop_back_val();
+    if (!Visited.insert(Mask).second)
+      continue;
+
+    // Don't bother packing identical conditions
+    if (is_splat(Mask))
+      continue;
+
+    ConditionPack *CP = AndPack::tryPack(Mask);
+    if (!CP)
+      CP = OrPack::tryPack(Mask);
+    if (!CP)
+      continue;
+
+    CondPacks.push_back(CP);
+    Worklist.append(CP->getOperandMasks());
+
+    for (const OperandPack &O : CP->getOperands()) {
+      // If the conditions use any of guarded loop exit values,
+      // pack the guards
+      auto [BlendP, MuP] = packExitGuard(O, ExitGuards, Packed, PSSA);
+      if (BlendP) {
+        Packs.push_back(BlendP);
+        auto Masks = BlendP->masks();
+        Worklist.append(Masks.begin(), Masks.end());
+      }
+      if (MuP)
+        Packs.push_back(MuP);
+
+      // If the conditions uses any of the active flags,
+      // pack those active flags together
+      SmallVector<Instruction *> ActiveMus;
+      for (auto *V : O) {
+        auto *PN = dyn_cast<PHINode>(V);
+        if (!PN || !ActiveFlags.count(PN) || Packed.count(PN))
+          break;
+        ActiveMus.push_back(PN);
+      }
+
+      if (ActiveMus.size() != O.size())
+        continue;
+
+      auto *P = MuPack::tryPack(ActiveMus, PSSA);
+      if (!P)
+        continue;
+      Packs.push_back(P);
+      Packed.insert(ActiveMus.begin(), ActiveMus.end());
+      for (auto &O : P->getOperands()) {
+        auto *P2 = packAsBlends(O, Packed, PSSA);
+        if (!P2)
+          continue;
+        Packs.push_back(P2);
+        auto Masks = P2->masks();
+        Worklist.append(Masks.begin(), Masks.end());
+      }
+    }
+  }
 }
 
 void VectorGen::run() {
@@ -1289,7 +1315,7 @@ void VectorGen::run() {
   DeleteGuard DeleteLater(CondPacks);
   if (!DontPackConditions) {
     std::vector<Pack *> AuxPacks;
-    packConditions(Masks, ActiveFlags, CondPacks, AuxPacks, PSSA);
+    packConditions(Masks, ExitGuards, ActiveFlags, CondPacks, AuxPacks, PSSA);
     // Index the auxiliary pack
     for (auto *P : AuxPacks)
       addPack(P);
