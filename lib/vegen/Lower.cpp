@@ -719,10 +719,16 @@ static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
 
     // Rewrite the use of values exiting co-iterating loops
     for (auto &It : VL->items()) {
-      // FIXME: remap the conditions of gated phis
       if (auto *I = It.asInstruction()) {
         Remapper.remapInstruction(VL, I);
         VL->setInstCond(I, Remapper.remapCondition(VL, VL->getInstCond(I)));
+        if (auto *PN = dyn_cast<PHINode>(I)) {
+          auto PhiConds = VL->getPhiConditions(PN);
+          for (auto X : enumerate(PhiConds)) {
+            VL->setPhiCondition(PN, X.index(),
+                                Remapper.remapCondition(VL, X.value()));
+          }
+        }
       } else {
         auto *SubVL = It.asLoop();
         assert(SubVL);
