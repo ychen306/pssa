@@ -206,8 +206,8 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
   if (!VL->isLoop())
     return {nullptr, nullptr};
 
-  // Try to match a simple case where the continue condition is just boolean IR
-  // value
+  // Try to match the simple case where
+  // the continue condition is just a boolean IR value
   Value *ContCond = nullptr;
   if (auto *And = dyn_cast_or_null<ConditionAnd>(VL->getBackEdgeCond());
       And && !And->Parent && And->IsTrue) {
