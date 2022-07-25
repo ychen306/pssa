@@ -1,5 +1,5 @@
 ; The following command triggers a crash
-; RUN: pssa-opt -passes=test-vector-codegen co-it-nested.ll -o /dev/null\
+; RUN: pssa-opt -passes=test-vector-codegen %s -o /dev/null\
 ; RUN:   -p s.06,s2.014 -p i.05,i8.013 -p s.13,s2.110 -p j.02,j13.09\
 ; RUN:   -p add,add18 -p inc,inc20 -p cmp2,cmp15 -p inc6,inc23\
 ; RUN:   -p cmp,cmp10 -p s.0.lcssa,s2.0.lcssa\
