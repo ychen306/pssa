@@ -1215,7 +1215,6 @@ static void packConditions(ArrayRef<VectorMask> Masks,
                            PackSet &Packs, PredicatedSSA &PSSA) {
   DenseSet<VectorMask, VectorHashInfo<VectorMask>> Visited;
   SmallVector<VectorMask> Worklist(Masks.begin(), Masks.end());
-  DenseSet<Value *> Packed;
   while (!Worklist.empty()) {
     auto Mask = Worklist.pop_back_val();
     if (!Visited.insert(Mask).second)
@@ -1309,7 +1308,6 @@ void VectorGen::run() {
   SmallVector<ConditionPack *> CondPacks;
   DeleteGuard DeleteLater(CondPacks);
   if (!DontPackConditions) {
-    std::vector<Pack *> AuxPacks;
     packConditions(Masks, ExitGuards, ActiveFlags, CondPacks, Packs, PSSA);
     // Map each condition to the pack that produces it
     for (auto *CP : CondPacks)
