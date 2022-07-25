@@ -474,16 +474,12 @@ static EquivalenceClasses<VLoop *> partitionLoops(ArrayRef<Pack *> Packs,
 // Assuming OrigC is implied by NewC (weaker).
 Value *ExitsRemapper::guardExitValue(VLoop *VL, Value *V, const Item &It,
                                      const ControlCondition *OrigC) {
-  auto *Ty = V->getType();
-  auto *Mu = PHINode::Create(Ty, 2);
-  Mu->setNumHungOffUseOperands(2);
-  Mu->setIncomingValue(0, UndefValue::get(Ty));
+  auto *Mu = VL->createMu(UndefValue::get(V->getType()));
   Inserter InsertAfter(VL, OrigC, std::next(VL->toIterator(It)));
   auto *Guarded = InsertAfter.createOneHotPhi(
       PSSA.getAnd(OrigC, ItemToActiveMap.lookup(It), true), V /*if true*/,
       Mu /*if false*/);
   Mu->setIncomingValue(1, Guarded);
-  VL->addMu(Mu);
   ExitGuards.try_emplace(Guarded, Mu);
   return Guarded;
 }
@@ -614,7 +610,6 @@ coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
                         ParentVL->toIterator(Loops.front()));
 
   auto &Ctx = PSSA.getContext();
-  auto *Int1Ty = Type::getInt1Ty(Ctx);
   auto *True = ConstantInt::getTrue(Ctx);
   auto *False = ConstantInt::getFalse(Ctx);
 
@@ -622,20 +617,16 @@ coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
     Inserter InsertAtEnd(CoVL, nullptr, CoVL->item_end());
 
     ///////// Compute the active flag for CoVL //////////
-    auto *Active = PHINode::Create(Int1Ty, 2);
+    auto *ShouldEnter =
+        InsertBefore.createOneHotPhi(CoVL->getLoopCond(), True, False);
+    auto *Active = CoVL->createMu(ShouldEnter);
     ActiveFlags.insert(Active);
     Active->setName("active");
 
-    auto *ShouldEnter =
-        InsertBefore.createOneHotPhi(CoVL->getLoopCond(), True, False);
     auto *ContCond = PSSA.getAnd(CoVL->getBackEdgeCond(), Active, true);
     auto *ShouldCont = InsertAtEnd.createOneHotPhi(ContCond, True, False);
     BackEdgeConds.push_back(ContCond);
-
-    Active->setNumHungOffUseOperands(2);
-    Active->setIncomingValue(0, ShouldEnter);
     Active->setIncomingValue(1, ShouldCont);
-    CoVL->addMu(Active);
     ////////////////////////////////////////////////////
 
     // Strengthen the conds so the items only execute when CoVL is active
@@ -1031,10 +1022,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
     // Gather the inititial vector before entering the loop
     auto *Init = gatherOperand(Operands[0], ParentVL, VL->getLoopCond(),
                                ParentVL->toIterator(VL));
-    auto *VecMu = PHINode::Create(Init->getType(), 2);
-    VecMu->setNumHungOffUseOperands(2);
-    VecMu->setIncomingValue(0, Init);
-    VL->addMu(VecMu);
+    auto *VecMu = VL->createMu(Init);
     // We will patch up the mu with the recursive def. later.
     MusToPatch.emplace_back(VecMu, P);
 

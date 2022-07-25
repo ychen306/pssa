@@ -106,6 +106,14 @@ void VLoop::addMu(PHINode *PN) {
   PSSA->mapMuToLoop(PN, this);
 }
 
+PHINode *VLoop::createMu(Value *InitVal) {
+  auto *Mu = PHINode::Create(InitVal->getType(), 2);
+  Mu->setNumHungOffUseOperands(2);
+  Mu->setIncomingValue(0, InitVal);
+  addMu(Mu);
+  return Mu;
+}
+
 void VLoop::eraseMu(PHINode *PN) {
   Mus.erase(PN);
   assert(PSSA);

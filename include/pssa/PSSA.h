@@ -9,6 +9,7 @@
 #include "llvm/IR/Instructions.h"
 
 namespace llvm {
+class Type;
 class Loop;
 class LLVMContext;
 class Value;
@@ -144,9 +145,11 @@ public:
   bool isLoop() const { return !IsTopLevel; }
   bool isMu(llvm::PHINode *PN) const { return PN && Mus.count(PN); }
 
-  // Add a phi node as mu. Assume the first value is the init. val and second
-  // rec.
+  // Add a phi node as mu.
+  // Assume the first value is the init. val and second rec.
   void addMu(llvm::PHINode *);
+  // Create an mu node with the recursive val. unspecified
+  llvm::PHINode *createMu(llvm::Value *InitVal);
   void eraseMu(llvm::PHINode *);
 
   llvm::iterator_range<decltype(Mus)::iterator> mus() {
