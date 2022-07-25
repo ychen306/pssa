@@ -229,17 +229,6 @@ public:
   void run();
 };
 
-template <typename ContainerTy> class DeleteGuard {
-  ContainerTy &Container;
-
-public:
-  DeleteGuard(ContainerTy &Container) : Container(Container) {}
-  ~DeleteGuard() {
-    for (auto *X : Container)
-      delete X;
-  }
-};
-
 // FIXME: this has O(n^2) complexity
 static VLoop *nearestCommonParent(VLoop *UserVL, VLoop *DefVL) {
   while (UserVL && !UserVL->contains(DefVL))
@@ -1306,7 +1295,6 @@ void VectorGen::run() {
   for (auto *P : Packs)
     Masks.append(P->masks());
   SmallVector<ConditionPack *> CondPacks;
-  DeleteGuard DeleteLater(CondPacks);
   if (!DontPackConditions) {
     packConditions(Masks, ExitGuards, ActiveFlags, CondPacks, Packs, PSSA);
     // Map each condition to the pack that produces it
@@ -1337,6 +1325,9 @@ void VectorGen::run() {
     if (I->getParent())
       I->eraseFromParent();
   }
+
+  for (auto *CP : CondPacks)
+    delete CP;
 }
 
 void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
