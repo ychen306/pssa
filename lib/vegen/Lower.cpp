@@ -1002,7 +1002,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
   }
 
   // Start by lowering the mu packs
-  SmallVector<std::pair<PHINode *, Pack *>> MusToPatch;
+  DenseMap<PHINode *, Pack *> MusToPatch;
   SmallVector<PHINode *> Mus(VL->mus());
   for (auto *Mu : Mus) {
     markAsProcessed(Mu);
@@ -1024,7 +1024,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
                                ParentVL->toIterator(VL));
     auto *VecMu = VL->createMu(Init);
     // We will patch up the mu with the recursive def. later.
-    MusToPatch.emplace_back(VecMu, P);
+    MusToPatch.try_emplace(VecMu, P);
 
     ValueIdx.insert(VecMu, P);
     Extracter.remember(P, VecMu, VL, nullptr, VL->item_begin());
@@ -1076,6 +1076,13 @@ void VectorGen::runOnLoop(VLoop *VL) {
       ValueIdx.insert(V, P);
       Extracter.remember(P, V, VL, C, Iterator);
       I = cast<Instruction>(V);
+
+      // In some rare cases the packs gets constant-folded
+      // and takes the value of one of its operands,
+      // which can be one of the vec mu nodes.
+      // In this case, we won't bother remapping the instruction
+      if (auto *PN = dyn_cast<PHINode>(I); PN && MusToPatch.count(PN))
+        continue;
     }
 
     // Fix some of the operands if need to.
