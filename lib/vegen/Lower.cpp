@@ -19,6 +19,25 @@ cl::opt<bool>
                        cl::desc("disable secondary (condition) packing"),
                        cl::init(false));
 
+// Utility to track whether any given instructions are packed
+class PackSet {
+  std::vector<Pack *> Packs;
+  DenseMap<Instruction *, Pack *> InstToPackMap;
+
+public:
+  PackSet(ArrayRef<Pack *> Packs) {
+    for (auto *P : Packs)
+      addPack(P);
+  }
+  void addPack(Pack *);
+  bool isPacked(Instruction *I) const { return InstToPackMap.count(I); }
+  Pack *getPackForInst(Instruction *I) const { return InstToPackMap.lookup(I); }
+  operator ArrayRef<Pack *>() const { return Packs; }
+  using iterator = std::vector<Pack *>::const_iterator;
+  iterator begin() const { return Packs.begin(); }
+  iterator end() const { return Packs.end(); }
+};
+
 // Keep track of the values produced by a lowered pack
 template <typename ValueType, typename PackType> class ValueIndex {
 public:
@@ -109,10 +128,9 @@ template <typename SequenceTy> SmallItemVector toItems(SequenceTy Seq) {
 }
 
 class VectorGen {
-  std::vector<Pack *> Packs;
+  PackSet Packs;
   PredicatedSSA &PSSA;
   DependenceInfo &DI;
-  DenseMap<Instruction *, Pack *> InstToPackMap;
   ValueIndex<Value *, Pack> ValueIdx;
   ValueIndex<const ControlCondition *, ConditionPack> MaskIdx;
 
@@ -200,14 +218,10 @@ class VectorGen {
   DenseSet<Pack *> Lowered;
   void runOnLoop(VLoop *);
 
-  void addPack(Pack *);
-
 public:
-  VectorGen(ArrayRef<Pack *> ThePacks, PredicatedSSA &PSSA, DependenceInfo &DI)
-      : PSSA(PSSA), DI(DI), Remapper(VM, RF_None, nullptr, &Extracter) {
-    for (auto *P : ThePacks)
-      addPack(P);
-  }
+  VectorGen(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI)
+      : Packs(Packs), PSSA(PSSA), DI(DI),
+        Remapper(VM, RF_None, nullptr, &Extracter) {}
   void run();
 };
 
@@ -281,8 +295,7 @@ public:
 
 // Move the items together while still preserving dependences
 static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
-                  const DenseMap<Instruction *, Pack *> *InstToPackMap,
-                  DependenceChecker &DepChecker) {
+                  const PackSet *Packs, DependenceChecker &DepChecker) {
   if (Items.size() <= 1)
     return;
 
@@ -341,7 +354,7 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
     ArrayRef<Item> Coupled = It;
     // Process (register) data and control dependences
     if (auto *I = It.asInstruction()) {
-      Pack *P = InstToPackMap ? InstToPackMap->lookup(I) : nullptr;
+      Pack *P = Packs ? Packs->getPackForInst(I) : nullptr;
       // If I is packed with other instructions,
       // we also need to check their dependences
       ArrayRef<Instruction *> Insts = P ? P->values() : I;
@@ -1008,8 +1021,8 @@ void VectorGen::runOnLoop(VLoop *VL) {
   SmallVector<std::pair<PHINode *, Pack *>> MusToPatch;
   SmallVector<PHINode *> Mus(VL->mus());
   for (auto *Mu : Mus) {
-    Pack *P = InstToPackMap.lookup(Mu);
     markAsProcessed(Mu);
+    Pack *P = Packs.getPackForInst(Mu);
     if (!P) {
       remapInstruction(Mu);
       continue;
@@ -1047,7 +1060,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
     auto *I = It.asInstruction();
     assert(I);
     markAsProcessed(I);
-    if (Pack *P = InstToPackMap.lookup(I)) {
+    if (Pack *P = Packs.getPackForInst(I)) {
       DeadInsts.push_back(I);
       if (!Lowered.insert(P).second)
         continue;
@@ -1120,7 +1133,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
         1, gatherOperand(P->getOperands()[1], VL, nullptr, VL->item_end()));
 };
 
-void VectorGen::addPack(Pack *P) {
+void PackSet::addPack(Pack *P) {
   // Map the packed instruction back to the pack
   for (auto *I : P->values()) {
     if (I)
@@ -1296,14 +1309,14 @@ void VectorGen::run() {
   for (auto *P : Packs) {
     if (isa<MuPack>(P))
       continue;
-    merge(PSSA, toItems(P->values()), &InstToPackMap, DepChecker);
+    merge(PSSA, toItems(P->values()), &Packs, DepChecker);
   }
   //==== End scheduling ====//
 
   //==== Begin secondary packing ====//
   // Pack the exit guards
   for (auto *P : packExitGuards(Packs, ExitGuards, PSSA))
-    addPack(P);
+    Packs.addPack(P);
   // Pack the conditions
   // TODO: expose this as a decision for the user?
   SmallVector<VectorMask> Masks;
@@ -1318,7 +1331,7 @@ void VectorGen::run() {
     packConditions(Masks, ExitGuards, ActiveFlags, CondPacks, AuxPacks, PSSA);
     // Index the auxiliary pack
     for (auto *P : AuxPacks)
-      addPack(P);
+      Packs.addPack(P);
     // Map each condition to the pack that produces it
     for (auto *CP : CondPacks)
       for (auto *C : CP->values())
