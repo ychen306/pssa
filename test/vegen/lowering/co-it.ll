@@ -20,7 +20,7 @@
 ; CHECK-NEXT:    [[SUM_NEXT]] = add <2 x i32> [[SUM]], [[IDX]]
 ; CHECK-NEXT:    [[SUM_OUT_NEXT]] = select <2 x i1> [[ACTIVE]], <2 x i32> [[SUM_NEXT]], <2 x i32> [[SUM_OUT]]
 ; CHECK-NEXT:    [[IDX_NEXT]] = add <2 x i32> [[IDX]], <i32 1, i32 1>
-; CHECK-NEXT:    [[LT_N:%.*]] = icmp slt <2 x i32> [[IDX_NEXT]], %i.vec
+; CHECK-NEXT:    [[LT_N:%.*]] = icmp slt <2 x i32> [[IDX_NEXT]], [[N]]
 ; CHECK-NEXT:    [[ACTIVE_NEXT]] = and <2 x i1> [[LT_N]], [[ACTIVE]]
 ; CHECK-NEXT:    [[CONT:%.*]] = call i1 @llvm.vector.reduce.or.v2i1(<2 x i1> [[ACTIVE_NEXT]])
 ; CHECK-NEXT:    br label %[[LATCH]]

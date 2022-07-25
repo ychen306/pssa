@@ -479,7 +479,9 @@ Value *ExitsRemapper::guardExitValue(VLoop *VL, Value *V, const Item &It,
   auto *Guarded = InsertAfter.createOneHotPhi(
       PSSA.getAnd(OrigC, ItemToActiveMap.lookup(It), true), V /*if true*/,
       Mu /*if false*/);
+  Guarded->setName(V->getName() + ".guard");
   Mu->setIncomingValue(1, Guarded);
+  Mu->setName(V->getName() + ".guard");
   ExitGuards.try_emplace(Guarded, Mu);
   return Guarded;
 }
@@ -1023,6 +1025,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
     auto *Init = gatherOperand(Operands[0], ParentVL, VL->getLoopCond(),
                                ParentVL->toIterator(VL));
     auto *VecMu = VL->createMu(Init);
+    VecMu->setName(Mu->getName() + ".mu.vec");
     // We will patch up the mu with the recursive def. later.
     MusToPatch.try_emplace(VecMu, P);
 
@@ -1075,7 +1078,10 @@ void VectorGen::runOnLoop(VLoop *VL) {
       }
       ValueIdx.insert(V, P);
       Extracter.remember(P, V, VL, C, Iterator);
+      auto OrigName = I->getName();
       I = cast<Instruction>(V);
+      if (!I->getType()->isVoidTy())
+        I->setName(OrigName + ".vec");
 
       // In some rare cases the packs gets constant-folded
       // and takes the value of one of its operands,

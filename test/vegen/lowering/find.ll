@@ -8,7 +8,7 @@
 ; CHECK-NEXT:   [[N_SPLAT:%.*]] = insertelement <2 x i32> [[IN_N0]], i32 %n, i64 1
 ; CHECK-NEXT:   [[N_GT_0:%.*]] = icmp sgt <2 x i32> [[N_SPLAT]], zeroinitializer
 ; CHECK-NEXT:   [[INS_N1:%.*]] = insertelement <2 x i32> undef, i32 %n, i64 0
-; CHECK-NEXT:   [[N_SPLAT2:%.*]] = insertelement <2 x i32> %3, i32 %n, i64 1
+; CHECK-NEXT:   [[N_SPLAT2:%.*]] = insertelement <2 x i32> [[INS_N1]], i32 %n, i64 1
 ; CHECK-NEXT:   [[N_SPLAT_WIDE:%.*]] = zext <2 x i32> [[N_SPLAT2]] to <2 x i64>
 ; CHECK:   [[ENTER:%.*]] = call i1 @llvm.vector.reduce.or.v2i1(<2 x i1> [[N_GT_0]])
 ; CHECK-NEXT:   br i1 [[ENTER]], label %[[PREHEADER:.*]], label %[[SKIP:.*]]

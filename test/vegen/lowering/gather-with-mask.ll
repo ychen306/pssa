@@ -4,7 +4,7 @@
 ; CHECK-NEXT:  [[PTRS:%.*]] = load <2 x ptr>, ptr %ptrs, align 8
 ; CHECK-NEXT:  [[IS_NULL:%.*]] = icmp eq <2 x ptr> [[PTRS]], zeroinitializer
 ; CHECK-NEXT:  [[NOT_NULL:%.*]] = xor <2 x i1> [[IS_NULL]], <i1 true, i1 true>
-; CHECK-NEXT:  [[X:%.*]] = call <2 x i32> @llvm.masked.gather.v2i32.v2p0(<2 x ptr> %i.vec, i32 4, <2 x i1> %1, <2 x i32> undef)
+; CHECK-NEXT:  [[X:%.*]] = call <2 x i32> @llvm.masked.gather.v2i32.v2p0(<2 x ptr> [[PTRS]], i32 4, <2 x i1> [[NOT_NULL]], <2 x i32> undef)
 ; CHECK-NEXT:  call void @llvm.masked.store.v2i32.p0(<2 x i32> [[X]], ptr %out, i32 4, <2 x i1> [[NOT_NULL]])
 ; CHECK-NEXT:  ret void
 
