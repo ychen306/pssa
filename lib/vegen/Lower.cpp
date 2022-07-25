@@ -1080,7 +1080,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
       Extracter.remember(P, V, VL, C, Iterator);
       auto OrigName = I->getName();
       I = cast<Instruction>(V);
-      if (!I->getType()->isVoidTy())
+      if (!OrigName.empty())
         I->setName(OrigName + ".vec");
 
       // In some rare cases the packs gets constant-folded
