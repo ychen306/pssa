@@ -1238,11 +1238,9 @@ static void packConditions(ArrayRef<VectorMask> Masks,
       // If the conditions use any of guarded loop exit values,
       // pack the guards
       auto [BlendP, MuP] = packExitGuard(O, ExitGuards, Packs, PSSA);
-      if (BlendP) {
-        auto Masks = BlendP->masks();
-        Worklist.append(Masks.begin(), Masks.end());
-      }
       (void)MuP;
+      if (BlendP)
+        Worklist.append(BlendP->masks());
 
       // If the conditions uses any of the active flags,
       // pack those active flags together
@@ -1265,8 +1263,7 @@ static void packConditions(ArrayRef<VectorMask> Masks,
         auto *P2 = packAsBlends(O, Packs, PSSA);
         if (!P2)
           continue;
-        auto Masks = P2->masks();
-        Worklist.append(Masks.begin(), Masks.end());
+        Worklist.append(P2->masks());
       }
     }
   }
@@ -1309,10 +1306,8 @@ void VectorGen::run() {
   // Pack the conditions
   // TODO: expose this as a decision for the user?
   SmallVector<VectorMask> Masks;
-  for (auto *P : Packs) {
-    auto Ms = P->masks();
-    Masks.append(Ms.begin(), Ms.end());
-  }
+  for (auto *P : Packs)
+    Masks.append(P->masks());
   SmallVector<ConditionPack *> CondPacks;
   DeleteGuard DeleteLater(CondPacks);
   if (!DontPackConditions) {
