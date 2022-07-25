@@ -1274,10 +1274,8 @@ void VectorGen::run() {
   // conditions, we need to weaken the condition C of the address
   // calculation so that C is implied by all the conditions
   for (auto *P : Packs) {
-    if (P->masks().empty())
-      continue;
     auto *Ptr = dyn_cast_or_null<Instruction>(getLoadStorePointer(P));
-    if (!Ptr)
+    if (!Ptr || P->masks().empty())
       continue;
     auto *C = findSpeculativeCond(Ptr, P->values(), PSSA);
     assert(canSpeculateAt(Ptr, C, PSSA));
