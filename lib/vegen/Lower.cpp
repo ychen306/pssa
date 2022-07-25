@@ -1313,10 +1313,8 @@ void VectorGen::run() {
     I->dropAllReferences();
   }
   for (auto *I : DeadInsts) {
-    auto *PN = dyn_cast<PHINode>(I);
-    if (PN && PSSA.isMu(PN)) {
-      auto *VL = PSSA.getLoopForInst(PN);
-      VL->eraseMu(PN);
+    if (auto *PN = dyn_cast<PHINode>(I); PN && PSSA.isMu(PN)) {
+      PSSA.getLoopForInst(PN)->eraseMu(PN);
     } else {
       auto InsertPt = PSSA.getInsertPoint(I);
       InsertPt.VL->erase(InsertPt.It);
