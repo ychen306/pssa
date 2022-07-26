@@ -364,8 +364,8 @@ SmallVector<VectorMask, 2> BlendPack::masks() const {
       Masks[X.index()].push_back(X.value());
   }
 
-  assert((!IsOneHot || (!Masks[0][0] && is_splat(Masks[0]))) &&
-         "one-hot phis should have their first conditions be true");
+  //assert((!IsOneHot || (!Masks[0][0] && is_splat(Masks[0]))) &&
+  //       "one-hot phis should have their first conditions be true");
 
   return Masks;
 }

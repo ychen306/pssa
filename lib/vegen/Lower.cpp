@@ -1189,9 +1189,10 @@ static BlendPack *packAsBlends(ArrayRef<Value *> Values, PackSet &Packs,
                                PredicatedSSA &PSSA) {
   SmallVector<Instruction *> Insts;
   for (auto *V : Values) {
-    if (Packs.isPacked(V))
+    auto *I = dyn_cast<Instruction>(V);
+    if (!I || Packs.isPacked(I))
       return nullptr;
-    Insts.push_back(cast<Instruction>(V));
+    Insts.push_back(I);
   }
   auto *P = BlendPack::tryPack(Insts, PSSA);
   if (P)
