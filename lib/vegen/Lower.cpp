@@ -736,6 +736,7 @@ static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
     }
     for (auto *Mu : VL->mus())
       Remapper.remapInstruction(VL, Mu);
+    VL->setBackEdgeCond(Remapper.remapCondition(VL, VL->getBackEdgeCond()));
   };
 
   FuseRec(&PSSA.getTopLevel());
