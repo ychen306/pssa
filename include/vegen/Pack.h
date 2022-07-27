@@ -57,6 +57,7 @@ public:
   // Override for masked load/store and blending, etc
   virtual llvm::SmallVector<VectorMask, 2> masks() const { return {}; }
   virtual llvm::InstructionCost getCost() const { return 1; }
+  virtual Pack *clone() const = 0;
 };
 
 // This models a vector operation that *reifies*
@@ -104,6 +105,7 @@ public:
   static SIMDPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts);
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_SIMD; }
+  Pack *clone() const override { return new SIMDPack(Insts); }
 };
 
 class LoadPack : public Pack {
@@ -116,6 +118,7 @@ public:
   llvm::SmallVector<OperandPack, 2> getOperands() const override { return {}; }
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_Load; }
+  Pack *clone() const override { return new LoadPack(Insts); }
 };
 
 class StorePack : public Pack {
@@ -131,6 +134,7 @@ public:
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_Store; }
+  Pack *clone() const override { return new StorePack(Insts, PSSA); }
 };
 
 class GatherPack : public Pack {
@@ -144,6 +148,7 @@ public:
                              PredicatedSSA &);
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_Store; }
+  Pack *clone() const override { return new GatherPack(Insts, PSSA); }
 };
 
 // A pack of *convergent* phi
@@ -156,6 +161,7 @@ public:
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
   // No generic ::emit for PHIPack
   static bool classof(const Pack *P) { return P->getKind() == PK_PHI; }
+  Pack *clone() const override { return new PHIPack(Insts); }
 };
 
 // A pack of *divergent * phi
@@ -172,6 +178,7 @@ public:
   llvm::SmallVector<VectorMask, 2> masks() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_Blend; }
+  Pack *clone() const override { return new BlendPack(Insts, IsOneHot, PSSA); }
 };
 
 // A pack of mu (header phi)
@@ -183,6 +190,7 @@ public:
                          PredicatedSSA &PSSA);
   // No generic ::emit for MuPack
   static bool classof(const Pack *P) { return P->getKind() == PK_Mu; }
+  Pack *clone() const override { return new MuPack(Insts); }
 };
 
 // A pack of GEPs
@@ -194,6 +202,7 @@ public:
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_GEP; }
+  Pack *clone() const override { return new GEPPack(Insts); }
 };
 
 class OrPack : public ConditionPack {
