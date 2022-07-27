@@ -3,7 +3,6 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
-#include <memory>
 
 namespace llvm {
 class Value;
@@ -27,7 +26,6 @@ public:
   Packer(PredicatedSSA &PSSA, llvm::DataLayout &DL, llvm::ScalarEvolution &SE,
          llvm::LoopInfo &LI)
       : PSSA(PSSA), DL(DL), SE(SE), LI(LI) {}
-  llvm::SmallVector<std::unique_ptr<Pack *>, 2>
-      getProducers(llvm::ArrayRef<llvm::Value *>);
+  llvm::SmallVector<Pack *, 2> getProducers(llvm::ArrayRef<llvm::Value *>);
 };
 #endif
