@@ -2,6 +2,7 @@
 #include "vegen/Pack.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 
 using namespace llvm;
 
@@ -142,9 +143,60 @@ BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
   return Ret;
 }
 
-// FIXME: finish this
+// Return the cost of `I`.
+// If `I` is not vectorizable, just return a dummy value of 1.
 static InstructionCost getScalarCost(Instruction *I, TargetTransformInfo &TTI) {
-  return 0;
+  auto *Ty = I->getType();
+  if (auto *LI = dyn_cast<LoadInst>(I)) {
+    return TTI.getMemoryOpCost(Instruction::Load, LI->getType(), LI->getAlign(),
+                               0, TTI::TCK_RecipThroughput, LI);
+  }
+
+  if (auto *SI = dyn_cast<StoreInst>(I))
+    return TTI.getMemoryOpCost(Instruction::Store,
+                               SI->getValueOperand()->getType(), SI->getAlign(),
+                               0, TTI::TCK_RecipThroughput, SI);
+
+  if (auto *CI = dyn_cast<CallInst>(I)) {
+    auto *Callee = CI->getCalledFunction();
+    if (!Callee)
+      return 1;
+    auto ID = Callee->getIntrinsicID();
+    switch (ID) {
+    default:
+      return 1;
+    case Intrinsic::sin:
+    case Intrinsic::cos:
+    case Intrinsic::exp:
+    case Intrinsic::exp2:
+    case Intrinsic::log:
+    case Intrinsic::log10:
+    case Intrinsic::log2:
+    case Intrinsic::fabs:
+    case Intrinsic::pow:
+      return TTI.getIntrinsicInstrCost(IntrinsicCostAttributes(ID, Ty, {Ty}),
+                                       TTI::TCK_RecipThroughput);
+    }
+  }
+
+  if (isa<CastInst>(I)) {
+    return TTI.getCastInstrCost(I->getOpcode(), I->getOperand(0)->getType(), Ty,
+                                TTI::getCastContextHint(I),
+                                TTI::TCK_RecipThroughput);
+  }
+
+  if (isa<GetElementPtrInst>(I) || isa<PHINode>(I))
+    return 0;
+  if (Ty->isStructTy() || Ty->isVectorTy())
+    return 1;
+  if (!isa<UnaryOperator>(I) && !isa<BinaryOperator>(I) && !isa<CmpInst>(I) &&
+      !isa<SelectInst>(I))
+    return 1;
+
+  SmallVector<const Value *, 4> Operands(I->operand_values());
+  return TTI.getArithmeticInstrCost(
+      I->getOpcode(), I->getType(), TTI::TCK_RecipThroughput, TTI::OK_AnyValue,
+      TTI::OK_AnyValue, TTI::OP_None, TTI::OP_None, Operands, I);
 }
 
 // Get the cost of producing a value as scalar
@@ -165,5 +217,7 @@ InstructionCost BottomUpHeuristic::getCost(Value *V) {
   return ScalarCosts[I] = Cost;
 }
 
-std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, DataLayout &DL,
-                                 ScalarEvolution &SE, LoopInfo &LI) {}
+std::vector<std::unique_ptr<Pack>> packBottomUp(PredicatedSSA &PSSA,
+                                                DataLayout &DL,
+                                                ScalarEvolution &SE,
+                                                LoopInfo &LI) {}
