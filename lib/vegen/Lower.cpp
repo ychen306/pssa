@@ -1205,7 +1205,7 @@ static BlendPack *packAsBlends(ArrayRef<Value *> Values, PackSet &Packs,
 static void packConditions(ArrayRef<VectorMask> Masks,
                            const DenseMap<Value *, Value *> &ExitGuards,
                            const DenseSet<PHINode *> &ActiveFlags,
-                           SmallVectorImpl<ConditionPack *> &CondPacks,
+                           SmallVectorImpl<std::unique_ptr<ConditionPack>> &CondPacks,
                            PackSet &Packs, PredicatedSSA &PSSA) {
   DenseSet<VectorMask, VectorHashInfo<VectorMask>> Visited;
   SmallVector<VectorMask> Worklist(Masks.begin(), Masks.end());
@@ -1224,7 +1224,7 @@ static void packConditions(ArrayRef<VectorMask> Masks,
     if (!CP)
       continue;
 
-    CondPacks.push_back(CP);
+    CondPacks.emplace_back(CP);
     Worklist.append(CP->getOperandMasks());
 
     for (const OperandPack &O : CP->getOperands()) {
@@ -1299,13 +1299,13 @@ void VectorGen::run() {
   SmallVector<VectorMask> Masks;
   for (auto *P : Packs)
     Masks.append(P->masks());
-  SmallVector<ConditionPack *> CondPacks;
+  SmallVector<std::unique_ptr<ConditionPack>> CondPacks;
   if (!DontPackConditions) {
     packConditions(Masks, ExitGuards, ActiveFlags, CondPacks, Packs, PSSA);
     // Map each condition to the pack that produces it
-    for (auto *CP : CondPacks)
+    for (auto &CP : CondPacks)
       for (auto *C : CP->values())
-        CondToPackMap.try_emplace(C, CP);
+        CondToPackMap.try_emplace(C, CP.get());
   }
   //==== End secondary packing ====//
 
@@ -1328,9 +1328,6 @@ void VectorGen::run() {
     if (I->getParent())
       I->eraseFromParent();
   }
-
-  for (auto *CP : CondPacks)
-    delete CP;
 }
 
 void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
