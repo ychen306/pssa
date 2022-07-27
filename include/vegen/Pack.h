@@ -3,6 +3,7 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/InstructionCost.h"
 
 namespace llvm {
 class Instruction;
@@ -55,6 +56,7 @@ public:
   virtual ~Pack() {}
   // Override for masked load/store and blending, etc
   virtual llvm::SmallVector<VectorMask, 2> masks() const { return {}; }
+  virtual llvm::InstructionCost getCost() const { return 1; }
 };
 
 // This models a vector operation that *reifies*
