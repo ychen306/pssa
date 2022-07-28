@@ -1,3 +1,4 @@
+#include "pssa/PSSA.h"
 #include "pssa/VectorHashInfo.h"
 #include "vegen/Pack.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -24,7 +25,8 @@ public:
 };
 
 class BottomUpHeuristic {
-  Packer &Pkr;
+  PredicatedSSA &PSSA;
+  Packer Pkr;
   TargetTransformInfo &TTI;
 
   struct Solution {
@@ -60,10 +62,13 @@ class BottomUpHeuristic {
   // Get the cost of producing a value as scalar
   DenseMap<Instruction *, InstructionCost> ScalarCosts;
   InstructionCost getCost(Value *);
+  InstructionCost getCost(Pack *);
 
 public:
-  BottomUpHeuristic(Packer &Pkr, TargetTransformInfo &TTI)
-      : Pkr(Pkr), TTI(TTI) {}
+  BottomUpHeuristic(PredicatedSSA &PSSA, llvm::DataLayout &DL,
+                    llvm::ScalarEvolution &SE, llvm::LoopInfo &LI,
+                    TargetTransformInfo &TTI)
+      : PSSA(PSSA), Pkr(PSSA, DL, SE, LI), TTI(TTI) {}
   Pack *getProducer(ArrayRef<Value *> Values) { return solve(Values).P; }
 };
 
@@ -114,10 +119,6 @@ BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
   if (auto It = Solutions.find_as(Values); It != Solutions.end())
     return It->second;
 
-  // Set a dummy, default cost of zero to deal with mu (header phi)
-  // nodes which cause infinite recursion
-  Solutions.try_emplace(ValueVector(Values.begin(), Values.end()), nullptr, 0);
-
   // The base line is producing the vector elts as scalar and insert them
   InstructionCost ScalarCost = 0;
   for (auto X : enumerate(Values)) {
@@ -131,16 +132,24 @@ BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
   }
 
   Solution Soln(nullptr, ScalarCost);
-  for (auto *P : Pkr.getProducers(Values)) {
-    auto Cost = P->getCost();
-    for (auto &O : P->getOperands())
-      Cost += solve(O).Cost;
-    Soln.update(P, Cost);
-  }
+  for (auto *P : Pkr.getProducers(Values))
+    Soln.update(P, getCost(P));
 
   SolutionView Ret = Soln;
   Solutions.find_as(Values)->second = std::move(Soln);
   return Ret;
+}
+
+InstructionCost BottomUpHeuristic::getCost(Pack *P) {
+  // For simplicity,
+  // just consider the cost of the initial defn for mu nodes
+  if (isa<MuPack>(P))
+    return solve(P->getOperands().front()).Cost;
+
+  auto Cost = P->getCost();
+  for (auto &O : P->getOperands())
+    Cost += solve(O).Cost;
+  return Cost;
 }
 
 static InstructionCost getScalarCost(Instruction *I, TargetTransformInfo &TTI) {
@@ -158,8 +167,9 @@ InstructionCost BottomUpHeuristic::getCost(Value *V) {
   if (auto It = ScalarCosts.find(I); It != ScalarCosts.end())
     return It->second;
 
-  // Set a dummy cost of zero to prevent infinite recursion
-  ScalarCosts.try_emplace(I, 0);
+  // Ignore the cost of the rec. defn for mu nodes
+  if (auto *PN = dyn_cast<PHINode>(I); PN && PSSA.isMu(PN))
+    return getCost(PN->getIncomingValue(0));
 
   auto Cost = getScalarCost(I, TTI);
   for (auto *O : I->operand_values())
