@@ -1,9 +1,11 @@
 #include "pssa/PSSA.h"
+#include "pssa/Visitor.h"
 #include "pssa/VectorHashInfo.h"
 #include "vegen/Pack.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/Analysis/ValueTracking.h" // getUnderlyingObject
 
 using namespace llvm;
 
@@ -70,6 +72,23 @@ public:
                     TargetTransformInfo &TTI)
       : PSSA(PSSA), Pkr(PSSA, DL, SE, LI), TTI(TTI) {}
   Pack *getProducer(ArrayRef<Value *> Values) { return solve(Values).P; }
+};
+
+// Group stores by their underlying objects
+class StoreGrouper : public PSSAVisitor<StoreGrouper> {
+public:
+  using ObjToStoreMapTy = std::map<Value *, SmallVector<StoreInst *, 8>>;
+private:
+  ObjToStoreMapTy ObjToStoreMap;
+public:
+  StoreGrouper(ObjToStoreMapTy &ObjToStoreMap) : ObjToStoreMap(ObjToStoreMap) {}
+  void visitInstruction(Instruction *I) {
+    auto *SI = dyn_cast<StoreInst>(I);
+    if (!SI)
+      return;
+    Value *Obj = getUnderlyingObject(SI->getPointerOperand());
+    ObjToStoreMap[Obj].push_back(SI);
+  }
 };
 
 } // namespace
@@ -180,4 +199,7 @@ InstructionCost BottomUpHeuristic::getCost(Value *V) {
 std::vector<std::unique_ptr<Pack>> packBottomUp(PredicatedSSA &PSSA,
                                                 DataLayout &DL,
                                                 ScalarEvolution &SE,
-                                                LoopInfo &LI) {}
+                                                LoopInfo &LI) {
+  StoreGrouper::ObjToStoreMapTy ObjToStoreMap;
+  visitWith<StoreGrouper>(PSSA, ObjToStoreMap);
+}

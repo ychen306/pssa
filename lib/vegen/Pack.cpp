@@ -147,7 +147,7 @@ LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
     return SortedIdxs[i];
   };
 
-  SmallVector<Instruction *, 8> SortedStores = {Insts[GetSortedIdx(0)]};
+  SmallVector<Instruction *, 8> SortedLoads = {Insts[GetSortedIdx(0)]};
   auto *FirstPtr = Ptrs[GetSortedIdx(0)];
   for (unsigned i = 1, N = Insts.size(); i < N; i++) {
     unsigned SortedIdx = GetSortedIdx(i);
@@ -156,10 +156,10 @@ LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
     assert(Diff);
     if (*Diff - i != 0)
       return nullptr;
-    SortedStores.push_back(Insts[SortedIdx]);
+    SortedLoads.push_back(Insts[SortedIdx]);
   }
 
-  return new LoadPack(SortedStores);
+  return new LoadPack(SortedLoads);
 }
 
 Value *LoadPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
