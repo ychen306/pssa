@@ -10,9 +10,10 @@ class ScalarEvolution;
 } // namespace llvm
 
 class Pack;
+class PredicatedSSA;
 
 std::vector<std::unique_ptr<Pack>> packBottomUp(PredicatedSSA &PSSA,
-                                                llvm::DataLayout &DL,
+                                                const llvm::DataLayout &DL,
                                                 llvm::ScalarEvolution &SE,
                                                 llvm::LoopInfo &LI);
 

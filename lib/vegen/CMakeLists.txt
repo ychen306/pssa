@@ -1,5 +1,6 @@
 set(LIB_VEGEN_SRC
     Pack.cpp
+    PackSet.cpp
     Lower.cpp
     AddrUtil.cpp
     TripCount.cpp

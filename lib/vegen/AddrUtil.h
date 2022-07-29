@@ -62,4 +62,21 @@ bool sortByPointers(llvm::ArrayRef<InstT *> Insts,
   return true;
 }
 
+template <typename InstT>
+bool sortByPointers(llvm::ArrayRef<InstT *> Insts,
+                    llvm::SmallVectorImpl<InstT *> &SortedInsts,
+                    const llvm::DataLayout &DL, llvm::ScalarEvolution &SE,
+                    llvm::LoopInfo &LI) {
+  using namespace llvm;
+  SmallVector<Value *, 8> Ptrs;
+  for (auto *I : Insts) {
+    auto *Ptr = getLoadStorePointerOperand(I);
+    if (!Ptr)
+      return false;
+    Ptrs.push_back(Ptr);
+  }
+
+  return sortByPointers(Insts, Ptrs, SortedInsts, DL, SE, LI);
+}
+
 #endif // VEGEN_ADDR_UTIL_H

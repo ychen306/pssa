@@ -1,5 +1,6 @@
 #include "DependenceChecker.h"
 #include "TripCount.h"
+#include "PackSet.h"
 #include "pssa/Inserter.h"
 #include "pssa/PSSA.h"
 #include "pssa/VectorHashInfo.h"
@@ -18,29 +19,6 @@ cl::opt<bool>
     DontPackConditions("disable-cond-packing",
                        cl::desc("disable secondary (condition) packing"),
                        cl::init(false));
-
-// Utility to track whether any given instructions are packed
-class PackSet {
-  std::vector<Pack *> Packs;
-  DenseMap<Instruction *, Pack *> InstToPackMap;
-
-public:
-  PackSet(ArrayRef<Pack *> Packs) {
-    for (auto *P : Packs)
-      add(P);
-  }
-  void add(Pack *);
-  bool isPacked(Instruction *I) const { return InstToPackMap.count(I); }
-  bool isPacked(Value *V) const {
-    auto *I = dyn_cast<Instruction>(V);
-    return I && isPacked(I);
-  }
-  Pack *getPackForInst(Instruction *I) const { return InstToPackMap.lookup(I); }
-  operator ArrayRef<Pack *>() const { return Packs; }
-  using iterator = std::vector<Pack *>::const_iterator;
-  iterator begin() const { return Packs.begin(); }
-  iterator end() const { return Packs.end(); }
-};
 
 // Keep track of the values produced by a lowered pack
 template <typename ValueType, typename PackType> class ValueIndex {
@@ -1129,15 +1107,6 @@ void VectorGen::runOnLoop(VLoop *VL) {
     Mu->setIncomingValue(
         1, gatherOperand(P->getOperands()[1], VL, nullptr, VL->item_end()));
 };
-
-void PackSet::add(Pack *P) {
-  // Map the packed instruction back to the pack
-  for (auto *I : P->values()) {
-    if (I)
-      InstToPackMap[I] = P;
-  }
-  Packs.push_back(P);
-}
 
 // If any of the values are guarded, pack the exit guards
 static std::pair<BlendPack *, MuPack *>

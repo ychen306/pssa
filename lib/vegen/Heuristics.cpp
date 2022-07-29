@@ -1,3 +1,4 @@
+#include "AddrUtil.h"
 #include "pssa/PSSA.h"
 #include "pssa/Visitor.h"
 #include "pssa/VectorHashInfo.h"
@@ -79,7 +80,7 @@ class StoreGrouper : public PSSAVisitor<StoreGrouper> {
 public:
   using ObjToInstMapTy = std::map<Value *, SmallVector<Instruction *, 8>>;
 private:
-  ObjToInstMapTy ObjToStoreMap;
+  ObjToInstMapTy &ObjToStoreMap;
 public:
   StoreGrouper(ObjToInstMapTy &ObjToStoreMap) : ObjToStoreMap(ObjToStoreMap) {}
   void visitInstruction(Instruction *I) {
@@ -197,16 +198,25 @@ InstructionCost BottomUpHeuristic::getCost(Value *V) {
 }
 
 std::vector<std::unique_ptr<Pack>> packBottomUp(PredicatedSSA &PSSA,
-                                                DataLayout &DL,
+                                                const DataLayout &DL,
                                                 ScalarEvolution &SE,
                                                 LoopInfo &LI) {
   StoreGrouper::ObjToInstMapTy ObjToStoreMap;
   visitWith<StoreGrouper>(PSSA, ObjToStoreMap);
 
   for (ArrayRef<Instruction *> Stores : make_second_range(ObjToStoreMap)) {
-    errs() << "<<<<< stores \n";
-    for (auto *I : Stores)
-      errs() << *I << '\n';
-    errs() << ">>>>>>>>\n";
+    SmallVector<Instruction *> SortedStores;
+    // FIXME: deal with cases when there are gaps between the stores
+    if (!sortByPointers(Stores, SortedStores, DL, SE, LI))
+      continue;
+    
+    auto *StoreP = StorePack::tryPack(SortedStores, DL, SE, LI, PSSA);
+    if (!StoreP)
+      continue;
+
+    errs() << "Found seed store pack: " << *StoreP << '\n';
   }
+
+  std::vector<std::unique_ptr<Pack>> Packs;
+  return Packs;
 }
