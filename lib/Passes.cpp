@@ -1,5 +1,6 @@
 #include "pssa/Lower.h"
 #include "pssa/PSSA.h"
+#include "vegen/GlobalSLP.h"
 #include "vegen/Lower.h"
 #include "vegen/Pack.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
@@ -162,6 +163,11 @@ static void buildPasses(PassBuilder &PB) {
           return true;
         }
 
+        if (Name == "global-slp") {
+          FPM.addPass(GlobalSLPPass());
+          return true;
+        }
+
         if (Name == "test-vector-codegen") {
           FPM.addPass(TestVectorGen());
           return true;
@@ -177,10 +183,16 @@ static void buildPasses(PassBuilder &PB) {
           FPM.addPass(PSSAEntry());
           addCleanupPasses(FPM);
         });
+
+  PB.registerVectorizerStartEPCallback(
+      [](FunctionPassManager &FPM, OptimizationLevel) {
+        addPreprocessingPasses(FPM);
+        FPM.addPass(GlobalSLPPass());
+        addCleanupPasses(FPM);
+      });
 }
 
 extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
 llvmGetPassPluginInfo() {
-  return {LLVM_PLUGIN_API_VERSION, "pssa-entry", LLVM_VERSION_STRING,
-          buildPasses};
+  return {LLVM_PLUGIN_API_VERSION, "pssa", LLVM_VERSION_STRING, buildPasses};
 }

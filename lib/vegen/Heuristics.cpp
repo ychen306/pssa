@@ -77,11 +77,11 @@ public:
 // Group stores by their underlying objects
 class StoreGrouper : public PSSAVisitor<StoreGrouper> {
 public:
-  using ObjToStoreMapTy = std::map<Value *, SmallVector<StoreInst *, 8>>;
+  using ObjToInstMapTy = std::map<Value *, SmallVector<Instruction *, 8>>;
 private:
-  ObjToStoreMapTy ObjToStoreMap;
+  ObjToInstMapTy ObjToStoreMap;
 public:
-  StoreGrouper(ObjToStoreMapTy &ObjToStoreMap) : ObjToStoreMap(ObjToStoreMap) {}
+  StoreGrouper(ObjToInstMapTy &ObjToStoreMap) : ObjToStoreMap(ObjToStoreMap) {}
   void visitInstruction(Instruction *I) {
     auto *SI = dyn_cast<StoreInst>(I);
     if (!SI)
@@ -200,6 +200,13 @@ std::vector<std::unique_ptr<Pack>> packBottomUp(PredicatedSSA &PSSA,
                                                 DataLayout &DL,
                                                 ScalarEvolution &SE,
                                                 LoopInfo &LI) {
-  StoreGrouper::ObjToStoreMapTy ObjToStoreMap;
+  StoreGrouper::ObjToInstMapTy ObjToStoreMap;
   visitWith<StoreGrouper>(PSSA, ObjToStoreMap);
+
+  for (ArrayRef<Instruction *> Stores : make_second_range(ObjToStoreMap)) {
+    errs() << "<<<<< stores \n";
+    for (auto *I : Stores)
+      errs() << *I << '\n';
+    errs() << ">>>>>>>>\n";
+  }
 }
