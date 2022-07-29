@@ -97,6 +97,8 @@ public:
 
 } // namespace
 
+// FIXME: make sure that the packed instructions are independent
+// FIXME: make sure we are packing instructions that have the same nesting depth
 SmallVector<Pack *, 2> Packer::getProducers(ArrayRef<Value *> Values) {
   SmallVector<Instruction *, 8> Insts;
   for (auto *V : Values) {
@@ -178,9 +180,62 @@ InstructionCost BottomUpHeuristic::getCost(Pack *P) {
 }
 
 static InstructionCost getScalarCost(Instruction *I, TargetTransformInfo &TTI) {
-  if (isa<PHINode>(I))
+  auto *Ty = I->getType();
+  if (auto *LI = dyn_cast<LoadInst>(I)) {
+    return TTI.getMemoryOpCost(Instruction::Load, LI->getType(), LI->getAlign(),
+                               0, TTI::TCK_RecipThroughput, LI);
+  }
+
+  if (auto *SI = dyn_cast<StoreInst>(I))
+    return TTI.getMemoryOpCost(Instruction::Store,
+                               SI->getValueOperand()->getType(), SI->getAlign(),
+                               0, TTI::TCK_RecipThroughput, SI);
+
+  if (auto *CI = dyn_cast<CallInst>(I)) {
+    auto *Callee = CI->getCalledFunction();
+    if (!Callee)
+      return 1;
+    auto ID = Callee->getIntrinsicID();
+    switch (ID) {
+    default:
+      return 1;
+    case Intrinsic::sin:
+    case Intrinsic::cos:
+    case Intrinsic::exp:
+    case Intrinsic::exp2:
+    case Intrinsic::log:
+    case Intrinsic::log10:
+    case Intrinsic::log2:
+    case Intrinsic::fabs:
+    case Intrinsic::pow:
+      return TTI.getIntrinsicInstrCost(IntrinsicCostAttributes(ID, Ty, {Ty}),
+                                       TTI::TCK_RecipThroughput);
+    }
+  }
+
+  if (isa<CastInst>(I)) {
+    return TTI.getCastInstrCost(I->getOpcode(), I->getOperand(0)->getType(), Ty,
+                                TTI::getCastContextHint(I),
+                                TTI::TCK_RecipThroughput);
+  }
+
+  if (isa<GetElementPtrInst>(I) || isa<PHINode>(I))
     return 0;
-  return TTI.getInstructionCost(I, TTI::TCK_RecipThroughput);
+  if (Ty->isStructTy() || Ty->isVectorTy())
+    return 1;
+  if (!isa<UnaryOperator>(I) && !isa<BinaryOperator>(I) && !isa<CmpInst>(I) &&
+      !isa<SelectInst>(I))
+    return 1;
+
+  if (isa<CmpInst>(I) || isa<SelectInst>(I))
+    return TTI.getCmpSelInstrCost(
+        I->getOpcode(), Ty, Type::getInt1Ty(I->getContext()),
+        CmpInst::BAD_ICMP_PREDICATE, TTI::TCK_RecipThroughput, I);
+
+  SmallVector<const Value *, 4> Operands(I->operand_values());
+  return TTI.getArithmeticInstrCost(
+      I->getOpcode(), Ty, TTI::TCK_RecipThroughput, TTI::OK_AnyValue,
+      TTI::OK_AnyValue, TTI::OP_None, TTI::OP_None, Operands, I);
 }
 
 // Get the cost of producing a value as scalar
