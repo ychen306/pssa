@@ -172,6 +172,7 @@ InstructionCost BottomUpHeuristic::getCost(Pack *P) {
     return solve(P->getOperands().front()).Cost;
 
   auto Cost = P->getCost();
+  // FIXME: take masking into account
   for (auto &O : P->getOperands())
     Cost += solve(O).Cost;
   return Cost;
