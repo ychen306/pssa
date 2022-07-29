@@ -1,12 +1,13 @@
 #include "AddrUtil.h"
+#include "PackSet.h"
 #include "pssa/PSSA.h"
-#include "pssa/Visitor.h"
 #include "pssa/VectorHashInfo.h"
+#include "pssa/Visitor.h"
 #include "vegen/Pack.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
+#include "llvm/Analysis/ValueTracking.h" // getUnderlyingObject
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
-#include "llvm/Analysis/ValueTracking.h" // getUnderlyingObject
 
 using namespace llvm;
 
@@ -21,8 +22,8 @@ class Packer {
   llvm::LoopInfo &LI;
 
 public:
-  Packer(PredicatedSSA &PSSA, llvm::DataLayout &DL, llvm::ScalarEvolution &SE,
-         llvm::LoopInfo &LI)
+  Packer(PredicatedSSA &PSSA, const llvm::DataLayout &DL,
+         llvm::ScalarEvolution &SE, llvm::LoopInfo &LI)
       : PSSA(PSSA), DL(DL), SE(SE), LI(LI) {}
   llvm::SmallVector<Pack *, 2> getProducers(llvm::ArrayRef<llvm::Value *>);
 };
@@ -68,7 +69,7 @@ class BottomUpHeuristic {
   InstructionCost getCost(Pack *);
 
 public:
-  BottomUpHeuristic(PredicatedSSA &PSSA, llvm::DataLayout &DL,
+  BottomUpHeuristic(PredicatedSSA &PSSA, const llvm::DataLayout &DL,
                     llvm::ScalarEvolution &SE, llvm::LoopInfo &LI,
                     TargetTransformInfo &TTI)
       : PSSA(PSSA), Pkr(PSSA, DL, SE, LI), TTI(TTI) {}
@@ -79,8 +80,10 @@ public:
 class StoreGrouper : public PSSAVisitor<StoreGrouper> {
 public:
   using ObjToInstMapTy = std::map<Value *, SmallVector<Instruction *, 8>>;
+
 private:
   ObjToInstMapTy &ObjToStoreMap;
+
 public:
   StoreGrouper(ObjToInstMapTy &ObjToStoreMap) : ObjToStoreMap(ObjToStoreMap) {}
   void visitInstruction(Instruction *I) {
@@ -152,11 +155,13 @@ BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
   }
 
   Solution Soln(nullptr, ScalarCost);
-  for (auto *P : Pkr.getProducers(Values))
+  for (auto *P : Pkr.getProducers(Values)) {
     Soln.update(P, getCost(P));
+  }
 
   SolutionView Ret = Soln;
-  Solutions.find_as(Values)->second = std::move(Soln);
+  Solutions.try_emplace(ValueVector(Values.begin(), Values.end()),
+                        std::move(Soln));
   return Ret;
 }
 
@@ -197,24 +202,52 @@ InstructionCost BottomUpHeuristic::getCost(Value *V) {
   return ScalarCosts[I] = Cost;
 }
 
-std::vector<std::unique_ptr<Pack>> packBottomUp(PredicatedSSA &PSSA,
-                                                const DataLayout &DL,
-                                                ScalarEvolution &SE,
-                                                LoopInfo &LI) {
+// FIXME: INISH
+static InstructionCost getSaving(ArrayRef<Pack *> Packs) {}
+
+static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
+                        PackSet &Packs) {
+  auto IsPacked = [&Packs](auto *V) { return Packs.isPacked(V); };
+
+  DenseSet<OperandPack, VectorHashInfo<OperandPack>> Visited;
+  SmallVector<OperandPack> Worklist{Root};
+
+  while (!Worklist.empty()) {
+    auto Values = Worklist.pop_back_val();
+    if (any_of(Values, IsPacked) || !Visited.insert(Values).second)
+      continue;
+    auto *P = Heuristic.getProducer(Values);
+    if (!P)
+      continue;
+    Packs.add(P);
+    Worklist.append(P->getOperands());
+  }
+}
+
+std::vector<std::unique_ptr<Pack>>
+packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL, ScalarEvolution &SE,
+             LoopInfo &LI, TargetTransformInfo &TTI) {
   StoreGrouper::ObjToInstMapTy ObjToStoreMap;
   visitWith<StoreGrouper>(PSSA, ObjToStoreMap);
+
+  BottomUpHeuristic Heuristic(PSSA, DL, SE, LI, TTI);
 
   for (ArrayRef<Instruction *> Stores : make_second_range(ObjToStoreMap)) {
     SmallVector<Instruction *> SortedStores;
     // FIXME: deal with cases when there are gaps between the stores
     if (!sortByPointers(Stores, SortedStores, DL, SE, LI))
       continue;
-    
+
     auto *StoreP = StorePack::tryPack(SortedStores, DL, SE, LI, PSSA);
     if (!StoreP)
       continue;
 
     errs() << "Found seed store pack: " << *StoreP << '\n';
+    PackSet Packs;
+    auto Operands = StoreP->getOperands();
+    runBottomUp(Operands.front(), Heuristic, Packs);
+    for (auto *P : Packs)
+      errs() << *P << '\n';
   }
 
   std::vector<std::unique_ptr<Pack>> Packs;
