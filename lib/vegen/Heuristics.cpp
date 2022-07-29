@@ -172,7 +172,6 @@ InstructionCost BottomUpHeuristic::getCost(Pack *P) {
     return solve(P->getOperands().front()).Cost;
 
   auto Cost = P->getCost();
-  // FIXME: take masking into account
   for (auto &O : P->getOperands())
     Cost += solve(O).Cost;
   return Cost;
@@ -206,6 +205,7 @@ InstructionCost BottomUpHeuristic::getCost(Value *V) {
 // FIXME: INISH
 static InstructionCost getSaving(ArrayRef<Pack *> Packs) {}
 
+// FIXME: also pack stuff required by masking
 static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
                         PackSet &Packs) {
   auto IsPacked = [&Packs](auto *V) { return Packs.isPacked(V); };
