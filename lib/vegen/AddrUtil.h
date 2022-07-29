@@ -29,4 +29,37 @@ bool sortPointers(llvm::ArrayRef<llvm::Value *> VL, llvm::Type *ElemTy,
                   llvm::LoopInfo &LI,
                   llvm::SmallVectorImpl<unsigned> &SortedIndices);
 
+template <typename InstT>
+bool sortByPointers(llvm::ArrayRef<InstT *> Insts,
+                    llvm::ArrayRef<llvm::Value *> Ptrs,
+                    llvm::SmallVectorImpl<InstT *> &SortedInsts,
+                    const llvm::DataLayout &DL, llvm::ScalarEvolution &SE,
+                    llvm::LoopInfo &LI) {
+  using namespace llvm;
+  auto *Ty = getLoadStoreType(Insts.front());
+  SmallVector<unsigned, 8> SortedIdxs;
+  if (!sortPointers(Ptrs, Ty, DL, SE, LI, SortedIdxs))
+    return false;
+
+  auto GetSortedIdx = [&SortedIdxs](unsigned i) {
+    if (SortedIdxs.empty())
+      return i;
+    return SortedIdxs[i];
+  };
+
+  SortedInsts.clear();
+  SortedInsts.push_back(Insts[GetSortedIdx(0)]);
+  auto *FirstPtr = Ptrs[GetSortedIdx(0)];
+  for (unsigned i = 1, N = Insts.size(); i < N; i++) {
+    unsigned SortedIdx = GetSortedIdx(i);
+    auto *Ptr = Ptrs[SortedIdx];
+    auto Diff = diffPointers(Ty, FirstPtr, Ty, Ptr, DL, SE, LI);
+    assert(Diff);
+    if (*Diff - i != 0)
+      return false;
+    SortedInsts.push_back(Insts[SortedIdx]);
+  }
+  return true;
+}
+
 #endif // VEGEN_ADDR_UTIL_H

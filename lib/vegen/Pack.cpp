@@ -136,28 +136,9 @@ LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
   if (!isControlFlowEquivalent(Insts, PSSA))
     return nullptr;
 
-  auto *Ty = Insts.front()->getType();
-  SmallVector<unsigned, 8> SortedIdxs;
-  if (!sortPointers(Ptrs, Ty, DL, SE, LI, SortedIdxs))
+  SmallVector<Instruction *, 8> SortedLoads;
+  if (!sortByPointers(Insts, Ptrs, SortedLoads, DL, SE, LI))
     return nullptr;
-
-  auto GetSortedIdx = [&SortedIdxs](unsigned i) {
-    if (SortedIdxs.empty())
-      return i;
-    return SortedIdxs[i];
-  };
-
-  SmallVector<Instruction *, 8> SortedLoads = {Insts[GetSortedIdx(0)]};
-  auto *FirstPtr = Ptrs[GetSortedIdx(0)];
-  for (unsigned i = 1, N = Insts.size(); i < N; i++) {
-    unsigned SortedIdx = GetSortedIdx(i);
-    auto *Ptr = Ptrs[SortedIdx];
-    auto Diff = diffPointers(Ty, FirstPtr, Ty, Ptr, DL, SE, LI);
-    assert(Diff);
-    if (*Diff - i != 0)
-      return nullptr;
-    SortedLoads.push_back(Insts[SortedIdx]);
-  }
 
   return new LoadPack(SortedLoads);
 }
@@ -188,28 +169,9 @@ StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
       return nullptr;
   }
 
-  auto *Ty = cast<StoreInst>(Insts.front())->getValueOperand()->getType();
-  SmallVector<unsigned, 8> SortedIdxs;
-  if (!sortPointers(Ptrs, Ty, DL, SE, LI, SortedIdxs))
+  SmallVector<Instruction *, 8> SortedStores;
+  if (!sortByPointers(Insts, Ptrs, SortedStores, DL, SE, LI))
     return nullptr;
-
-  auto GetSortedIdx = [&SortedIdxs](unsigned i) {
-    if (SortedIdxs.empty())
-      return i;
-    return SortedIdxs[i];
-  };
-
-  SmallVector<Instruction *, 8> SortedStores = {Insts[GetSortedIdx(0)]};
-  auto *FirstPtr = Ptrs[GetSortedIdx(0)];
-  for (unsigned i = 1, N = Insts.size(); i < N; i++) {
-    unsigned SortedIdx = GetSortedIdx(i);
-    auto *Ptr = Ptrs[SortedIdx];
-    auto Diff = diffPointers(Ty, FirstPtr, Ty, Ptr, DL, SE, LI);
-    assert(Diff);
-    if (*Diff - i != 0)
-      return nullptr;
-    SortedStores.push_back(Insts[SortedIdx]);
-  }
 
   return new StorePack(SortedStores, PSSA);
 }
