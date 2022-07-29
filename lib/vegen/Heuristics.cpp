@@ -42,7 +42,7 @@ class BottomUpHeuristic {
     Solution &operator=(Solution &&) = default;
 
     void update(Pack *P2, InstructionCost Cost2) {
-      if (Cost <= Cost2) {
+      if (Cost < Cost2) {
         delete P2;
         return;
       }
@@ -132,6 +132,10 @@ BottomUpHeuristic::SolutionView
 BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
   auto *VecTy = FixedVectorType::get(Values.front()->getType(), Values.size());
 
+  // No cost for constant/undef vector
+  if (all_of(Values, [](Value *V) { return !V || isa<Constant>(V); }))
+    return Solution(nullptr, 0);
+
   // If we can produce this vector by broadcast ...
   if (is_splat(Values)) {
     InstructionCost Cost =
@@ -143,6 +147,9 @@ BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
 
   if (auto It = Solutions.find_as(Values); It != Solutions.end())
     return It->second;
+
+  Solutions.try_emplace(ValueVector(Values.begin(), Values.end()),
+                        nullptr, 0);
 
   // The base line is producing the vector elts as scalar and insert them
   InstructionCost ScalarCost = 0;
@@ -157,22 +164,15 @@ BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
   }
 
   Solution Soln(nullptr, ScalarCost);
-  for (auto *P : Pkr.getProducers(Values)) {
+  for (auto *P : Pkr.getProducers(Values))
     Soln.update(P, getCost(P));
-  }
 
   SolutionView Ret = Soln;
-  Solutions.try_emplace(ValueVector(Values.begin(), Values.end()),
-                        std::move(Soln));
+  Solutions.find_as(Values)->second = std::move(Soln);
   return Ret;
 }
 
 InstructionCost BottomUpHeuristic::getCost(Pack *P) {
-  // For simplicity,
-  // just consider the cost of the initial defn for mu nodes
-  if (isa<MuPack>(P))
-    return solve(P->getOperands().front()).Cost;
-
   auto Cost = P->getCost();
   for (auto &O : P->getOperands())
     Cost += solve(O).Cost;
@@ -247,9 +247,7 @@ InstructionCost BottomUpHeuristic::getCost(Value *V) {
   if (auto It = ScalarCosts.find(I); It != ScalarCosts.end())
     return It->second;
 
-  // Ignore the cost of the rec. defn for mu nodes
-  if (auto *PN = dyn_cast<PHINode>(I); PN && PSSA.isMu(PN))
-    return getCost(PN->getIncomingValue(0));
+  ScalarCosts[I] = 0;
 
   auto Cost = getScalarCost(I, TTI);
   for (auto *O : I->operand_values())
@@ -303,7 +301,7 @@ packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL, ScalarEvolution &SE,
     auto Operands = StoreP->getOperands();
     runBottomUp(Operands.front(), Heuristic, Packs);
     for (auto *P : Packs)
-      errs() << *P << '\n';
+      errs() << "pack " << *P << '\n';
   }
 
   std::vector<std::unique_ptr<Pack>> Packs;
