@@ -4,6 +4,7 @@
 #include "pssa/VectorHashInfo.h"
 #include "pssa/Visitor.h"
 #include "vegen/Pack.h"
+#include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h" // getUnderlyingObject
 #include "llvm/IR/Instructions.h"
@@ -25,7 +26,7 @@ public:
   Packer(PredicatedSSA &PSSA, const llvm::DataLayout &DL,
          llvm::ScalarEvolution &SE, llvm::LoopInfo &LI)
       : PSSA(PSSA), DL(DL), SE(SE), LI(LI) {}
-  llvm::SmallVector<Pack *, 2> getProducers(llvm::ArrayRef<llvm::Value *>);
+  TinyPtrVector<Pack *> getProducers(llvm::ArrayRef<llvm::Value *>);
 };
 
 class BottomUpHeuristic {
@@ -99,7 +100,7 @@ public:
 
 // FIXME: make sure that the packed instructions are independent
 // FIXME: make sure we are packing instructions that have the same nesting depth
-SmallVector<Pack *, 2> Packer::getProducers(ArrayRef<Value *> Values) {
+TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
   SmallVector<Instruction *, 8> Insts;
   for (auto *V : Values) {
     auto *I = dyn_cast_or_null<Instruction>(V);
@@ -121,7 +122,7 @@ SmallVector<Pack *, 2> Packer::getProducers(ArrayRef<Value *> Values) {
   if (auto P = GatherPack::tryPack(Insts, PSSA))
     return {P};
 
-  SmallVector<Pack *, 2> Producers;
+  TinyPtrVector<Pack *> Producers;
   if (auto *P = SIMDPack::tryPack(Insts))
     Producers.push_back(P);
 
