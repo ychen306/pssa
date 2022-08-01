@@ -325,7 +325,7 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
     ArrayRef<Item> Coupled = It;
     // Process (register) data and control dependences
     if (auto *I = It.asInstruction()) {
-      Pack *P = Packs ? Packs->getPackForInst(I) : nullptr;
+      Pack *P = Packs ? Packs->getPackForValue(I) : nullptr;
       // If I is packed with other instructions,
       // we also need to check their dependences
       ArrayRef<Instruction *> Insts = P ? P->values() : I;
@@ -989,7 +989,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
   SmallVector<PHINode *> Mus(VL->mus());
   for (auto *Mu : Mus) {
     markAsProcessed(Mu);
-    Pack *P = Packs.getPackForInst(Mu);
+    Pack *P = Packs.getPackForValue(Mu);
     if (!P) {
       remapInstruction(Mu);
       continue;
@@ -1025,7 +1025,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
     auto *I = It.asInstruction();
     assert(I);
     markAsProcessed(I);
-    if (Pack *P = Packs.getPackForInst(I)) {
+    if (Pack *P = Packs.getPackForValue(I)) {
       DeadInsts.push_back(I);
       if (!Lowered.insert(P).second)
         continue;

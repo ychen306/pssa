@@ -30,7 +30,6 @@ public:
 };
 
 class BottomUpHeuristic {
-  PredicatedSSA &PSSA;
   Packer Pkr;
   TargetTransformInfo &TTI;
 
@@ -73,7 +72,7 @@ public:
   BottomUpHeuristic(PredicatedSSA &PSSA, const llvm::DataLayout &DL,
                     llvm::ScalarEvolution &SE, llvm::LoopInfo &LI,
                     TargetTransformInfo &TTI)
-      : PSSA(PSSA), Pkr(PSSA, DL, SE, LI), TTI(TTI) {}
+      : Pkr(PSSA, DL, SE, LI), TTI(TTI) {}
   Pack *getProducer(ArrayRef<Value *> Values) { return solve(Values).P; }
 };
 
@@ -129,9 +128,13 @@ TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
   return Producers;
 }
 
+template <typename ValuesT> FixedVectorType *getVectorType(const ValuesT &Values) {
+  return FixedVectorType::get(Values.front()->getType(), Values.size());
+}
+
 BottomUpHeuristic::SolutionView
 BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
-  auto *VecTy = FixedVectorType::get(Values.front()->getType(), Values.size());
+  auto *VecTy = getVectorType(Values);
 
   // No cost for constant/undef vector
   if (all_of(Values, [](Value *V) { return !V || isa<Constant>(V); }))
@@ -149,8 +152,7 @@ BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
   if (auto It = Solutions.find_as(Values); It != Solutions.end())
     return It->second;
 
-  Solutions.try_emplace(ValueVector(Values.begin(), Values.end()),
-                        nullptr, 0);
+  Solutions.try_emplace(ValueVector(Values.begin(), Values.end()), nullptr, 0);
 
   // The base line is producing the vector elts as scalar and insert them
   InstructionCost ScalarCost = 0;
@@ -204,7 +206,45 @@ InstructionCost BottomUpHeuristic::getCost(Value *V) {
 }
 
 // FIXME: INISH
-static InstructionCost getSaving(ArrayRef<Pack *> Packs) {}
+static InstructionCost getSaving(const PackSet &Packs,
+                                 TargetTransformInfo &TTI) {
+  DenseSet<OperandPack, VectorHashInfo<OperandPack>> ShuffledOps;
+  InstructionCost Saving = 0;
+  auto IsPacked = [&Packs](Value *V) { return Packs.isPacked(V); };
+  for (auto *P : Packs) {
+    Type *VecTy = nullptr;
+    if (!isa<StorePack>(P))
+      VecTy = getVectorType(P->values());
+
+    // Cost from running the vector inst.
+    Saving -= P->getCost();
+    for (auto X : enumerate(P->values())) {
+      Instruction *I = X.value();
+      // FIXME: take into account of complex operation like FMA
+      // Saving from killing the scalar instruction
+      Saving += getScalarCost(I, TTI);
+
+      // Figure out if we need to extract for scalar use
+      // FIXME: this doesn't take into account that some users are killed things
+      // like FMA
+      if (!all_of(I->users(), IsPacked)) {
+        Saving -= TTI.getVectorInstrCost(Instruction::ExtractElement, VecTy,
+                                         X.index());
+      }
+    }
+
+    // Figure out cost of shuffling the required operands
+    for (const OperandPack &O : P->getOperands()) {
+      // No shuffle cost if O is produced exactly by some other pack P2
+      if (auto *P2 = Packs.getPackForValue(O.front());
+          P2 && all_of_zip(P->values(), O,
+                           [](auto *V1, auto *V2) { return V1 == V2; }))
+        continue;
+      auto *OpVecTy = getVectorType(O);
+    }
+  }
+  return Saving;
+}
 
 // FIXME: also pack stuff required by masking
 static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
@@ -233,6 +273,8 @@ packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL, ScalarEvolution &SE,
   visitWith<StoreGrouper>(PSSA, ObjToStoreMap);
 
   BottomUpHeuristic Heuristic(PSSA, DL, SE, LI, TTI);
+  PackSet Packs;
+  auto PrevSaving = getSaving(Packs, TTI);
 
   for (ArrayRef<Instruction *> Stores : make_second_range(ObjToStoreMap)) {
     SmallVector<Instruction *> SortedStores;
@@ -245,13 +287,24 @@ packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL, ScalarEvolution &SE,
       continue;
 
     errs() << "Found seed store pack: " << *StoreP << '\n';
-    PackSet Packs;
+    PackSet Scratch = Packs;
+    Scratch.add(StoreP);
     auto Operands = StoreP->getOperands();
-    runBottomUp(Operands.front(), Heuristic, Packs);
-    for (auto *P : Packs)
-      errs() << "pack " << *P << '\n';
+    runBottomUp(Operands.front(), Heuristic, Scratch);
+    auto NewSaving = getSaving(Scratch, TTI);
+    if (NewSaving >= PrevSaving or true) {
+      errs() << "Prev saving: " << PrevSaving << ", new saving " << NewSaving
+             << '\n';
+      PrevSaving = NewSaving;
+      Packs = std::move(Scratch);
+    }
   }
+  for (auto *P : Packs)
+    errs() << "pack " << *P << '\n';
 
-  std::vector<std::unique_ptr<Pack>> Packs;
-  return Packs;
+  std::vector<std::unique_ptr<Pack>> ThePacks;
+  ThePacks.reserve(Packs.size());
+  for (auto *P : Packs)
+    ThePacks.emplace_back(P->clone());
+  return ThePacks;
 }

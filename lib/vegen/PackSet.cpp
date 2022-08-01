@@ -13,8 +13,10 @@ void PackSet::add(Pack *P) {
   Packs.push_back(P);
 }
 
-Pack *PackSet::getPackForInst(Instruction *I) const {
-  return InstToPackMap.lookup(I);
+Pack *PackSet::getPackForValue(Value *V) const {
+  if (auto *I = dyn_cast<Instruction>(V))
+    return InstToPackMap.lookup(I);
+  return nullptr;
 }
 
 bool PackSet::isPacked(Instruction *I) const { return InstToPackMap.count(I); }

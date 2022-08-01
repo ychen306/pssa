@@ -19,18 +19,25 @@ class PackSet {
 
 public:
   PackSet() = default;
+  PackSet(const PackSet &) = default;
+  PackSet(PackSet &&) = default;
+  PackSet &operator=(const PackSet &) = default;
+  PackSet &operator=(PackSet &&) = default;
+
   PackSet(llvm::ArrayRef<Pack *> Packs) {
     for (auto *P : Packs)
       add(P);
   }
+
   void add(Pack *);
-  bool isPacked(llvm::Instruction *I) const;
-  bool isPacked(llvm::Value *V) const;
-  Pack *getPackForInst(llvm::Instruction *I) const;
+  bool isPacked(llvm::Instruction *) const;
+  bool isPacked(llvm::Value *) const;
+  Pack *getPackForValue(llvm::Value *) const;
   operator llvm::ArrayRef<Pack *>() const { return Packs; }
   using iterator = std::vector<Pack *>::const_iterator;
   iterator begin() const { return Packs.begin(); }
   iterator end() const { return Packs.end(); }
+  unsigned size() const { return Packs.size(); }
 };
 
 #endif // VEGEN_PACKSET_H
