@@ -43,7 +43,8 @@ public:
 };
 
 // Find the dependences of Items but scan no further than the earliest Items
-void findInBetweenDeps(llvm::SmallVectorImpl<Item> &Deps,
+// Also report if there's any circular dep
+bool findInBetweenDeps(llvm::SmallVectorImpl<Item> &Deps,
                        llvm::ArrayRef<Item> Items, VLoop *VL,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker,
                        const PackSet *Packs = nullptr);

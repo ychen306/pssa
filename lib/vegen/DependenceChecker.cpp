@@ -93,7 +93,7 @@ ArrayRef<Instruction *> DependenceChecker::getLiveIns(VLoop *VL) {
   return Summaries[VL].LiveIns;
 }
 
-void findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
+bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
                        VLoop *VL, PredicatedSSA &PSSA,
                        DependenceChecker &DepChecker, const PackSet *Packs) {
   auto ComesBefore = [VL](const Item &It1, const Item &It2) {
@@ -180,4 +180,5 @@ void findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
 
   // Do DFS to find out dependences of the Items that appear after Earliest
   for_each(Items, Visit);
+  return false;
 }

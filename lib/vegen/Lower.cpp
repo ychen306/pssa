@@ -204,7 +204,7 @@ public:
   VectorGen(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI)
       : Packs(Packs), PSSA(PSSA), DI(DI),
         Remapper(VM, RF_None, nullptr, &Extracter) {}
-  void run();
+  bool run();
 };
 
 // FIXME: this has O(n^2) complexity
@@ -265,17 +265,18 @@ public:
 }; // namespace
 
 // Move the items together while still preserving dependences
-static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
+static bool merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
                   DependenceChecker &DepChecker,
                   const PackSet *Packs = nullptr) {
   if (Items.size() <= 1)
-    return;
+    return true;
 
   auto *VL = PSSA.getLoopForItem(Items.front());
   SmallVector<Item> Deps;
-  findInBetweenDeps(Deps, Items, VL, PSSA, DepChecker, Packs);
+  bool FoundCycle = findInBetweenDeps(Deps, Items, VL, PSSA, DepChecker, Packs);
+  if (FoundCycle)
+    return false;
 
-  // FIXME: refactor this out as an BatchItemMover
   ////// Utilities to erase items in batch and re-insert them later //////
   SmallVector<Item> Removed;
   SmallVector<const ControlCondition *> ItemConds;
@@ -333,6 +334,7 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
   }
 
   ReinsertItems(InsertPt);
+  return true;
 }
 
 static EquivalenceClasses<VLoop *> partitionLoops(ArrayRef<Pack *> Packs,
@@ -568,7 +570,7 @@ coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
   return Fused;
 }
 
-static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
+static bool mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker,
                        DenseMap<Value *, Value *> &ExitGuards,
                        DenseSet<PHINode *> &ActiveFlags) {
@@ -578,7 +580,7 @@ static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
   ExitsRemapper Remapper(PSSA, OrigInstConds, OrigLoopConds, ItemToActiveMap,
                          ExitGuards);
 
-  std::function<void(VLoop *)> FuseRec = [&](VLoop *VL) {
+  std::function<bool(VLoop *)> FuseRec = [&](VLoop *VL) {
     // First pass: identify loops that we want to fuse
     DenseSet<VLoop *> Leaders;
     for (auto &It : VL->items()) {
@@ -595,7 +597,8 @@ static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
       SmallVector<VLoop *> Loops(LoopsToFuse.findLeader(Leader),
                                  LoopsToFuse.member_end());
       // Move the loops together first
-      merge(PSSA, toItems(Loops), DepChecker);
+      if (!merge(PSSA, toItems(Loops), DepChecker))
+        return false;
       VLoop *Fused = nullptr;
       auto *LeaderVL = Loops.front();
       bool Fusible = all_of(drop_begin(Loops), [&](auto *VL2) {
@@ -615,7 +618,8 @@ static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
     // Recursively fuse any of the inner loops
     for (auto &It : VL->items())
       if (auto *SubVL = It.asLoop())
-        FuseRec(SubVL);
+        if (!FuseRec(SubVL))
+          return false;
 
     // Rewrite the use of values exiting co-iterating loops
     for (auto &It : VL->items()) {
@@ -638,9 +642,10 @@ static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
     for (auto *Mu : VL->mus())
       Remapper.remapInstruction(VL, Mu);
     VL->setBackEdgeCond(Remapper.remapCondition(VL, VL->getBackEdgeCond()));
+    return true;
   };
 
-  FuseRec(&PSSA.getTopLevel());
+  return FuseRec(&PSSA.getTopLevel());
 }
 
 Value *VectorGen::materializeValue(Value *V) { return Remapper.mapValue(*V); }
@@ -1155,7 +1160,7 @@ packConditions(ArrayRef<VectorMask> Masks,
   }
 }
 
-void VectorGen::run() {
+bool VectorGen::run() {
   // When we pack consecutive loads or stores with different
   // conditions, we need to weaken the condition C of the address
   // calculation so that C is implied by all the conditions
@@ -1176,11 +1181,14 @@ void VectorGen::run() {
   // Fuse the loops top-down
   DenseMap<Value *, Value *> ExitGuards;
   DenseSet<PHINode *> ActiveFlags;
-  mergeLoops(LoopsToFuse, PSSA, DepChecker, ExitGuards, ActiveFlags);
+  if (!mergeLoops(LoopsToFuse, PSSA, DepChecker, ExitGuards, ActiveFlags))
+    return false;
   // Move the packed instructions together
   for (auto *P : Packs) {
-    if (!isa<MuPack>(P))
-      merge(PSSA, toItems(P->values()), DepChecker, &Packs);
+    if (isa<MuPack>(P))
+      continue;
+    if (!merge(PSSA, toItems(P->values()), DepChecker, &Packs))
+      return false;
   }
   //==== End scheduling ====//
 
@@ -1221,9 +1229,10 @@ void VectorGen::run() {
     if (I->getParent())
       I->eraseFromParent();
   }
+  return true;
 }
 
-void lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
+bool lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
   VectorGen Gen(Packs, PSSA, DI);
-  Gen.run();
+  return Gen.run();
 }
