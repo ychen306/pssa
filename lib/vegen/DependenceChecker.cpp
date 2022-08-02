@@ -93,6 +93,20 @@ ArrayRef<Instruction *> DependenceChecker::getLiveIns(VLoop *VL) {
   return Summaries[VL].LiveIns;
 }
 
+namespace {
+template <typename SetTy, typename ElemTy> class EraseOnReturnGuard {
+  SetTy &Set;
+  ElemTy Elem;
+
+public:
+  EraseOnReturnGuard(SetTy &Set, ElemTy Elem) : Set(Set), Elem(Elem) {}
+  ~EraseOnReturnGuard() {
+    assert(Set.count(Elem));
+    Set.erase(Elem);
+  }
+};
+} // namespace
+
 bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
                        VLoop *VL, PredicatedSSA &PSSA,
                        DependenceChecker &DepChecker, const PackSet *Packs) {
@@ -104,7 +118,7 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
                 [&](const Item &It) { return PSSA.getLoopForItem(It) == VL; }));
   Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
 
-  DenseSet<Item, ItemHashInfo> Visited;
+  DenseSet<Item, ItemHashInfo> Visited, Processing;
   DenseSet<const ControlCondition *> VisitedConds;
   // Do DFS on a given item
   std::function<void(Item)> Visit;
@@ -112,6 +126,7 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
     if (auto *I = dyn_cast<Instruction>(V))
       Visit(I);
   };
+  bool FoundCycle = false;
   std::function<void(const ControlCondition *)> VisitCond =
       [&](const ControlCondition *C) {
         if (!C)
@@ -129,8 +144,14 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
         for_each(Or->Conds, VisitCond);
       };
 
-  // FIXME: check circular dependencies
   Visit = [&](Item It) {
+    if (!Processing.insert(It).second) {
+      FoundCycle = true;
+      return;
+    }
+
+    EraseOnReturnGuard EraseOnReturn(Processing, It);
+
     auto *ParentVL = PSSA.getLoopForItem(It);
     if (!VL->contains(It))
       return;
@@ -180,5 +201,5 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
 
   // Do DFS to find out dependences of the Items that appear after Earliest
   for_each(Items, Visit);
-  return false;
+  return FoundCycle;
 }
