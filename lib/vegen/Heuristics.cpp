@@ -1,4 +1,5 @@
 #include "AddrUtil.h"
+#include "DependenceChecker.h"
 #include "PackSet.h"
 #include "pssa/PSSA.h"
 #include "pssa/VectorHashInfo.h"
@@ -340,7 +341,7 @@ static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
 
 std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
                                  ScalarEvolution &SE, LoopInfo &LI,
-                                 TargetTransformInfo &TTI) {
+                                 DependenceInfo &DI, TargetTransformInfo &TTI) {
   StoreGrouper::ObjToInstMapTy ObjToStoreMap;
   visitWith<StoreGrouper>(PSSA, ObjToStoreMap);
 

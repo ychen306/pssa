@@ -7,6 +7,7 @@ namespace llvm {
 class DataLayout;
 class LoopInfo;
 class ScalarEvolution;
+class DependenceInfo;
 class TargetTransformInfo;
 } // namespace llvm
 
@@ -15,6 +16,7 @@ class PredicatedSSA;
 
 std::vector<Pack *> packBottomUp(PredicatedSSA &, const llvm::DataLayout &,
                                  llvm::ScalarEvolution &, llvm::LoopInfo &,
+                                 llvm::DependenceInfo &,
                                  llvm::TargetTransformInfo &);
 
 #endif // VEGEN_HEURISTICS_H

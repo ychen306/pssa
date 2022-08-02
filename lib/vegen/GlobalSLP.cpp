@@ -20,11 +20,12 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
   auto &TTI = AM.getResult<TargetIRAnalysis>(F);
+  auto &DI = AM.getResult<DependenceAnalysis>(F);
 
   PredicatedSSA PSSA(&F, LI, DT, PDT, &SE);
 
-  std::vector<Pack *> Packs = packBottomUp(PSSA, DL, SE, LI, TTI);
-  lower(Packs, PSSA, AM.getResult<DependenceAnalysis>(F));
+  std::vector<Pack *> Packs = packBottomUp(PSSA, DL, SE, LI, DI, TTI);
+  lower(Packs, PSSA, DI);
   lowerPSSAToLLVM(&F, PSSA);
 
   return PreservedAnalyses::none();
