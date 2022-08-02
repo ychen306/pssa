@@ -227,6 +227,7 @@ static InstructionCost getSaving(const PackSet &Packs,
       // Saving from killing the scalar instruction
       Saving += getScalarCost(I, TTI);
 
+#if 1
       // Figure out if we need to extract for scalar use
       // FIXME: this doesn't take into account that some users are killed things
       // like FMA
@@ -234,6 +235,17 @@ static InstructionCost getSaving(const PackSet &Packs,
         Saving -= TTI.getVectorInstrCost(Instruction::ExtractElement, VecTy,
                                          X.index());
       }
+#else
+      for (auto *U : I->users()) {
+        if (!IsPacked(U)) {
+          errs() << "??? paying extract cost for use of " << *I
+                 << ", user = " << *U << '\n';
+          Saving -= TTI.getVectorInstrCost(Instruction::ExtractElement, VecTy,
+                                           X.index());
+          break;
+        }
+      }
+#endif
     }
 
     // Figure out cost of shuffling the required operands
@@ -294,6 +306,24 @@ static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
   DenseSet<OperandPack, VectorHashInfo<OperandPack>> Visited;
   SmallVector<OperandPack> Worklist{Root};
 
+  DenseSet<VectorMask, VectorHashInfo<VectorMask>> VisitedMasks;
+  // Add mask operands to Worklist
+  std::function<void(const VectorMask &)> ProcessMaskOperands =
+      [&](const VectorMask &Mask) {
+        // Ignore all true mask
+        if (!Mask.front() && is_splat(Mask))
+          return;
+        if (!VisitedMasks.insert(Mask).second)
+          return;
+        if (all_of(Mask, [](auto *C) { return C && isa<ConditionAnd>(C); })) {
+          Worklist.emplace_back(map_range(
+              Mask, [](auto *C) { return cast<ConditionAnd>(C)->Cond; }));
+          VectorMask Parents(map_range(
+              Mask, [](auto *C) { return cast<ConditionAnd>(C)->Parent; }));
+          ProcessMaskOperands(Parents);
+        }
+      };
+
   while (!Worklist.empty()) {
     auto Values = Worklist.pop_back_val();
     if (any_of(Values, IsPacked) || !Visited.insert(Values).second)
@@ -303,6 +333,8 @@ static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
       continue;
     Packs.add(P);
     Worklist.append(P->getOperands());
+    for (auto &M : P->masks())
+      ProcessMaskOperands(M);
   }
 }
 
@@ -332,7 +364,7 @@ packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL, ScalarEvolution &SE,
     auto Operands = StoreP->getOperands();
     runBottomUp(Operands.front(), Heuristic, Scratch);
     auto NewSaving = getSaving(Scratch, TTI);
-    if (NewSaving >= PrevSaving) {
+    if (NewSaving >= PrevSaving or true) {
       errs() << "Prev saving: " << PrevSaving << ", new saving " << NewSaving
              << '\n';
       PrevSaving = NewSaving;
