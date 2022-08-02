@@ -128,16 +128,19 @@ TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
   return Producers;
 }
 
-template <typename ValuesT> FixedVectorType *getVectorType(const ValuesT &Values) {
+template <typename ValuesT>
+FixedVectorType *getVectorType(const ValuesT &Values) {
   return FixedVectorType::get(Values.front()->getType(), Values.size());
 }
+
+static bool isUndefOrConstant(Value *V) { return !V || isa<Constant>(V); }
 
 BottomUpHeuristic::SolutionView
 BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
   auto *VecTy = getVectorType(Values);
 
   // No cost for constant/undef vector
-  if (all_of(Values, [](Value *V) { return !V || isa<Constant>(V); }))
+  if (all_of(Values, isUndefOrConstant))
     return Solution(nullptr, 0);
 
   // If we can produce this vector by broadcast ...
@@ -235,12 +238,49 @@ static InstructionCost getSaving(const PackSet &Packs,
 
     // Figure out cost of shuffling the required operands
     for (const OperandPack &O : P->getOperands()) {
-      // No shuffle cost if O is produced exactly by some other pack P2
-      if (auto *P2 = Packs.getPackForValue(O.front());
-          P2 && all_of_zip(P->values(), O,
-                           [](auto *V1, auto *V2) { return V1 == V2; }))
-        continue;
       auto *OpVecTy = getVectorType(O);
+
+      // No shuffling cost for constant vector
+      if (all_of(O, isUndefOrConstant))
+        continue;
+
+      // We can build the vector by broadcast
+      if (!IsPacked(O.front()) && is_splat(O)) {
+        Saving -=
+            TTI.getShuffleCost(TargetTransformInfo::SK_Broadcast, OpVecTy);
+        continue;
+      }
+
+      SmallPtrSet<Pack *, 2> SrcPacks;
+      for (auto X : enumerate(O)) {
+        Value *V = X.value();
+        // Remember the vectors that we need to shuffle from
+        if (auto *P2 = Packs.getPackForValue(V)) {
+          SrcPacks.insert(P2);
+        } else if (!isa<Constant>(V)) {
+          // Pay the insertion cost
+          Saving -= TTI.getVectorInstrCost(Instruction::InsertElement, OpVecTy,
+                                           X.index());
+        }
+      }
+
+      if (SrcPacks.size() == 1) {
+        auto *SrcP = *SrcPacks.begin();
+        // No shuffle cost if O is produced exactly by some other pack
+        if (all_of_zip(SrcP->values(), O,
+                       [](auto *V1, auto *V2) { return V1 == V2; }))
+          continue;
+
+        Saving -= TTI.getShuffleCost(TargetTransformInfo::SK_PermuteSingleSrc,
+                                     OpVecTy);
+        continue;
+      }
+
+      // In general, gather the vector elements from the source vectors pairwise
+      auto ShflCost =
+          TTI.getShuffleCost(TargetTransformInfo::SK_PermuteTwoSrc, OpVecTy);
+      unsigned NumShfls = SrcPacks.size() - 1;
+      Saving -= ShflCost * NumShfls;
     }
   }
   return Saving;
@@ -292,7 +332,7 @@ packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL, ScalarEvolution &SE,
     auto Operands = StoreP->getOperands();
     runBottomUp(Operands.front(), Heuristic, Scratch);
     auto NewSaving = getSaving(Scratch, TTI);
-    if (NewSaving >= PrevSaving or true) {
+    if (NewSaving >= PrevSaving) {
       errs() << "Prev saving: " << PrevSaving << ", new saving " << NewSaving
              << '\n';
       PrevSaving = NewSaving;
