@@ -1,7 +1,6 @@
 #include "AddrUtil.h"
 #include "DependenceChecker.h"
 #include "PackSet.h"
-#include "pssa/PSSA.h"
 #include "pssa/VectorHashInfo.h"
 #include "pssa/Visitor.h"
 #include "vegen/Pack.h"
@@ -9,7 +8,6 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h" // getUnderlyingObject
 #include "llvm/IR/Instructions.h"
-#include "llvm/IR/Intrinsics.h"
 
 using namespace llvm;
 

@@ -9,7 +9,6 @@
 #include "llvm/IR/Instructions.h"
 
 namespace llvm {
-class Type;
 class Loop;
 class LLVMContext;
 class Value;

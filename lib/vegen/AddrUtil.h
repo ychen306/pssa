@@ -2,6 +2,7 @@
 #define VEGEN_ADDR_UTIL_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Optional.h"
 
 namespace llvm {
@@ -10,7 +11,6 @@ class Value;
 class DataLayout;
 class ScalarEvolution;
 class LoopInfo;
-template <typename T> class SmallVectorImpl;
 } // namespace llvm
 
 // Re-implementations of llvm::getPointersDiff and llvm::sortPtrAccesses
