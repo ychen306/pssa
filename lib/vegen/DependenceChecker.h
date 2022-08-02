@@ -10,8 +10,10 @@ class DependenceInfo;
 class Instruction;
 } // namespace llvm
 
+class PredicatedSSA;
 class VLoop;
 class Item;
+class PackSet;
 
 bool mayReadOrWriteMemory(llvm::Instruction *I);
 bool mayReadOrWriteMemory(const Item &It);
@@ -39,5 +41,11 @@ public:
 
   llvm::ArrayRef<llvm::Instruction *> getLiveIns(VLoop *VL);
 };
+
+// Find the dependences of Items but scan no further than the earliest Items
+void findInBetweenDeps(llvm::SmallVectorImpl<Item> &Deps,
+                       llvm::ArrayRef<Item> Items, VLoop *VL,
+                       PredicatedSSA &PSSA, DependenceChecker &DepChecker,
+                       const PackSet *Packs = nullptr);
 
 #endif // VEGEN_DEPENDENCECHECKER_H

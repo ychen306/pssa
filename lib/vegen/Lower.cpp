@@ -1,6 +1,6 @@
 #include "DependenceChecker.h"
-#include "TripCount.h"
 #include "PackSet.h"
+#include "TripCount.h"
 #include "pssa/Inserter.h"
 #include "pssa/PSSA.h"
 #include "pssa/VectorHashInfo.h"
@@ -266,95 +266,14 @@ public:
 
 // Move the items together while still preserving dependences
 static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
-                  const PackSet *Packs, DependenceChecker &DepChecker) {
+                  DependenceChecker &DepChecker,
+                  const PackSet *Packs = nullptr) {
   if (Items.size() <= 1)
     return;
 
   auto *VL = PSSA.getLoopForItem(Items.front());
-  auto ComesBefore = [VL](const Item &It1, const Item &It2) {
-    return VL->comesBefore(It1, It2);
-  };
-
-  assert(all_of(Items,
-                [&](const Item &It) { return PSSA.getLoopForItem(It) == VL; }));
-  Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
-
-  DenseSet<Item, ItemHashInfo> Visited;
-  DenseSet<const ControlCondition *> VisitedConds;
-  SmallVector<Item> Depended;
-  // Do DFS on a given item
-  std::function<void(Item)> Visit;
-  auto VisitValue = [&Visit](Value *V) {
-    if (auto *I = dyn_cast<Instruction>(V))
-      Visit(I);
-  };
-  std::function<void(const ControlCondition *)> VisitCond =
-      [&](const ControlCondition *C) {
-        if (!C)
-          return;
-        if (!VisitedConds.insert(C).second)
-          return;
-
-        if (auto *And = dyn_cast<ConditionAnd>(C)) {
-          VisitCond(And->Parent);
-          VisitValue(And->Cond);
-          return;
-        }
-
-        auto *Or = cast<ConditionOr>(C);
-        for_each(Or->Conds, VisitCond);
-      };
-
-  // FIXME: check circular dependencies
-  Visit = [&](Item It) {
-    auto *ParentVL = PSSA.getLoopForItem(It);
-    if (!VL->contains(It))
-      return;
-
-    while (ParentVL != VL) {
-      It = ParentVL;
-      ParentVL = ParentVL->getParent();
-    }
-
-    // Only consider items that come after Earliest
-    if (!VL->contains(It) || !VL->comesBefore(Earliest, It))
-      return;
-    if (!Visited.insert(It).second)
-      return;
-
-    ArrayRef<Item> Coupled = It;
-    // Process (register) data and control dependences
-    if (auto *I = It.asInstruction()) {
-      Pack *P = Packs ? Packs->getPackForValue(I) : nullptr;
-      // If I is packed with other instructions,
-      // we also need to check their dependences
-      ArrayRef<Instruction *> Insts = P ? P->values() : I;
-      for (auto *I : Insts) {
-        for_each(I->operand_values(), VisitValue);
-        VisitCond(VL->getInstCond(I));
-      }
-      Coupled = toItems(Insts);
-    } else {
-      auto *SubVL = It.asLoop();
-      for_each(DepChecker.getLiveIns(SubVL), VisitValue);
-      VisitCond(SubVL->getLoopCond());
-    }
-
-    // Scan the memory dependences between Earliest and It
-    if (mayReadOrWriteMemory(It)) {
-      for (auto I = std::next(VL->toIterator(Earliest)), E = VL->toIterator(It);
-           I != E; ++I) {
-        for (auto &It2 : Coupled)
-          if (DepChecker.depends(*I, It2))
-            Visit(*I);
-      }
-    }
-
-    Depended.push_back(It);
-  };
-
-  // Do DFS to find out dependences of the Items that appear after Earliest
-  for_each(Items, Visit);
+  SmallVector<Item> Deps;
+  findInBetweenDeps(Deps, Items, VL, PSSA, DepChecker, Packs);
 
   // FIXME: refactor this out as an BatchItemMover
   ////// Utilities to erase items in batch and re-insert them later //////
@@ -391,7 +310,7 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
   // and after which the items will look like
   // [before earliest][earliest][items and non deps between earliest and latest]
   DenseSet<Item, ItemHashInfo> ItemSet(Items.begin(), Items.end());
-  for (const auto &It : Depended) {
+  for (const auto &It : Deps) {
     if (ItemSet.count(It))
       continue;
     RemoveItem(It);
@@ -399,6 +318,10 @@ static void merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
 
   // Insert the removed items before the earliest so we have
   // [before earliest][depended][items and non deps]
+  Item Earliest = *std::min_element(Items.begin(), Items.end(),
+                                    [VL](const Item &It1, const Item &It2) {
+                                      return VL->comesBefore(It1, It2);
+                                    });
   auto InsertPt = VL->toIterator(Earliest);
   ReinsertItems(InsertPt);
 
@@ -672,7 +595,7 @@ static void mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
       SmallVector<VLoop *> Loops(LoopsToFuse.findLeader(Leader),
                                  LoopsToFuse.member_end());
       // Move the loops together first
-      merge(PSSA, toItems(Loops), nullptr /*inst to pack map*/, DepChecker);
+      merge(PSSA, toItems(Loops), DepChecker);
       VLoop *Fused = nullptr;
       auto *LeaderVL = Loops.front();
       bool Fusible = all_of(drop_begin(Loops), [&](auto *VL2) {
@@ -1171,11 +1094,12 @@ static BlendPack *packAsBlends(ArrayRef<Value *> Values, PackSet &Packs,
 
 // Run the bottom-up heuristic to produce the required vector masks
 // Also pack any of the active flags encountered along the way
-static void packConditions(ArrayRef<VectorMask> Masks,
-                           const DenseMap<Value *, Value *> &ExitGuards,
-                           const DenseSet<PHINode *> &ActiveFlags,
-                           SmallVectorImpl<std::unique_ptr<ConditionPack>> &CondPacks,
-                           PackSet &Packs, PredicatedSSA &PSSA) {
+static void
+packConditions(ArrayRef<VectorMask> Masks,
+               const DenseMap<Value *, Value *> &ExitGuards,
+               const DenseSet<PHINode *> &ActiveFlags,
+               SmallVectorImpl<std::unique_ptr<ConditionPack>> &CondPacks,
+               PackSet &Packs, PredicatedSSA &PSSA) {
   DenseSet<VectorMask, VectorHashInfo<VectorMask>> Visited;
   SmallVector<VectorMask> Worklist(Masks.begin(), Masks.end());
   while (!Worklist.empty()) {
@@ -1256,7 +1180,7 @@ void VectorGen::run() {
   // Move the packed instructions together
   for (auto *P : Packs) {
     if (!isa<MuPack>(P))
-      merge(PSSA, toItems(P->values()), &Packs, DepChecker);
+      merge(PSSA, toItems(P->values()), DepChecker, &Packs);
   }
   //==== End scheduling ====//
 
