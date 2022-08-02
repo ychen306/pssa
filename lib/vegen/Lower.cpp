@@ -310,12 +310,7 @@ static bool merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
   // Remove the depended values,
   // and after which the items will look like
   // [before earliest][earliest][items and non deps between earliest and latest]
-  DenseSet<Item, ItemHashInfo> ItemSet(Items.begin(), Items.end());
-  for (const auto &It : Deps) {
-    if (ItemSet.count(It))
-      continue;
-    RemoveItem(It);
-  }
+  for_each(Deps, RemoveItem);
 
   // Insert the removed items before the earliest so we have
   // [before earliest][depended][items and non deps]

@@ -121,10 +121,10 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
   DenseSet<Item, ItemHashInfo> Visited, Processing;
   DenseSet<const ControlCondition *> VisitedConds;
   // Do DFS on a given item
-  std::function<void(Item)> Visit;
+  std::function<void(Item, bool)> Visit;
   auto VisitValue = [&Visit](Value *V) {
     if (auto *I = dyn_cast<Instruction>(V))
-      Visit(I);
+      Visit(I, true);
   };
   bool FoundCycle = false;
   std::function<void(const ControlCondition *)> VisitCond =
@@ -144,7 +144,7 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
         for_each(Or->Conds, VisitCond);
       };
 
-  Visit = [&](Item It) {
+  Visit = [&](Item It, bool AddDep) {
     if (!Processing.insert(It).second) {
       FoundCycle = true;
       return;
@@ -192,14 +192,17 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
            I != E; ++I) {
         for (auto &It2 : Coupled)
           if (DepChecker.depends(*I, It2))
-            Visit(*I);
+            Visit(*I, true);
       }
     }
 
-    Deps.push_back(It);
+    if (AddDep)
+      Deps.push_back(It);
   };
 
   // Do DFS to find out dependences of the Items that appear after Earliest
-  for_each(Items, Visit);
+  for (auto It : Items)
+    Visit(It, /*AddDep=*/false);
+
   return FoundCycle;
 }
