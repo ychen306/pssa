@@ -13,8 +13,8 @@ class TargetTransformInfo;
 class Pack;
 class PredicatedSSA;
 
-std::vector<std::unique_ptr<Pack>>
-packBottomUp(PredicatedSSA &, const llvm::DataLayout &, llvm::ScalarEvolution &,
-             llvm::LoopInfo &, llvm::TargetTransformInfo &);
+std::vector<Pack *> packBottomUp(PredicatedSSA &, const llvm::DataLayout &,
+                                 llvm::ScalarEvolution &, llvm::LoopInfo &,
+                                 llvm::TargetTransformInfo &);
 
 #endif // VEGEN_HEURISTICS_H

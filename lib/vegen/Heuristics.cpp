@@ -338,9 +338,9 @@ static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
   }
 }
 
-std::vector<std::unique_ptr<Pack>>
-packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL, ScalarEvolution &SE,
-             LoopInfo &LI, TargetTransformInfo &TTI) {
+std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
+                                 ScalarEvolution &SE, LoopInfo &LI,
+                                 TargetTransformInfo &TTI) {
   StoreGrouper::ObjToInstMapTy ObjToStoreMap;
   visitWith<StoreGrouper>(PSSA, ObjToStoreMap);
 
@@ -364,7 +364,8 @@ packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL, ScalarEvolution &SE,
     auto Operands = StoreP->getOperands();
     runBottomUp(Operands.front(), Heuristic, Scratch);
     auto NewSaving = getSaving(Scratch, TTI);
-    if (NewSaving >= PrevSaving or true) {
+    // FIXME: need to check for dep cycle
+    if (NewSaving >= PrevSaving) {
       errs() << "Prev saving: " << PrevSaving << ", new saving " << NewSaving
              << '\n';
       PrevSaving = NewSaving;
@@ -374,9 +375,9 @@ packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL, ScalarEvolution &SE,
   for (auto *P : Packs)
     errs() << "pack " << *P << '\n';
 
-  std::vector<std::unique_ptr<Pack>> ThePacks;
+  std::vector<Pack *> ThePacks;
   ThePacks.reserve(Packs.size());
   for (auto *P : Packs)
-    ThePacks.emplace_back(P->clone());
+    ThePacks.push_back(P->clone());
   return ThePacks;
 }
