@@ -269,6 +269,12 @@ static bool merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
   if (FoundCycle)
     return false;
 
+  // The items should be independent
+  SmallDenseSet<Item, 8, ItemHashInfo> ItemSet(Items.begin(), Items.end());
+  for (auto It : Deps)
+    if (ItemSet.count(It))
+      return false;
+
   ////// Utilities to erase items in batch and re-insert them later //////
   SmallVector<Item> Removed;
   SmallVector<const ControlCondition *> ItemConds;

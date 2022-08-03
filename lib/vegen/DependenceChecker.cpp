@@ -3,6 +3,7 @@
 #include "pssa/PSSA.h"
 #include "vegen/Pack.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
+#include "llvm/Analysis/ValueTracking.h"
 
 using namespace llvm;
 
@@ -32,7 +33,10 @@ void DependenceChecker::processLoop(VLoop *VL) {
           Summary.LiveIns.push_back(I);
     } else {
       assert(It.asInstruction());
-      for (Value *O : It.asInstruction()->operand_values()) {
+      auto *I = It.asInstruction();
+      if (I->mayReadOrWriteMemory())
+        Summary.MemoryInsts.push_back(I);
+      for (Value *O : I->operand_values()) {
         auto *OI = dyn_cast<Instruction>(O);
         if (OI && !VL->contains(OI))
           Summary.LiveIns.push_back(OI);
@@ -61,6 +65,18 @@ bool DependenceChecker::depends(const Item &It1, const Item &It2) {
     // if I1 and I2 are in the same loop?
     auto Dep = DI.depends(I1, I2, true);
     return Dep && Dep->isOrdered();
+  } else if (VL1 && VL2) {
+    processLoop(VL1);
+    processLoop(VL2);
+
+    for (auto *I1 : Summaries[VL1].MemoryInsts)
+      for (auto *I2 : Summaries[VL2].MemoryInsts) {
+        auto Dep = DI.depends(I1, I2, true);
+        if (Dep && Dep->isOrdered()) {
+          return true;
+        }
+      }
+    return false;
   }
 
   assert((I1 && VL2) || (VL1 && I2));
@@ -161,10 +177,11 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
       ParentVL = ParentVL->getParent();
     }
 
-    // Only consider items that come after Earliest
-    if (!VL->contains(It) || !VL->comesBefore(Earliest, It))
+    // Don't consider things that comes before earliest
+    if (It != Earliest && (!VL->contains(It) || !VL->comesBefore(Earliest, It)))
       return;
-    if (!Visited.insert(It).second)
+
+    if (Visited.count(It))
       return;
 
     SmallVector<Item, 8> Coupled;
@@ -188,7 +205,7 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
 
     // Scan the memory dependences between Earliest and It
     if (mayReadOrWriteMemory(It)) {
-      for (auto I = std::next(VL->toIterator(Earliest)), E = VL->toIterator(It);
+      for (auto I = VL->toIterator(Earliest), E = VL->toIterator(It);
            I != E; ++I) {
         for (auto &It2 : Coupled)
           if (DepChecker.depends(*I, It2))
@@ -196,8 +213,10 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
       }
     }
 
-    if (AddDep)
+    if (AddDep) {
+      Visited.insert(It);
       Deps.push_back(It);
+    }
   };
 
   // Do DFS to find out dependences of the Items that appear after Earliest
