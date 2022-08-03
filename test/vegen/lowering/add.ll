@@ -1,4 +1,5 @@
 ; RUN: %opt -passes=test-vector-codegen,verify %s -p add,add.1,add.2,add.3 -p i,i2,i4,i6 -p i1,i3,i5,i7 -p storeOf:add,storeOf:add.1,storeOf:add.2,storeOf:add.3 -S | FileCheck %s
+; RUN: %opt -passes=global-slp %s -S | FileCheck %s
 
 ; CHECK: [[B:%.*]] = load <4 x i32>, ptr @B
 ; CHECK-NEXT: [[C:%.*]] = load <4 x i32>, ptr @C
