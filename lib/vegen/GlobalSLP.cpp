@@ -25,7 +25,7 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   PredicatedSSA PSSA(&F, LI, DT, PDT, &SE);
 
   std::vector<Pack *> Packs = packBottomUp(PSSA, DL, SE, LI, DI, TTI);
-  if (!lower(Packs, PSSA, DI))
+  if (Packs.empty() || !lower(Packs, PSSA, DI))
     return PreservedAnalyses::all();
   for (auto *P : Packs)
     delete P;
