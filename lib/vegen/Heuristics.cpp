@@ -353,9 +353,9 @@ static bool isIndependent(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
                           DependenceChecker &DepChecker) {
   SmallVector<Item> Items;
 
-  auto *VL0 = PSSA.getLoopForInst(Insts.front());
+  auto *ParentVL = PSSA.getLoopForInst(Insts.front());
   if (all_of(Insts,
-             [VL0, &PSSA](auto *I) { return VL0 == PSSA.getLoopForInst(I); })) {
+             [ParentVL, &PSSA](auto *I) { return ParentVL == PSSA.getLoopForInst(I); })) {
     Items.assign(Insts.begin(), Insts.end());
   } else {
     SmallDenseMap<VLoop *, TinyPtrVector<Instruction *>, 8> LoopToInstsMap;
@@ -383,10 +383,11 @@ static bool isIndependent(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
     }
 
     Items.assign(Loops.begin(), Loops.end());
+    ParentVL = Loops.front()->getParent();
   }
 
   SmallVector<Item> Deps;
-  findInBetweenDeps(Deps, Items, VL0, PSSA, DepChecker);
+  findInBetweenDeps(Deps, Items, ParentVL, PSSA, DepChecker);
   SmallDenseSet<Item, 8, ItemHashInfo> ItemSet(Items.begin(), Items.end());
   for (auto &Dep : Deps)
     if (ItemSet.count(Dep))
