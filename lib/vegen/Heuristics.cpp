@@ -381,6 +381,8 @@ static bool isIndependent(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
           return false;
       }
     }
+
+    Items.assign(Loops.begin(), Loops.end());
   }
 
   SmallVector<Item> Deps;
