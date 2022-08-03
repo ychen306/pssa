@@ -207,14 +207,6 @@ public:
   bool run();
 };
 
-// FIXME: this has O(n^2) complexity
-static VLoop *nearestCommonParent(VLoop *UserVL, VLoop *DefVL) {
-  while (UserVL && !UserVL->contains(DefVL))
-    UserVL = UserVL->getParent();
-  assert(UserVL && UserVL->contains(DefVL));
-  return UserVL;
-}
-
 template <typename ValueT> using ItemMap = DenseMap<Item, ValueT, ItemHashInfo>;
 
 // Utility to help rewrite the use of loop exit values for co-iteration
@@ -401,6 +393,14 @@ Value *ExitsRemapper::remapSubLoopExit(VLoop *SubVL, Value *V) {
   auto *Guarded =
       guardExitValue(SubVL->getParent(), V, SubVL, OrigLoopConds.lookup(SubVL));
   return RemappedSubLoopExits[{SubVL, V}] = Guarded;
+}
+
+// FIXME: this has quadratic complexity
+VLoop *nearestCommonParent(VLoop *VL1, VLoop *VL2) {
+  while (VL1 && !VL1->contains(VL2))
+    VL1 = VL1->getParent();
+  assert(VL1 && VL1->contains(VL2));
+  return VL1;
 }
 
 Value *ExitsRemapper::remapValue(VLoop *UserVL, Value *V) {

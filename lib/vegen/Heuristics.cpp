@@ -337,11 +337,68 @@ static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
   }
 }
 
+static bool haveSameParent(ArrayRef<VLoop *> Loops) {
+  if (Loops.empty())
+    return true;
+
+  auto *Parent = Loops.front()->getParent();
+  for (auto *VL : drop_begin(Loops))
+    if (VL->getParent() != Parent)
+      return false;
+  return true;
+};
+
+// Return whether the Insts are independent
+static bool isIndependent(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
+                          DependenceChecker &DepChecker) {
+  SmallVector<Item> Items;
+
+  auto *VL0 = PSSA.getLoopForInst(Insts.front());
+  if (all_of(Insts,
+             [VL0, &PSSA](auto *I) { return VL0 == PSSA.getLoopForInst(I); })) {
+    Items.assign(Insts.begin(), Insts.end());
+  } else {
+    SmallDenseMap<VLoop *, TinyPtrVector<Instruction *>, 8> LoopToInstsMap;
+    for (auto *I : Insts) {
+      auto *VL = PSSA.getLoopForInst(I);
+      LoopToInstsMap[VL].push_back(I);
+    }
+
+    // For instructions that come from the same loops,
+    // make sure that they are independent
+    for (auto &Insts2 : make_second_range(LoopToInstsMap))
+      if (Insts2.size() > 1 && !isIndependent(Insts2, PSSA, DepChecker))
+        return false;
+
+    // Make sure the disjoint parent loops are independent
+    SmallVector<VLoop *, 8> Loops(make_first_range(LoopToInstsMap));
+    while (!haveSameParent(Loops)) {
+      for (auto &VL : Loops) {
+        VL = VL->getParent();
+        // This only happens when the instructions have different nesting depth,
+        // in which case we just bail out.
+        if (!VL)
+          return false;
+      }
+    }
+  }
+
+  SmallVector<Item> Deps;
+  findInBetweenDeps(Deps, Items, VL0, PSSA, DepChecker);
+  SmallDenseSet<Item, 8, ItemHashInfo> ItemSet(Items.begin(), Items.end());
+  for (auto &Dep : Deps)
+    if (ItemSet.count(Dep))
+      return false;
+  return true;
+}
+
 std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
                                  ScalarEvolution &SE, LoopInfo &LI,
                                  DependenceInfo &DI, TargetTransformInfo &TTI) {
   StoreGrouper::ObjToInstMapTy ObjToStoreMap;
   visitWith<StoreGrouper>(PSSA, ObjToStoreMap);
+
+  DependenceChecker DepChecker(DI);
 
   BottomUpHeuristic Heuristic(PSSA, DL, SE, LI, TTI);
   PackSet Packs;
@@ -351,6 +408,9 @@ std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
     SmallVector<Instruction *> SortedStores;
     // FIXME: deal with cases when there are gaps between the stores
     if (!sortByPointers(Stores, SortedStores, DL, SE, LI))
+      continue;
+
+    if (!isIndependent(Stores, PSSA, DepChecker))
       continue;
 
     auto *StoreP = StorePack::tryPack(SortedStores, DL, SE, LI, PSSA);
