@@ -23,15 +23,19 @@ class DependenceChecker {
     llvm::SmallVector<llvm::Instruction *, 8> LiveIns, MemoryInsts;
   };
 
+  PredicatedSSA &PSSA;
   llvm::DependenceInfo &DI;
+
   // use std::map to avoid reacllocation
   std::map<VLoop *, LoopSummary> Summaries;
 
   void processLoop(VLoop *VL);
   llvm::ArrayRef<llvm::Instruction *> getMemoryInsts(VLoop *);
 
+  bool hasDependency(llvm::Instruction *, llvm::Instruction *);
+
 public:
-  DependenceChecker(llvm::DependenceInfo &DI) : DI(DI) {}
+  DependenceChecker(PredicatedSSA &PSSA, llvm::DependenceInfo &DI) : PSSA(PSSA), DI(DI) {}
 
   void invalidate(VLoop *VL) { Summaries.erase(VL); }
 

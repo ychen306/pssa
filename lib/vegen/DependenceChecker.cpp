@@ -55,6 +55,30 @@ ArrayRef<Instruction *> DependenceChecker::getMemoryInsts(VLoop *VL) {
   return Summaries[VL].MemoryInsts;
 }
 
+// FIXME: make this more general
+static bool isExclusive(const ControlCondition *C1,
+                        const ControlCondition *C2) {
+  // If any one is true then it's definitely not exclusive
+  if (!C1 || !C2)
+    return false;
+
+  if (auto *And1 = dyn_cast<ConditionAnd>(C1); And1 && And1->Complement == C2)
+    return true;
+
+  return false;
+}
+
+bool DependenceChecker::hasDependency(Instruction *I1, Instruction *I2) {
+  auto *C1 = PSSA.getInstCond(I1);
+  auto *C2 = PSSA.getInstCond(I2);
+  // is C1 and C2 cannot be true simultaneously then there's no dep.
+  if (isExclusive(C1, C2))
+    return false;
+
+  auto Dep = DI.depends(I1, I2, true);
+  return Dep && Dep->isOrdered();
+}
+
 bool DependenceChecker::depends(const Item &It1, const Item &It2) {
   auto *I1 = It1.asInstruction();
   auto *I2 = It2.asInstruction();
@@ -63,19 +87,16 @@ bool DependenceChecker::depends(const Item &It1, const Item &It2) {
   if (I1 && I2) {
     // TODO: directly query AA for better precision,
     // if I1 and I2 are in the same loop?
-    auto Dep = DI.depends(I1, I2, true);
-    return Dep && Dep->isOrdered();
+    return hasDependency(I1, I2);
   } else if (VL1 && VL2) {
     processLoop(VL1);
     processLoop(VL2);
 
-    for (auto *I1 : Summaries[VL1].MemoryInsts)
-      for (auto *I2 : Summaries[VL2].MemoryInsts) {
-        auto Dep = DI.depends(I1, I2, true);
-        if (Dep && Dep->isOrdered()) {
+    for (auto *I1 : Summaries[VL1].MemoryInsts) {
+      for (auto *I2 : Summaries[VL2].MemoryInsts)
+        if (hasDependency(I1, I2))
           return true;
-        }
-      }
+    }
     return false;
   }
 
@@ -97,10 +118,8 @@ bool DependenceChecker::depends(const Item &It1, const Item &It2) {
   // Figure out the memory instructions in VL2
   processLoop(VL2);
 
-  return any_of(Summaries[VL2].MemoryInsts, [&](Instruction *I) {
-    auto Dep = DI.depends(I1, I, true);
-    return Dep && Dep->isOrdered();
-  });
+  return any_of(Summaries[VL2].MemoryInsts,
+                [&](Instruction *I) { return hasDependency(I1, I); });
 }
 
 ArrayRef<Instruction *> DependenceChecker::getLiveIns(VLoop *VL) {
@@ -205,8 +224,8 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
 
     // Scan the memory dependences between Earliest and It
     if (mayReadOrWriteMemory(It)) {
-      for (auto I = VL->toIterator(Earliest), E = VL->toIterator(It);
-           I != E; ++I) {
+      for (auto I = VL->toIterator(Earliest), E = VL->toIterator(It); I != E;
+           ++I) {
         for (auto &It2 : Coupled)
           if (DepChecker.depends(*I, It2))
             Visit(*I, true);

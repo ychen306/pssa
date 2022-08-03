@@ -1176,7 +1176,7 @@ bool VectorGen::run() {
   }
 
   //==== Begin Scheduling ====//
-  DependenceChecker DepChecker(DI);
+  DependenceChecker DepChecker(PSSA, DI);
   // Figure out the loops that we need to fuse.
   EquivalenceClasses<VLoop *> LoopsToFuse = partitionLoops(Packs, PSSA);
   // Fuse the loops top-down

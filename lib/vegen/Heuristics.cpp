@@ -401,7 +401,7 @@ std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
   StoreGrouper::ObjToInstMapTy ObjToStoreMap;
   visitWith<StoreGrouper>(PSSA, ObjToStoreMap);
 
-  DependenceChecker DepChecker(DI);
+  DependenceChecker DepChecker(PSSA, DI);
 
   BottomUpHeuristic Heuristic(PSSA, DL, SE, LI, TTI);
   PackSet Packs;
