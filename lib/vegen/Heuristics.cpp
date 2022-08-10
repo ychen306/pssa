@@ -354,8 +354,9 @@ static bool isIndependent(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
   SmallVector<Item> Items;
 
   auto *ParentVL = PSSA.getLoopForInst(Insts.front());
-  if (all_of(Insts,
-             [ParentVL, &PSSA](auto *I) { return ParentVL == PSSA.getLoopForInst(I); })) {
+  if (all_of(Insts, [ParentVL, &PSSA](auto *I) {
+        return ParentVL == PSSA.getLoopForInst(I);
+      })) {
     Items.assign(Insts.begin(), Insts.end());
   } else {
     SmallDenseMap<VLoop *, TinyPtrVector<Instruction *>, 8> LoopToInstsMap;
@@ -395,6 +396,33 @@ static bool isIndependent(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
   return true;
 }
 
+using StoreGroupType = std::map<Instruction *, SmallVector<Instruction *, 8>>;
+// Partition the stores by whether two stores are comparable.
+// E.g., a[i] and a[j] (assuming we know nothing more about i and j) are not
+// comparable, while a[i] and a[i+2] are comparable.
+static void partitionStores(ArrayRef<Instruction *> Stores,
+                            StoreGroupType &Groups,
+                            const DataLayout &DL, ScalarEvolution &SE,
+                            LoopInfo &LI) {
+  for (auto *Store : Stores) {
+    auto *Ty = getLoadStoreType(Store);
+    auto *Ptr = getLoadStorePointerOperand(Store);
+    bool Found = false;
+    for (auto &KV : Groups) {
+      auto *Store2 = KV.first;
+      auto *Ty2 = getLoadStoreType(Store2);
+      auto *Ptr2 = getLoadStorePointerOperand(Store);
+      if (diffPointers(Ty, Ptr, Ty2, Ptr2, DL, SE, LI)) {
+        Found = true;
+        KV.second.push_back(Store);
+        break;
+      }
+    }
+    if (!Found)
+      Groups[Store].push_back(Store);
+  }
+}
+
 std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
                                  ScalarEvolution &SE, LoopInfo &LI,
                                  DependenceInfo &DI, TargetTransformInfo &TTI) {
@@ -407,18 +435,18 @@ std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
   PackSet Packs;
   auto PrevSaving = getSaving(Packs, TTI);
 
-  for (ArrayRef<Instruction *> Stores : make_second_range(ObjToStoreMap)) {
+  auto VectorizeStoreChain = [&](ArrayRef<Instruction *> Stores) {
     SmallVector<Instruction *> SortedStores;
     // FIXME: deal with cases when there are gaps between the stores
     if (!sortByPointers(Stores, SortedStores, DL, SE, LI))
-      continue;
+      return;
 
     if (!isIndependent(Stores, PSSA, DepChecker))
-      continue;
+      return;
 
     auto *StoreP = StorePack::tryPack(SortedStores, DL, SE, LI, PSSA);
     if (!StoreP)
-      continue;
+      return;
 
     errs() << "Found seed store pack: " << *StoreP << '\n';
     PackSet Scratch = Packs;
@@ -433,6 +461,12 @@ std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
       PrevSaving = NewSaving;
       Packs = std::move(Scratch);
     }
+  };
+
+  for (ArrayRef<Instruction *> Stores : make_second_range(ObjToStoreMap)) {
+    StoreGroupType StoreGroups;
+    partitionStores(Stores, StoreGroups, DL, SE, LI);
+    for_each(make_second_range(StoreGroups), VectorizeStoreChain);
   }
   for (auto *P : Packs)
     errs() << "pack " << *P << '\n';
