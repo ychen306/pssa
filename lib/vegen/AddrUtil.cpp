@@ -22,7 +22,8 @@ public:
   static const SCEV *rewrite(ScalarEvolution &SE, const SCEV *Expr,
                              const LoopToLoopMap &OldToNewMap) {
     AddRecLoopRewriter Rewriter(SE, OldToNewMap);
-    return Rewriter.visit(Expr);
+    auto *Result = Rewriter.visit(Expr);
+    return Rewriter.Success ? Result : nullptr;
   }
 
   const SCEV *visitAddRecExpr(const SCEVAddRecExpr *Expr) {
@@ -91,6 +92,8 @@ getSCEVs(Value *PtrA, Value *PtrB, ScalarEvolution &SE, LoopInfo &LI) {
       LoopMapping[LoopB] = LoopA;
 
   SCEVB = AddRecLoopRewriter::rewrite(SE, SCEVB, LoopMapping);
+  if (!SCEVB)
+    return None;
 
   return std::make_pair(SCEVA, SCEVB);
 }
