@@ -33,7 +33,7 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
 
   auto *I = Insts.front();
   if (!isa<BinaryOperator>(I) && !isa<CmpInst>(I) && !isa<SelectInst>(I) &&
-      !isa<CastInst>(I))
+      !isa<CastInst>(I) && !isa<FreezeInst>(I))
     return nullptr;
 
   auto Rest = drop_begin(Insts);
@@ -92,6 +92,9 @@ Value *SIMDPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
     auto *VecTy = FixedVectorType::get(Cast->getType(), Insts.size());
     return Insert.create<CastInst>(Cast->getOpcode(), Operands.front(), VecTy);
   }
+
+  if (isa<FreezeInst>(I))
+    return Insert.make<FreezeInst>(Operands.front());
 
   llvm_unreachable("unsupported opcode");
 }

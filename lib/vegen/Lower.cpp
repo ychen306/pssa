@@ -999,6 +999,12 @@ void VectorGen::runOnLoop(VLoop *VL) {
       // In this case, we won't bother remapping the instruction
       if (auto *PN = dyn_cast<PHINode>(I); PN && MusToPatch.count(PN))
         continue;
+
+      // When we emit code for a exit-phi (from lcssa form),
+      // the result gets const folded away as a no-op,
+      // taking the value from the loop that we are exiting.
+      if (PSSA.getLoopForInst(I) != VL)
+        continue;
     }
 
     // Fix some of the operands if need to.
