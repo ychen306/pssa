@@ -411,7 +411,7 @@ static void partitionStores(ArrayRef<Instruction *> Stores,
     for (auto &KV : Groups) {
       auto *Store2 = KV.first;
       auto *Ty2 = getLoadStoreType(Store2);
-      auto *Ptr2 = getLoadStorePointerOperand(Store);
+      auto *Ptr2 = getLoadStorePointerOperand(Store2);
       if (diffPointers(Ty, Ptr, Ty2, Ptr2, DL, SE, LI)) {
         Found = true;
         KV.second.push_back(Store);
