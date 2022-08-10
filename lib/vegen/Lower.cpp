@@ -961,8 +961,10 @@ void VectorGen::runOnLoop(VLoop *VL) {
 
       SmallVector<const ControlCondition *, 8> Conds;
       for (auto *I : P->values())
-        if (I)
+        if (I) {
           Conds.push_back(VL->getInstCond(I));
+          markAsProcessed(I);
+        }
       auto *C = getGreatestCommonCondition(Conds);
 
       auto Iterator = VL->toIterator(I);
@@ -1158,10 +1160,8 @@ packConditions(ArrayRef<VectorMask> Masks,
         continue;
       Packs.add(P);
       for (auto &O : P->getOperands()) {
-        auto *P2 = packAsBlends(O, Packs, PSSA);
-        if (!P2)
-          continue;
-        Worklist.append(P2->masks());
+        if (auto *P2 = packAsBlends(O, Packs, PSSA))
+          Worklist.append(P2->masks());
       }
     }
   }

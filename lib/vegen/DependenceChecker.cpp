@@ -213,6 +213,8 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
       for (auto *I : Insts) {
         for_each(I->operand_values(), VisitValue);
         VisitCond(VL->getInstCond(I));
+        if (auto *PN = dyn_cast<PHINode>(I); PN && VL->isGatedPhi(PN))
+          for_each(VL->getPhiConditions(PN), VisitCond);
         Coupled.emplace_back(I);
       }
     } else {
