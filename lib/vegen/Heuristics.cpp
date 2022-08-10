@@ -275,6 +275,9 @@ static InstructionCost getSaving(const PackSet &Packs,
         }
       }
 
+      if (SrcPacks.empty())
+        continue;
+
       if (SrcPacks.size() == 1) {
         auto *SrcP = *SrcPacks.begin();
         // No shuffle cost if O is produced exactly by some other pack
