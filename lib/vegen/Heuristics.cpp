@@ -401,9 +401,8 @@ using StoreGroupType = std::map<Instruction *, SmallVector<Instruction *, 8>>;
 // E.g., a[i] and a[j] (assuming we know nothing more about i and j) are not
 // comparable, while a[i] and a[i+2] are comparable.
 static void partitionStores(ArrayRef<Instruction *> Stores,
-                            StoreGroupType &Groups,
-                            const DataLayout &DL, ScalarEvolution &SE,
-                            LoopInfo &LI) {
+                            StoreGroupType &Groups, const DataLayout &DL,
+                            ScalarEvolution &SE, LoopInfo &LI) {
   for (auto *Store : Stores) {
     auto *Ty = getLoadStoreType(Store);
     auto *Ptr = getLoadStorePointerOperand(Store);
@@ -459,7 +458,7 @@ std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
     auto NewSaving = getSaving(Scratch, TTI);
     // FIXME: need to check for dep cycle
     errs() << "Prev saving: " << PrevSaving << ", new saving " << NewSaving
-      << '\n';
+           << '\n';
     if (NewSaving >= PrevSaving) {
       PrevSaving = NewSaving;
       Packs = std::move(Scratch);
