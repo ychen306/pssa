@@ -458,9 +458,9 @@ std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
     runBottomUp(Operands.front(), Heuristic, Scratch);
     auto NewSaving = getSaving(Scratch, TTI);
     // FIXME: need to check for dep cycle
+    errs() << "Prev saving: " << PrevSaving << ", new saving " << NewSaving
+      << '\n';
     if (NewSaving >= PrevSaving) {
-      errs() << "Prev saving: " << PrevSaving << ", new saving " << NewSaving
-             << '\n';
       PrevSaving = NewSaving;
       Packs = std::move(Scratch);
     }
