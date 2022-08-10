@@ -1,6 +1,7 @@
 #include "AddrUtil.h"
 #include "DependenceChecker.h"
 #include "PackSet.h"
+#include "TripCount.h"
 #include "pssa/VectorHashInfo.h"
 #include "pssa/Visitor.h"
 #include "vegen/Pack.h"
@@ -302,11 +303,15 @@ static InstructionCost getSaving(const PackSet &Packs,
 
 // FIXME: also pack stuff required by masking
 static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
+                        PredicatedSSA &PSSA, ScalarEvolution &SE,
+
                         PackSet &Packs) {
   auto IsPacked = [&Packs](auto *V) { return Packs.isPacked(V); };
 
   DenseSet<OperandPack, VectorHashInfo<OperandPack>> Visited;
   SmallVector<OperandPack> Worklist{Root};
+
+  using LoopBundle = SmallVector<VLoop *, 8>;
 
   DenseSet<VectorMask, VectorHashInfo<VectorMask>> VisitedMasks;
   // Add mask operands to Worklist
@@ -326,6 +331,27 @@ static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
         }
       };
 
+  DenseSet<LoopBundle, VectorHashInfo<LoopBundle>> VisitedLoopBundles;
+  // Pack divergent control conditions from disjoint loops
+  std::function<void(const LoopBundle &)> ProcessLoopBundle = [&](auto &Loops) {
+    // Don't need to do anything when packing instructions from the same loop
+    if (is_splat(Loops))
+      return;
+    if (!VisitedLoopBundles.insert(Loops).second)
+      return;
+    LoopBundle Parents;
+    for (auto *VL : Loops)
+      Parents.push_back(VL->getParent());
+    auto *L0 = PSSA.getOrigLoop(Loops.front());
+    if (any_of(Loops, [&](auto *VL) {
+          return !haveIdenticalTripCounts(L0, PSSA.getOrigLoop(VL), SE);
+        })) {
+      ProcessMaskOperands(VectorMask(map_range(Loops, [](auto *VL) { return VL->getLoopCond(); })));
+      ProcessMaskOperands(VectorMask(map_range(Loops, [](auto *VL) { return VL->getBackEdgeCond(); })));
+    }
+    ProcessLoopBundle(Parents);
+  };
+
   while (!Worklist.empty()) {
     auto Values = Worklist.pop_back_val();
     if (any_of(Values, IsPacked) || !Visited.insert(Values).second)
@@ -337,6 +363,10 @@ static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
     Worklist.append(P->getOperands());
     for (auto &M : P->masks())
       ProcessMaskOperands(M);
+    LoopBundle Loops;
+    for (auto *I : P->values())
+      Loops.push_back(PSSA.getLoopForInst(I));
+    ProcessLoopBundle(Loops);
   }
 }
 
@@ -457,7 +487,7 @@ std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
     PackSet Scratch = Packs;
     Scratch.add(StoreP);
     auto Operands = StoreP->getOperands();
-    runBottomUp(Operands.front(), Heuristic, Scratch);
+    runBottomUp(Operands.front(), Heuristic, PSSA, SE, Scratch);
     auto NewSaving = getSaving(Scratch, TTI);
     // FIXME: need to check for dep cycle
     errs() << "Prev saving: " << PrevSaving << ", new saving " << NewSaving
