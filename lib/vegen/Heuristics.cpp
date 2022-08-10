@@ -436,6 +436,9 @@ std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
   auto PrevSaving = getSaving(Packs, TTI);
 
   auto VectorizeStoreChain = [&](ArrayRef<Instruction *> Stores) {
+    if (Stores.size() <= 1)
+      return;
+
     SmallVector<Instruction *> SortedStores;
     // FIXME: deal with cases when there are gaps between the stores
     if (!sortByPointers(Stores, SortedStores, DL, SE, LI))
