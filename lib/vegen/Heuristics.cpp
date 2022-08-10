@@ -346,8 +346,10 @@ static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
     if (any_of(Loops, [&](auto *VL) {
           return !haveIdenticalTripCounts(L0, PSSA.getOrigLoop(VL), SE);
         })) {
-      ProcessMaskOperands(VectorMask(map_range(Loops, [](auto *VL) { return VL->getLoopCond(); })));
-      ProcessMaskOperands(VectorMask(map_range(Loops, [](auto *VL) { return VL->getBackEdgeCond(); })));
+      ProcessMaskOperands(VectorMask(
+          map_range(Loops, [](auto *VL) { return VL->getLoopCond(); })));
+      ProcessMaskOperands(VectorMask(
+          map_range(Loops, [](auto *VL) { return VL->getBackEdgeCond(); })));
     }
     ProcessLoopBundle(Parents);
   };
