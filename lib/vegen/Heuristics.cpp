@@ -90,6 +90,9 @@ public:
     auto *SI = dyn_cast<StoreInst>(I);
     if (!SI)
       return;
+    auto *Ty = SI->getValueOperand()->getType();
+    if (!VectorType::isValidElementType(Ty))
+      return;
     Value *Obj = getUnderlyingObject(SI->getPointerOperand());
     ObjToStoreMap[Obj].push_back(SI);
   }
