@@ -3,6 +3,7 @@
 #include "vegen/GlobalSLP.h"
 #include "vegen/Lower.h"
 #include "vegen/Pack.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/PostDominators.h"
@@ -73,6 +74,8 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   auto &LI = AM.getResult<LoopAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
+  auto &DI = AM.getResult<DependenceAnalysis>(F);
+  auto &AA = AM.getResult<AAManager>(F);
   PredicatedSSA PSSA(&F, LI, DT, PDT, &SE);
 
   SmallVector<Pack *> Packs;
@@ -117,7 +120,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     errs() << "Packing " << *Packs.back() << '\n';
   }
 
-  lower(Packs, PSSA, AM.getResult<DependenceAnalysis>(F));
+  lower(Packs, PSSA, DI, AA, LI);
   lowerPSSAToLLVM(&F, PSSA);
 
   for (auto *P : Packs)

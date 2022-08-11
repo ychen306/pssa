@@ -4,6 +4,9 @@
 #include "vegen/Pack.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/LoopInfo.h"
 
 using namespace llvm;
 
@@ -62,18 +65,50 @@ static bool isExclusive(const ControlCondition *C1,
   if (!C1 || !C2)
     return false;
 
-  if (auto *And1 = dyn_cast<ConditionAnd>(C1); And1 && And1->Complement == C2)
+  auto *And1 = dyn_cast<ConditionAnd>(C1);
+  if (And1 && And1->Complement == C2)
     return true;
+
+  auto *And2 = dyn_cast<ConditionAnd>(C2);
+  if (And1 && And2)
+    return isExclusive(And1->Parent, And2->Parent);
 
   return false;
 }
 
+
+static MemoryLocation getLocation(Instruction *I) {
+  if (StoreInst *SI = dyn_cast<StoreInst>(I))
+    return MemoryLocation::get(SI);
+  if (LoadInst *LI = dyn_cast<LoadInst>(I))
+    return MemoryLocation::get(LI);
+  return MemoryLocation();
+}
+
 bool DependenceChecker::hasDependency(Instruction *I1, Instruction *I2) {
+  if (I1 == I2)
+    return false;
+
+  assert(mayReadOrWriteMemory(I1) && mayReadOrWriteMemory(I2));
+
+  if (!I1->mayWriteToMemory() && !I2->mayWriteToMemory())
+    return false;
+
   auto *C1 = PSSA.getInstCond(I1);
   auto *C2 = PSSA.getInstCond(I2);
   // is C1 and C2 cannot be true simultaneously then there's no dep.
   if (isExclusive(C1, C2))
     return false;
+
+  auto *L1 = LI.getLoopFor(I1->getParent());
+  auto *L2 = LI.getLoopFor(I2->getParent());
+  if (L1 == L2) {
+    auto Loc1 = getLocation(I1);
+    auto Loc2 = getLocation(I2);
+    if (Loc1.Ptr && Loc2.Ptr)
+      return AA.alias(Loc1, Loc2);
+    return true;
+  }
 
   auto Dep = DI.depends(I1, I2, true);
   return Dep && Dep->isOrdered();
@@ -228,6 +263,8 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
     if (mayReadOrWriteMemory(It)) {
       for (auto I = VL->toIterator(Earliest), E = VL->toIterator(It); I != E;
            ++I) {
+        if (!mayReadOrWriteMemory(*I))
+          continue;
         for (auto &It2 : Coupled)
           if (DepChecker.depends(*I, It2))
             Visit(*I, true);

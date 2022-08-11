@@ -462,11 +462,12 @@ static void partitionStores(ArrayRef<Instruction *> Stores,
 
 std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
                                  ScalarEvolution &SE, LoopInfo &LI,
-                                 DependenceInfo &DI, TargetTransformInfo &TTI) {
+                                 AAResults &AA, DependenceInfo &DI,
+                                 TargetTransformInfo &TTI) {
   StoreGrouper::ObjToInstMapTy ObjToStoreMap;
   visitWith<StoreGrouper>(PSSA, ObjToStoreMap);
 
-  DependenceChecker DepChecker(PSSA, DI);
+  DependenceChecker DepChecker(PSSA, DI, AA, LI);
 
   BottomUpHeuristic Heuristic(PSSA, DL, SE, LI, TTI);
   PackSet Packs;

@@ -8,6 +8,8 @@
 namespace llvm {
 class DependenceInfo;
 class Instruction;
+class AAResults;
+class LoopInfo;
 } // namespace llvm
 
 class PredicatedSSA;
@@ -25,6 +27,8 @@ class DependenceChecker {
 
   PredicatedSSA &PSSA;
   llvm::DependenceInfo &DI;
+  llvm::AAResults &AA;
+  llvm::LoopInfo &LI;
 
   // use std::map to avoid reacllocation
   std::map<VLoop *, LoopSummary> Summaries;
@@ -35,7 +39,9 @@ class DependenceChecker {
   bool hasDependency(llvm::Instruction *, llvm::Instruction *);
 
 public:
-  DependenceChecker(PredicatedSSA &PSSA, llvm::DependenceInfo &DI) : PSSA(PSSA), DI(DI) {}
+  DependenceChecker(PredicatedSSA &PSSA, llvm::DependenceInfo &DI,
+                    llvm::AAResults &AA, llvm::LoopInfo &LI)
+      : PSSA(PSSA), DI(DI), AA(AA), LI(LI) {}
 
   void invalidate(VLoop *VL) { Summaries.erase(VL); }
 

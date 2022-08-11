@@ -113,6 +113,8 @@ class VectorGen {
   PackSet Packs;
   PredicatedSSA &PSSA;
   DependenceInfo &DI;
+  AAResults &AA;
+  LoopInfo &LI;
   ValueIndex<Value *, Pack> ValueIdx;
   ValueIndex<const ControlCondition *, ConditionPack> MaskIdx;
 
@@ -201,8 +203,9 @@ class VectorGen {
   void runOnLoop(VLoop *);
 
 public:
-  VectorGen(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI)
-      : Packs(Packs), PSSA(PSSA), DI(DI),
+  VectorGen(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI,
+            AAResults &AA, LoopInfo &LI)
+      : Packs(Packs), PSSA(PSSA), DI(DI), AA(AA), LI(LI),
         Remapper(VM, RF_None, nullptr, &Extracter) {}
   bool run();
 };
@@ -1182,7 +1185,7 @@ bool VectorGen::run() {
   }
 
   //==== Begin Scheduling ====//
-  DependenceChecker DepChecker(PSSA, DI);
+  DependenceChecker DepChecker(PSSA, DI, AA, LI);
   // Figure out the loops that we need to fuse.
   EquivalenceClasses<VLoop *> LoopsToFuse = partitionLoops(Packs, PSSA);
   // Fuse the loops top-down
@@ -1239,7 +1242,8 @@ bool VectorGen::run() {
   return true;
 }
 
-bool lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI) {
-  VectorGen Gen(Packs, PSSA, DI);
+bool lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI,
+           AAResults &AA, LoopInfo &LI) {
+  VectorGen Gen(Packs, PSSA, DI, AA, LI);
   return Gen.run();
 }
