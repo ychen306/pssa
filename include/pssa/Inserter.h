@@ -3,6 +3,7 @@
 
 #include "pssa/PSSA.h"
 #include "llvm/IR/ConstantFolder.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/Alignment.h"
 
 namespace llvm {
@@ -43,6 +44,9 @@ public:
                                   llvm::Align, llvm::Value *Mask) const;
   llvm::Value *createVectorSplat(unsigned NumElems, llvm::Value *V) const;
   llvm::Value *createOrReduce(llvm::Value *) const;
+  llvm::Value *createIntrinsicCall(llvm::Intrinsic::ID,
+                                   llvm::ArrayRef<llvm::Type *>,
+                                   llvm::ArrayRef<llvm::Value *>);
 
   // Wrapper around <InstType>::Create
   template <typename InstType, typename... ArgTypes>

@@ -9,6 +9,7 @@
 #include "llvm/Analysis/ValueTracking.h" // isSafeToSpeculativelyExecute
 #include "llvm/IR/Constants.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/IR/PatternMatch.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 
 using namespace llvm;
@@ -1010,6 +1011,13 @@ void VectorGen::runOnLoop(VLoop *VL) {
       // taking the value from the loop that we are exiting.
       if (PSSA.getLoopForInst(I) != VL)
         continue;
+    } else {
+      using namespace PatternMatch;
+      if (m_Intrinsic<Intrinsic::experimental_noalias_scope_decl>(m_Value())
+          .match(I) ||
+          m_Intrinsic<Intrinsic::lifetime_start>(m_Value()).match(I) ||
+          m_Intrinsic<Intrinsic::lifetime_end>(m_Value()).match(I))
+        DeadInsts.push_back(I);
     }
 
     // Fix some of the operands if need to.

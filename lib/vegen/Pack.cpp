@@ -4,6 +4,7 @@
 #include "pssa/PSSA.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -33,7 +34,7 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
 
   auto *I = Insts.front();
   if (!isa<BinaryOperator>(I) && !isa<CmpInst>(I) && !isa<SelectInst>(I) &&
-      !isa<CastInst>(I) && !isa<FreezeInst>(I))
+      !isa<CastInst>(I) && !isa<FreezeInst>(I) && !isa<UnaryOperator>(I))
     return nullptr;
 
   auto Rest = drop_begin(Insts);
@@ -59,6 +60,11 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
           return cast<CastInst>(I)->getOpcode() != Op ||
                  I->getOperand(0)->getType() != SrcTy;
         }))
+      return nullptr;
+  }
+
+  if (auto *UO = dyn_cast<UnaryOperator>(I)) {
+    if (UO->getOpcode() != Instruction::FNeg)
       return nullptr;
   }
 
@@ -96,7 +102,70 @@ Value *SIMDPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   if (isa<FreezeInst>(I))
     return Insert.make<FreezeInst>(Operands.front());
 
+  if (auto *UO = dyn_cast<UnaryOperator>(I))
+    return Insert.create<UnaryOperator>(UO->getOpcode(), Operands.front());
+
   llvm_unreachable("unsupported opcode");
+}
+
+static Intrinsic::ID getIntrinsicID(Instruction *I) {
+  auto *Call = dyn_cast<CallInst>(I);
+  if (!Call)
+    return Intrinsic::not_intrinsic;
+  auto *F = Call->getCalledFunction();
+  if (!F)
+    return Intrinsic::not_intrinsic;
+  return F->getIntrinsicID();
+}
+
+// TODO: support more intrinsic
+static bool isVectorizableIntrinsic(Intrinsic::ID ID) {
+  switch (ID) {
+  case Intrinsic::pow:
+  case Intrinsic::sqrt:
+  case Intrinsic::exp:
+  case Intrinsic::smin:
+  case Intrinsic::smax:
+  case Intrinsic::umin:
+  case Intrinsic::umax:
+    return true;
+  default:
+    return false;
+  }
+}
+
+IntrinsicPack *IntrinsicPack::tryPack(ArrayRef<Instruction *> Insts) {
+  auto ID = getIntrinsicID(Insts.front());
+  if (!isVectorizableIntrinsic(ID))
+    return nullptr;
+
+  for (auto *I : drop_begin(Insts)) {
+    if (getIntrinsicID(I) != ID)
+      return nullptr;
+  }
+
+  return new IntrinsicPack(Insts);
+}
+
+SmallVector<OperandPack, 2> IntrinsicPack::getOperands() const {
+  SmallVector<OperandPack, 2> Operands;
+
+  unsigned N = cast<CallInst>(Insts.front())->arg_size();
+  for (unsigned i = 0; i < N; i++) {
+    auto &OP = Operands.emplace_back();
+    for (auto *I : Insts)
+      OP.push_back(cast<CallInst>(I)->getArgOperand(i));
+  }
+
+  return Operands;
+}
+
+Value *IntrinsicPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
+  auto *I = Insts.front();
+  auto ID = getIntrinsicID(I);
+  assert(isVectorizableIntrinsic(ID));
+  auto *VecTy = FixedVectorType::get(I->getType(), Insts.size());
+  return Insert.createIntrinsicCall(ID, {VecTy}, Operands);
 }
 
 void Pack::print(raw_ostream &OS) const {
@@ -504,5 +573,18 @@ Value *AndPack::emit(ArrayRef<Value *> ReifiedMasks, ArrayRef<Value *> Operands,
 
 raw_ostream &operator<<(raw_ostream &OS, Pack &P) {
   P.print(OS);
+  return OS;
+}
+
+raw_ostream &operator<<(raw_ostream &OS, OperandPack &O) {
+  OS << '[';
+  for (auto &V : O) {
+    if (V->hasName())
+      OS << V->getName();
+    else
+      OS << *V;
+    OS << "; ";
+  }
+  OS << ']';
   return OS;
 }

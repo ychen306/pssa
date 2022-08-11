@@ -158,3 +158,10 @@ Value *Inserter::createOrReduce(Value *Src) const {
   Module *M = VL->getPSSA()->getFunction()->getParent();
   return getReductionIntrinsic(Intrinsic::vector_reduce_or, Src, M, *this);
 }
+
+Value *Inserter::createIntrinsicCall(Intrinsic::ID ID, ArrayRef<Type *> Types,
+                                     ArrayRef<Value *> Args) {
+  Module *M = VL->getPSSA()->getFunction()->getParent();
+  auto *F = Intrinsic::getDeclaration(M, ID, Types);
+  return create<CallInst>(F, Args);
+}

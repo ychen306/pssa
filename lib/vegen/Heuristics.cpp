@@ -123,6 +123,8 @@ TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
     return {P};
   if (auto P = GatherPack::tryPack(Insts, PSSA))
     return {P};
+  if (auto *P = IntrinsicPack::tryPack(Insts))
+    return {P};
 
   TinyPtrVector<Pack *> Producers;
   if (auto *P = SIMDPack::tryPack(Insts))

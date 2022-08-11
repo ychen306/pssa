@@ -20,6 +20,7 @@
 #include "llvm/Transforms/Scalar/JumpThreading.h"
 #include "llvm/Transforms/Scalar/LoopRotation.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
+#include "llvm/Transforms/Scalar/Scalarizer.h"
 #include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
 
 using namespace llvm;
@@ -176,6 +177,7 @@ static void buildPasses(PassBuilder &PB) {
 
   PB.registerVectorizerStartEPCallback(
       [](FunctionPassManager &FPM, OptimizationLevel) {
+        FPM.addPass(ScalarizerPass());
         addPreprocessingPasses(FPM);
         FPM.addPass(GlobalSLPPass());
         addCleanupPasses(FPM);

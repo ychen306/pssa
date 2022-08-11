@@ -27,6 +27,7 @@ class Pack {
 public:
   enum PackKind {
     PK_SIMD,
+    PK_Intrinsic,
     PK_Load,
     PK_Store,
     PK_Gather,
@@ -106,6 +107,18 @@ public:
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_SIMD; }
   Pack *clone() const override { return new SIMDPack(Insts); }
+};
+
+// A pack of math intrinsic
+class IntrinsicPack : public Pack {
+  IntrinsicPack(llvm::ArrayRef<llvm::Instruction *> Insts) : Pack(Insts, PK_Intrinsic) {}
+
+public:
+  static IntrinsicPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts);
+  llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
+  static bool classof(const Pack *P) { return P->getKind() == PK_Intrinsic; }
+  Pack *clone() const override { return new IntrinsicPack(Insts); }
+  llvm::SmallVector<OperandPack, 2> getOperands() const override;
 };
 
 class LoadPack : public Pack {
@@ -229,6 +242,7 @@ public:
                     llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
 };
 
-llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, Pack &P);
+llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, Pack &);
+llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, OperandPack &);
 
 #endif
