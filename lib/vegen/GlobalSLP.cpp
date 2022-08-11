@@ -30,6 +30,9 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   auto &TTI = AM.getResult<TargetIRAnalysis>(F);
   auto &DI = AM.getResult<DependenceAnalysis>(F);
 
+  if (!isConvertibleToPSSA(F, LI))
+    return PreservedAnalyses::all();
+
   PredicatedSSA PSSA(&F, LI, DT, PDT, &SE);
 
   std::vector<Pack *> Packs = packBottomUp(PSSA, DL, SE, LI, DI, TTI);

@@ -5,7 +5,6 @@
 #include "vegen/Pack.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/MustExecute.h" // mayContainIrreducibleControl
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
@@ -47,20 +46,8 @@ PreservedAnalyses PSSAEntry::run(Function &F, FunctionAnalysisManager &AM) {
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
 
-  // Don't deal with irreducible CFG
-  if (mayContainIrreducibleControl(F, &LI))
-    return PreservedAnalyses::none();
-
-  // We don't deal with things like switches or invoke
-  for (auto &BB : F)
-    if (!isa<ReturnInst>(BB.getTerminator()) &&
-        !isa<BranchInst>(BB.getTerminator()))
-      return PreservedAnalyses::none();
-
-  // Don't deal with infinite loops or non-rotated loops
-  for (auto *L : LI.getLoopsInPreorder())
-    if (!L->isLoopSimplifyForm() || !L->isRotatedForm() || L->hasNoExitBlocks())
-      return PreservedAnalyses::none();
+  if (!isConvertibleToPSSA(F, LI))
+    return PreservedAnalyses::all();
 
   PredicatedSSA PSSA(&F, LI, DT, PDT);
   lowerPSSAToLLVM(&F, PSSA);

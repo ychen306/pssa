@@ -1,5 +1,4 @@
 ; RUN: %opt -passes=test-vector-codegen,verify %s -p i1,i4 -p mul1,mul13 -p storeOf:mul1,storeOf:mul13 -S | FileCheck %s
-; RUN: %opt -passes=global-slp %s -S | FileCheck %s
 
 ; CHECK:  [[LOAD:%.*]] = load <2 x i32>, ptr %arrayidx
 ; CHECK-NOT: br

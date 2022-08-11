@@ -296,4 +296,6 @@ public:
   llvm::ScalarEvolution *getSE() { return SE; }
 };
 
+bool isConvertibleToPSSA(llvm::Function &, llvm::LoopInfo &);
+
 #endif // end PSSA_H

@@ -3,6 +3,7 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopIterator.h"
+#include "llvm/Analysis/MustExecute.h" // mayContainIrreducibleControl
 
 using namespace llvm;
 
@@ -238,4 +239,25 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
       }
     }
   }
+}
+
+bool isConvertibleToPSSA(Function &F, LoopInfo &LI) {
+  // Don't deal with irreducible CFG
+  if (mayContainIrreducibleControl(F, &LI))
+    return false;
+
+  // We don't deal with things like switches or invoke
+  for (auto &BB : F) {
+    if (!isa<ReturnInst>(BB.getTerminator()) &&
+        !isa<BranchInst>(BB.getTerminator()))
+      return false;
+  }
+
+  // Don't deal with infinite loops or non-rotated loops
+  for (auto *L : LI.getLoopsInPreorder()) {
+    if (!L->isLoopSimplifyForm() || !L->isRotatedForm() || L->hasNoExitBlocks())
+      return false;
+  }
+
+  return true;
 }
