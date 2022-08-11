@@ -9,11 +9,19 @@
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/IR/Dominators.h"
 
 using namespace llvm;
 
+static cl::opt<std::string>
+    VectorizeOnly("vectorize-only",
+                  cl::desc("only vectorize selected function"));
+
 PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
+  if (!VectorizeOnly.empty() && F.getName() != VectorizeOnly)
+    return PreservedAnalyses::all();
+
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
   auto &DL = F.getParent()->getDataLayout();
   auto &LI = AM.getResult<LoopAnalysis>(F);
