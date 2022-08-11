@@ -1,155 +1,14 @@
-; RUN: %opt -passes=global-slp %s -S | FileCheck %s
+; RUN: %opt -passes=global-slp %s -S -vectorize-only=kernel | FileCheck %s
+; RUN: %opt -passes=global-slp %s -S -vectorize-only=kernel | lli
 
 target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"
 
+; CHECK:  sitofp <4 x i32>
+; CHECK-NEXT:  fcmp ogt <4 x float>
+
 ; Function Attrs: argmemonly nofree noinline norecurse nosync nounwind ssp uwtable
 define void @kernel(i32 noundef %n, ptr noalias nocapture noundef writeonly %RET, ptr noalias nocapture noundef readonly %aFOO) local_unnamed_addr #0 {
-; CHECK-LABEL: @kernel(
-; CHECK-NEXT:  entry:
-; CHECK-NEXT:    [[CMP29:%.*]] = icmp sgt i32 [[N:%.*]], 0
-; CHECK-NEXT:    br i1 [[CMP29]], label %[[TMP0:.*]], label %[[TMP3:.*]]
-; CHECK:       [[TMP0]]:
-; CHECK-NEXT:    [[TMP1:%.*]] = add nsw i32 [[N]], -1
-; CHECK-NEXT:    [[XTRAITER:%.*]] = and i32 [[N]], 3
-; CHECK-NEXT:    [[TMP2:%.*]] = icmp ult i32 [[TMP1]], 3
-; CHECK-NEXT:    br i1 [[TMP2]], label %[[TMP4:.*]], label %[[TMP5:.*]]
-; CHECK:       [[TMP3]]:
-; CHECK-NEXT:    br label %[[TMP32:.*]]
-; CHECK:       [[TMP4]]:
-; CHECK-NEXT:    br label %[[TMP20:.*]]
-; CHECK:       [[TMP5]]:
-; CHECK-NEXT:    [[UNROLL_ITER:%.*]] = and i32 [[N]], -4
-; CHECK-NEXT:    br label %[[HEADER:.*]]
-; CHECK:       [[HEADER]]:
-; CHECK-DAG:    [[R_2_US_1_LCSSA_VEC_MEM_0:%.*]] = phi <4 x float> [ undef, %[[TMP5]] ], [ [[R_2_US_1_LCSSA_VEC_MEM_1:%.*]], %[[LATCH:.*]] ]
-; CHECK-DAG:    [[NITER:%.*]] = phi i32 [ 0, %[[TMP5]] ], [ [[NITER_NEXT_3:%.*]], %[[LATCH]] ]
-; CHECK-DAG:    [[INDVARS_IV:%.*]] = phi i64 [ 0, %[[TMP5]] ], [ [[INDVARS_IV_NEXT_3:%.*]], %[[LATCH]] ]
-; CHECK-NEXT:    [[ARRAYIDX:%.*]] = getelementptr inbounds float, ptr [[AFOO:%.*]], i64 [[INDVARS_IV]]
-; CHECK-NEXT:    [[INDVARS_IV_NEXT:%.*]] = or i64 [[INDVARS_IV]], 1
-; CHECK-NEXT:    [[ARRAYIDX_1:%.*]] = getelementptr inbounds float, ptr [[AFOO]], i64 [[INDVARS_IV_NEXT]]
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_1:%.*]] = or i64 [[INDVARS_IV]], 2
-; CHECK-NEXT:    [[ARRAYIDX_2:%.*]] = getelementptr inbounds float, ptr [[AFOO]], i64 [[INDVARS_IV_NEXT_1]]
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_2:%.*]] = or i64 [[INDVARS_IV]], 3
-; CHECK-NEXT:    [[ARRAYIDX_3:%.*]] = getelementptr inbounds float, ptr [[AFOO]], i64 [[INDVARS_IV_NEXT_2]]
-; CHECK-NEXT:    [[DOTVEC:%.*]] = load <4 x float>, ptr [[ARRAYIDX]], align 4
-; CHECK-NEXT:    [[DOTFR_1_VEC:%.*]] = freeze <4 x float> [[DOTVEC]]
-; CHECK-NEXT:    [[CMP226_1_VEC:%.*]] = fcmp ogt <4 x float> [[DOTFR_1_VEC]], zeroinitializer
-; CHECK-NEXT:    [[CMP9_1_VEC:%.*]] = fcmp une <4 x float> [[DOTFR_1_VEC]], <float 2.000000e+00, float 2.000000e+00, float 2.000000e+00, float 2.000000e+00>
-; CHECK-NEXT:    [[TMP6:%.*]] = and <4 x i1> [[CMP226_1_VEC]], [[CMP9_1_VEC]]
-; CHECK-NEXT:    [[TMP7:%.*]] = call i1 @llvm.vector.reduce.or.v4i1(<4 x i1> [[TMP6]])
-; CHECK-NEXT:    br i1 [[TMP7]], label %[[TMP8:.*]], label %[[TMP9:.*]]
-; CHECK:       [[LATCH]]:
-; CHECK-NEXT:    br i1 [[SHOULD_CONTINUE_MEM_0:%.*]], label %[[HEADER]], label %[[EXIT:.*]]
-; CHECK:       [[EXIT]]:
-; CHECK-NEXT:    br label %[[TMP20]]
-; CHECK:       [[TMP8]]:
-; CHECK-NEXT:    br label %[[HEADER1:.*]]
-; CHECK:       [[TMP9]]:
-; CHECK-NEXT:    br label %[[TMP12:.*]]
-; CHECK:       [[HEADER1]]:
-; CHECK-DAG:    [[R_2_US_3_GUARD_MU_VEC:%.*]] = phi <4 x float> [ undef, %[[TMP8]] ], [ [[R_2_US_1_LCSSA_VEC:%.*]], %[[LATCH2:.*]] ]
-; CHECK-DAG:    [[R_028_US_3_MU_VEC:%.*]] = phi <4 x float> [ zeroinitializer, %[[TMP8]] ], [ [[R_2_US_VEC:%.*]], %[[LATCH2]] ]
-; CHECK-DAG:    [[ACTIVE_MU_VEC:%.*]] = phi <4 x i1> [ [[TMP6]], %[[TMP8]] ], [ [[TMP10:%.*]], %[[LATCH2]] ]
-; CHECK-DAG:    [[I_027_US_MU_VEC:%.*]] = phi <4 x i32> [ zeroinitializer, %[[TMP8]] ], [ [[INC13_US_VEC:%.*]], %[[LATCH2]] ]
-; CHECK-NEXT:    [[CMP6_NOT_US_VEC:%.*]] = icmp eq <4 x i32> [[I_027_US_MU_VEC]], zeroinitializer
-; CHECK-NEXT:    [[INC_US_VEC:%.*]] = fadd <4 x float> [[R_028_US_3_MU_VEC]], <float 1.000000e+00, float 1.000000e+00, float 1.000000e+00, float 1.000000e+00>
-; CHECK-NEXT:    [[R_2_US_VEC]] = select <4 x i1> [[CMP6_NOT_US_VEC]], <4 x float> [[INC_US_VEC]], <4 x float> [[R_028_US_3_MU_VEC]]
-; CHECK-NEXT:    [[R_2_US_1_LCSSA_VEC]] = select <4 x i1> [[ACTIVE_MU_VEC]], <4 x float> [[R_2_US_VEC]], <4 x float> [[R_2_US_3_GUARD_MU_VEC]]
-; CHECK-NEXT:    [[INC13_US_VEC]] = add <4 x i32> [[I_027_US_MU_VEC]], <i32 1, i32 1, i32 1, i32 1>
-; CHECK-NEXT:    [[CONV_US_VEC:%.*]] = sitofp <4 x i32> [[INC13_US_VEC]] to <4 x float>
-; CHECK-NEXT:    [[CMP2_US_VEC:%.*]] = fcmp ogt <4 x float> [[DOTFR_1_VEC]], [[CONV_US_VEC]]
-; CHECK-NEXT:    [[TMP10]] = and <4 x i1> [[CMP2_US_VEC]], [[ACTIVE_MU_VEC]]
-; CHECK-NEXT:    [[TMP11:%.*]] = call i1 @llvm.vector.reduce.or.v4i1(<4 x i1> [[TMP10]])
-; CHECK-NEXT:    br label %[[LATCH2]]
-; CHECK:       [[LATCH2]]:
-; CHECK-NEXT:    br i1 [[TMP11]], label %[[HEADER1]], label %[[EXIT3:.*]]
-; CHECK:       [[EXIT3]]:
-; CHECK-NEXT:    br label %[[TMP12]]
-; CHECK:       [[TMP12]]:
-; CHECK-NEXT:    [[R_2_US_1_LCSSA_VEC_MEM_1]] = phi <4 x float> [ [[R_2_US_1_LCSSA_VEC]], %[[EXIT3]] ], [ [[R_2_US_1_LCSSA_VEC_MEM_0]], %[[TMP9]] ]
-; CHECK-NEXT:    [[TMP13:%.*]] = xor <4 x i1> [[CMP226_1_VEC]], <i1 true, i1 true, i1 true, i1 true>
-; CHECK-NEXT:    [[TMP14:%.*]] = xor <4 x i1> [[CMP9_1_VEC]], <i1 true, i1 true, i1 true, i1 true>
-; CHECK-NEXT:    [[TMP15:%.*]] = and <4 x i1> [[CMP226_1_VEC]], [[TMP14]]
-; CHECK-NEXT:    [[TMP16:%.*]] = select <4 x i1> [[TMP15]], <4 x float> <float 1.100000e+01, float 1.100000e+01, float 1.100000e+01, float 1.100000e+01>, <4 x float> [[R_2_US_1_LCSSA_VEC_MEM_1]]
-; CHECK-NEXT:    [[R_0_LCSSA_1_VEC:%.*]] = select <4 x i1> [[TMP13]], <4 x float> zeroinitializer, <4 x float> [[TMP16]]
-; CHECK-NEXT:    [[ARRAYIDX15:%.*]] = getelementptr inbounds float, ptr [[RET:%.*]], i64 [[INDVARS_IV]]
-; CHECK-NEXT:    [[ARRAYIDX15_1:%.*]] = getelementptr inbounds float, ptr [[RET]], i64 [[INDVARS_IV_NEXT]]
-; CHECK-NEXT:    [[ARRAYIDX15_2:%.*]] = getelementptr inbounds float, ptr [[RET]], i64 [[INDVARS_IV_NEXT_1]]
-; CHECK-NEXT:    [[ARRAYIDX15_3:%.*]] = getelementptr inbounds float, ptr [[RET]], i64 [[INDVARS_IV_NEXT_2]]
-; CHECK-NEXT:    store <4 x float> [[R_0_LCSSA_1_VEC]], ptr [[ARRAYIDX15]], align 4
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_3]] = add nuw nsw i64 [[INDVARS_IV]], 4
-; CHECK-NEXT:    [[NITER_NEXT_3]] = add i32 [[NITER]], 4
-; CHECK-NEXT:    [[NITER_NCMP_3_NOT:%.*]] = icmp eq i32 [[NITER_NEXT_3]], [[UNROLL_ITER]]
-; CHECK-NEXT:    br i1 [[NITER_NCMP_3_NOT]], label %[[TMP17:.*]], label %[[TMP18:.*]]
-; CHECK:       [[TMP17]]:
-; CHECK-NEXT:    br label %[[TMP19:.*]]
-; CHECK:       [[TMP18]]:
-; CHECK-NEXT:    br label %[[TMP19]]
-; CHECK:       [[TMP19]]:
-; CHECK-NEXT:    [[SHOULD_CONTINUE_MEM_0]] = phi i1 [ false, %[[TMP17]] ], [ true, %[[TMP18]] ]
-; CHECK-NEXT:    br label %[[LATCH]]
-; CHECK:       [[TMP20]]:
-; CHECK-NEXT:    [[INDVARS_IV_UNR_DEMOTED_0:%.*]] = phi i64 [ 0, %[[TMP4]] ], [ [[INDVARS_IV_NEXT_3]], %[[EXIT]] ]
-; CHECK-NEXT:    [[LCMP_MOD_NOT:%.*]] = icmp eq i32 [[XTRAITER]], 0
-; CHECK-NEXT:    br i1 [[LCMP_MOD_NOT]], label %[[TMP21:.*]], label %[[TMP22:.*]]
-; CHECK:       [[TMP21]]:
-; CHECK-NEXT:    br label %[[TMP32]]
-; CHECK:       [[TMP22]]:
-; CHECK-NEXT:    br label %[[HEADER5:.*]]
-; CHECK:       [[HEADER5]]:
-; CHECK-DAG:    [[EPIL_ITER:%.*]] = phi i32 [ 0, %[[TMP22]] ], [ [[EPIL_ITER_NEXT:%.*]], %[[LATCH6:.*]] ]
-; CHECK-DAG:    [[INDVARS_IV_EPIL:%.*]] = phi i64 [ [[INDVARS_IV_UNR_DEMOTED_0]], %[[TMP22]] ], [ [[INDVARS_IV_NEXT_EPIL:%.*]], %[[LATCH6]] ]
-; CHECK-NEXT:    [[ARRAYIDX_EPIL:%.*]] = getelementptr inbounds float, ptr [[AFOO]], i64 [[INDVARS_IV_EPIL]]
-; CHECK-NEXT:    [[TMP23:%.*]] = load float, ptr [[ARRAYIDX_EPIL]], align 4, !tbaa [[TBAA5:![0-9]+]]
-; CHECK-NEXT:    [[DOTFR_EPIL:%.*]] = freeze float [[TMP23]]
-; CHECK-NEXT:    [[CMP226_EPIL:%.*]] = fcmp ogt float [[DOTFR_EPIL]], 0.000000e+00
-; CHECK-NEXT:    br i1 [[CMP226_EPIL]], label %[[TMP24:.*]], label %[[TMP25:.*]]
-; CHECK:       [[LATCH6]]:
-; CHECK-NEXT:    br i1 [[SHOULD_CONTINUE_MEM8_0:%.*]], label %[[HEADER5]], label %[[EXIT7:.*]]
-; CHECK:       [[EXIT7]]:
-; CHECK-NEXT:    br label %[[TMP32]]
-; CHECK:       [[TMP24]]:
-; CHECK-NEXT:    [[CMP9_EPIL:%.*]] = fcmp une float [[DOTFR_EPIL]], 2.000000e+00
-; CHECK-NEXT:    br i1 [[CMP9_EPIL]], label %[[TMP26:.*]], label %[[TMP27:.*]]
-; CHECK:       [[TMP25]]:
-; CHECK-NEXT:    br label %[[TMP28:.*]]
-; CHECK:       [[TMP26]]:
-; CHECK-NEXT:    br label %[[HEADER9:.*]]
-; CHECK:       [[TMP27]]:
-; CHECK-NEXT:    br label %[[TMP28]]
-; CHECK:       [[HEADER9]]:
-; CHECK-DAG:    [[I_027_US_EPIL:%.*]] = phi i32 [ 0, %[[TMP26]] ], [ [[INC13_US_EPIL:%.*]], %[[LATCH10:.*]] ]
-; CHECK-DAG:    [[R_028_US_EPIL:%.*]] = phi float [ 0.000000e+00, %[[TMP26]] ], [ [[R_2_US_EPIL:%.*]], %[[LATCH10]] ]
-; CHECK-NEXT:    [[CMP6_NOT_US_EPIL:%.*]] = icmp eq i32 [[I_027_US_EPIL]], 0
-; CHECK-NEXT:    [[INC_US_EPIL:%.*]] = fadd float [[R_028_US_EPIL]], 1.000000e+00
-; CHECK-NEXT:    [[R_2_US_EPIL]] = select i1 [[CMP6_NOT_US_EPIL]], float [[INC_US_EPIL]], float [[R_028_US_EPIL]]
-; CHECK-NEXT:    [[INC13_US_EPIL]] = add nuw nsw i32 [[I_027_US_EPIL]], 1
-; CHECK-NEXT:    [[CONV_US_EPIL:%.*]] = sitofp i32 [[INC13_US_EPIL]] to float
-; CHECK-NEXT:    [[CMP2_US_EPIL:%.*]] = fcmp ogt float [[DOTFR_EPIL]], [[CONV_US_EPIL]]
-; CHECK-NEXT:    br label %[[LATCH10]]
-; CHECK:       [[LATCH10]]:
-; CHECK-NEXT:    br i1 [[CMP2_US_EPIL]], label %[[HEADER9]], label %[[EXIT11:.*]]
-; CHECK:       [[EXIT11]]:
-; CHECK-NEXT:    br label %[[TMP28]]
-; CHECK:       [[TMP28]]:
-; CHECK-NEXT:    [[R_0_LCSSA_EPIL_DEMOTED_0:%.*]] = phi float [ [[R_2_US_EPIL]], %[[EXIT11]] ], [ 1.100000e+01, %[[TMP27]] ], [ 0.000000e+00, %[[TMP25]] ]
-; CHECK-NEXT:    [[ARRAYIDX15_EPIL:%.*]] = getelementptr inbounds float, ptr [[RET]], i64 [[INDVARS_IV_EPIL]]
-; CHECK-NEXT:    store float [[R_0_LCSSA_EPIL_DEMOTED_0]], ptr [[ARRAYIDX15_EPIL]], align 4
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_EPIL]] = add nuw nsw i64 [[INDVARS_IV_EPIL]], 1
-; CHECK-NEXT:    [[EPIL_ITER_NEXT]] = add nuw nsw i32 [[EPIL_ITER]], 1
-; CHECK-NEXT:    [[EPIL_ITER_CMP_NOT:%.*]] = icmp eq i32 [[EPIL_ITER_NEXT]], [[XTRAITER]]
-; CHECK-NEXT:    br i1 [[EPIL_ITER_CMP_NOT]], label %[[TMP29:.*]], label %[[TMP30:.*]]
-; CHECK:       [[TMP29]]:
-; CHECK-NEXT:    br label %[[TMP31:.*]]
-; CHECK:       [[TMP30]]:
-; CHECK-NEXT:    br label %[[TMP31]]
-; CHECK:       [[TMP31]]:
-; CHECK-NEXT:    [[SHOULD_CONTINUE_MEM8_0]] = phi i1 [ false, %[[TMP29]] ], [ true, %[[TMP30]] ]
-; CHECK-NEXT:    br label %[[LATCH6]]
-; CHECK:       [[TMP32]]:
-; CHECK-NEXT:    ret void
-;
 entry:
   %cmp29 = icmp sgt i32 %n, 0
   br i1 %cmp29, label %for.body.preheader, label %for.cond.cleanup
@@ -362,7 +221,95 @@ for.end.3:                                        ; preds = %for.end.3.loopexit,
   br i1 %niter.ncmp.3.not, label %for.cond.cleanup.loopexit.unr-lcssa.loopexit, label %for.body, !llvm.loop !13
 }
 
+; Function Attrs: nofree norecurse nosync nounwind readnone ssp uwtable
+define i32 @main() local_unnamed_addr #1 {
+entry:
+  %vla44 = alloca [1030 x float], align 16
+  %vla145 = alloca [1030 x float], align 16
+  br label %vector.body
+
+vector.body:                                      ; preds = %vector.body, %entry
+  %index = phi i64 [ 0, %entry ], [ %index.next.1, %vector.body ]
+  %vec.ind = phi <4 x i64> [ <i64 0, i64 1, i64 2, i64 3>, %entry ], [ %vec.ind.next.1, %vector.body ]
+  %0 = trunc <4 x i64> %vec.ind to <4 x i32>
+  %1 = add <4 x i32> %0, <i32 1, i32 1, i32 1, i32 1>
+  %2 = trunc <4 x i64> %vec.ind to <4 x i32>
+  %3 = add <4 x i32> %2, <i32 5, i32 5, i32 5, i32 5>
+  %4 = sitofp <4 x i32> %1 to <4 x float>
+  %5 = sitofp <4 x i32> %3 to <4 x float>
+  %6 = getelementptr inbounds float, ptr %vla145, i64 %index
+  store <4 x float> %4, ptr %6, align 16, !tbaa !5
+  %7 = getelementptr inbounds float, ptr %6, i64 4
+  store <4 x float> %5, ptr %7, align 16, !tbaa !5
+  %index.next = or i64 %index, 8
+  %vec.ind.next = add <4 x i64> %vec.ind, <i64 8, i64 8, i64 8, i64 8>
+  %8 = trunc <4 x i64> %vec.ind.next to <4 x i32>
+  %9 = add <4 x i32> %8, <i32 1, i32 1, i32 1, i32 1>
+  %10 = trunc <4 x i64> %vec.ind.next to <4 x i32>
+  %11 = add <4 x i32> %10, <i32 5, i32 5, i32 5, i32 5>
+  %12 = sitofp <4 x i32> %9 to <4 x float>
+  %13 = sitofp <4 x i32> %11 to <4 x float>
+  %14 = getelementptr inbounds float, ptr %vla145, i64 %index.next
+  store <4 x float> %12, ptr %14, align 16, !tbaa !5
+  %15 = getelementptr inbounds float, ptr %14, i64 4
+  store <4 x float> %13, ptr %15, align 16, !tbaa !5
+  %index.next.1 = add nuw nsw i64 %index, 16
+  %vec.ind.next.1 = add <4 x i64> %vec.ind, <i64 16, i64 16, i64 16, i64 16>
+  %16 = icmp eq i64 %index.next.1, 1024
+  br i1 %16, label %for.body, label %vector.body, !llvm.loop !14
+
+for.body:                                         ; preds = %vector.body
+  %arrayidx = getelementptr inbounds float, ptr %vla145, i64 1024
+  store float 1.025000e+03, ptr %arrayidx, align 16, !tbaa !5
+  %arrayidx.1 = getelementptr inbounds float, ptr %vla145, i64 1025
+  store float 1.026000e+03, ptr %arrayidx.1, align 4, !tbaa !5
+  %arrayidx.2 = getelementptr inbounds float, ptr %vla145, i64 1026
+  store float 1.027000e+03, ptr %arrayidx.2, align 8, !tbaa !5
+  %arrayidx.3 = getelementptr inbounds float, ptr %vla145, i64 1027
+  store float 1.028000e+03, ptr %arrayidx.3, align 4, !tbaa !5
+  %arrayidx.4 = getelementptr inbounds float, ptr %vla145, i64 1028
+  store float 1.029000e+03, ptr %arrayidx.4, align 16, !tbaa !5
+  %arrayidx.5 = getelementptr inbounds float, ptr %vla145, i64 1029
+  store float 1.030000e+03, ptr %arrayidx.5, align 4, !tbaa !5
+  call void @kernel(i32 noundef 1030, ptr noundef nonnull %vla44, ptr noundef nonnull %vla145)
+  %arrayidx12 = getelementptr inbounds float, ptr %vla44, i64 1
+  %17 = load float, ptr %arrayidx12, align 4
+  %cmp14 = fcmp une float %17, 1.100000e+01
+  br label %for.body7
+
+for.body7:                                        ; preds = %for.inc27.1, %for.body
+  %indvars.iv49 = phi i64 [ 0, %for.body ], [ %indvars.iv.next50.1, %for.inc27.1 ]
+  %arrayidx21 = getelementptr inbounds float, ptr %vla44, i64 %indvars.iv49
+  %18 = load float, ptr %arrayidx21, align 8, !tbaa !5
+  %cmp23 = fcmp une float %18, 1.000000e+00
+  br i1 %cmp23, label %cleanup, label %for.inc27
+
+for.inc27:                                        ; preds = %for.body7
+  %cond.1 = icmp eq i64 %indvars.iv49, 0
+  br i1 %cond.1, label %land.lhs.true.1, label %land.lhs.true19.1
+
+land.lhs.true19.1:                                ; preds = %for.inc27
+  %indvars.iv.next50 = or i64 %indvars.iv49, 1
+  %arrayidx21.1 = getelementptr inbounds float, ptr %vla44, i64 %indvars.iv.next50
+  %19 = load float, ptr %arrayidx21.1, align 4, !tbaa !5
+  %cmp23.1 = fcmp une float %19, 1.000000e+00
+  br i1 %cmp23.1, label %cleanup, label %for.inc27.1
+
+land.lhs.true.1:                                  ; preds = %for.inc27
+  br i1 %cmp14, label %cleanup, label %for.inc27.1
+
+for.inc27.1:                                      ; preds = %land.lhs.true.1, %land.lhs.true19.1
+  %indvars.iv.next50.1 = add nuw nsw i64 %indvars.iv49, 2
+  %exitcond52.not.1 = icmp eq i64 %indvars.iv.next50.1, 1030
+  br i1 %exitcond52.not.1, label %cleanup, label %for.body7, !llvm.loop !16
+
+cleanup:                                          ; preds = %for.inc27.1, %land.lhs.true.1, %land.lhs.true19.1, %for.body7
+  %spec.select = phi i32 [ 1, %for.body7 ], [ 1, %land.lhs.true19.1 ], [ 1, %land.lhs.true.1 ], [ 0, %for.inc27.1 ]
+  ret i32 %spec.select
+}
+
 attributes #0 = { argmemonly nofree noinline norecurse nosync nounwind ssp uwtable "frame-pointer"="all" "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="penryn" "target-features"="+cx16,+cx8,+fxsr,+mmx,+sahf,+sse,+sse2,+sse3,+sse4.1,+ssse3,+x87" "tune-cpu"="generic" }
+attributes #1 = { nofree norecurse nosync nounwind readnone ssp uwtable "frame-pointer"="all" "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="penryn" "target-features"="+cx16,+cx8,+fxsr,+mmx,+sahf,+sse,+sse2,+sse3,+sse4.1,+ssse3,+x87" "tune-cpu"="generic" }
 
 !llvm.module.flags = !{!0, !1, !2, !3}
 !llvm.ident = !{!4}
@@ -381,3 +328,6 @@ attributes #0 = { argmemonly nofree noinline norecurse nosync nounwind ssp uwtab
 !11 = distinct !{!11, !12}
 !12 = !{!"llvm.loop.unroll.disable"}
 !13 = distinct !{!13, !10, !12}
+!14 = distinct !{!14, !10, !15}
+!15 = !{!"llvm.loop.isvectorized", i32 1}
+!16 = distinct !{!16, !10}
