@@ -8,8 +8,9 @@
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/Analysis/ValueTracking.h" // isSafeToSpeculativelyExecute
 #include "llvm/IR/Constants.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/IR/PatternMatch.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Timer.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 
 using namespace llvm;
@@ -20,6 +21,10 @@ cl::opt<bool>
     DontPackConditions("disable-cond-packing",
                        cl::desc("disable secondary (condition) packing"),
                        cl::init(false));
+
+cl::opt<bool> TimeVectorLowering("time-vector-lowering",
+                                 cl::desc("time vector lowering"),
+                                 cl::init(false));
 
 // Keep track of the values produced by a lowered pack
 template <typename ValueType, typename PackType> class ValueIndex {
@@ -258,12 +263,18 @@ public:
                                          const ControlCondition *C);
 };
 
+const char LoweringTimerGroup[] = "vectorgen";
+const char LoweringTimerGroupDesc[] = "Vector Lowering";
+
 }; // namespace
 
 // Move the items together while still preserving dependences
 static bool merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
                   DependenceChecker &DepChecker,
                   const PackSet *Packs = nullptr) {
+  NamedRegionTimer T("scheduling", "moving instructions together",
+                     LoweringTimerGroup, LoweringTimerGroupDesc,
+                     TimeVectorLowering);
   if (Items.size() <= 1)
     return true;
 
@@ -1014,7 +1025,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
     } else {
       using namespace PatternMatch;
       if (m_Intrinsic<Intrinsic::experimental_noalias_scope_decl>(m_Value())
-          .match(I) ||
+              .match(I) ||
           m_Intrinsic<Intrinsic::lifetime_start>(m_Value()).match(I) ||
           m_Intrinsic<Intrinsic::lifetime_end>(m_Value()).match(I))
         DeadInsts.push_back(I);
@@ -1202,7 +1213,7 @@ bool VectorGen::run() {
   if (!mergeLoops(LoopsToFuse, PSSA, DepChecker, ExitGuards, ActiveFlags))
     return false;
   // Move the packed instructions together
-  for (auto *P : Packs) {
+  for (auto *P : llvm::reverse(Packs)) {
     if (isa<MuPack>(P))
       continue;
     if (!merge(PSSA, toItems(P->values()), DepChecker, &Packs))
