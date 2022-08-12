@@ -930,12 +930,13 @@ void VectorGen::runOnLoop(VLoop *VL) {
 
   // Start by lowering the mu packs
   DenseMap<PHINode *, Pack *> MusToPatch;
+  SmallVector<PHINode *> ScalarMusToPatch;
   SmallVector<PHINode *> Mus(VL->mus());
   for (auto *Mu : Mus) {
     markAsProcessed(Mu);
     Pack *P = Packs.getPackForValue(Mu);
     if (!P) {
-      remapInstruction(Mu);
+      ScalarMusToPatch.push_back(Mu);
       continue;
     }
 
@@ -1065,6 +1066,9 @@ void VectorGen::runOnLoop(VLoop *VL) {
   for (auto [Mu, P] : MusToPatch)
     Mu->setIncomingValue(
         1, gatherOperand(P->getOperands()[1], VL, nullptr, VL->item_end()));
+
+  for (auto *Mu : ScalarMusToPatch)
+    remapInstruction(Mu);
 };
 
 // If any of the values are guarded, pack the exit guards
