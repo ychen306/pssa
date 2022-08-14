@@ -3,8 +3,6 @@
 #include "pssa/PSSA.h"
 #include "vegen/Pack.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
-#include "llvm/Analysis/ValueTracking.h"
-#include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 
