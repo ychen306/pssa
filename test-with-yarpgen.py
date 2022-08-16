@@ -9,7 +9,7 @@ vegen = 'pssa-clang++'
 
 def compile_and_run(compiler):
   try:
-    subprocess.check_call([compiler, '-O3', 'func.cpp', 'driver.cpp'], stderr=subprocess.DEVNULL, timeout=20)
+    subprocess.check_call([compiler, '-O3', 'func.cpp', 'driver.cpp'], stderr=subprocess.DEVNULL, timeout=4)
     return subprocess.check_output(['./a.out'], timeout=20).decode()
   except:
     return None
