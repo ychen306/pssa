@@ -105,9 +105,9 @@ Value *Inserter::CreateInsertElement(Value *Vec, Value *Elt, Value *Idx) const {
   return create<InsertElementInst>(Vec, Elt, Idx);
 }
 
-static bool isOne(Value *V) {
+static bool isOnes(Value *V) {
   auto *C = dyn_cast<Constant>(V);
-  return C && C->isOneValue();
+  return C && C->isAllOnesValue();
 }
 
 static bool isZero(Value *V) {
@@ -121,9 +121,9 @@ Value *Inserter::CreateBinOp(Instruction::BinaryOps Opc, Value *A,
     return V;
   // Try harder to constant-fold away `AND X, true`
   if (Opc == Instruction::And) {
-    if (isOne(A))
+    if (isOnes(A))
       return B;
-    if (isOne(B))
+    if (isOnes(B))
       return A;
   }
   return create<BinaryOperator>(Opc, A, B);
@@ -132,7 +132,7 @@ Value *Inserter::CreateBinOp(Instruction::BinaryOps Opc, Value *A,
 Value *Inserter::CreateSelect(Value *Cond, Value *IfTrue,
                               Value *IfFalse) const {
   // select c, true, false -> c
-  if (isOne(IfTrue) && isZero(IfFalse))
+  if (isOnes(IfTrue) && isZero(IfFalse))
     return Cond;
   return create<SelectInst>(Cond, IfTrue, IfFalse);
 }
