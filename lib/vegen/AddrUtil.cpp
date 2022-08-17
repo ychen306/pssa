@@ -28,7 +28,7 @@ public:
 
   const SCEV *visitAddRecExpr(const SCEVAddRecExpr *Expr) {
     if (!Success)
-      return Expr;
+      return SE.getOne(Expr->getType());
 
     auto *OldLoop = Expr->getLoop();
     auto It = OldToNewMap.find(OldLoop);
@@ -39,9 +39,12 @@ public:
       Operands.push_back(visit(Op));
       if (!SE.isAvailableAtLoopEntry(Operands.back(), NewLoop)) {
         Success = false;
-        return Expr;
+        return SE.getOne(Expr->getType());
       }
     }
+
+    if (!Success)
+      return SE.getOne(Expr->getType());
 
     return SE.getAddRecExpr(Operands, NewLoop, Expr->getNoWrapFlags());
   }
@@ -150,6 +153,9 @@ Optional<int> diffPointers(Type *ElemTyA, Value *PtrA, Type *ElemTyB,
     // Otherwise compute the distance with SCEV between the base pointers.
     if (auto Result = getSCEVs(PtrA, PtrB, SE, LI)) {
       auto [PtrSCEVA, PtrSCEVB] = *Result;
+      if (!SE.instructionCouldExistWitthOperands(PtrSCEVA, PtrSCEVB))
+        return None;
+
       const auto *Diff =
           dyn_cast<SCEVConstant>(SE.getMinusSCEV(PtrSCEVB, PtrSCEVA));
       if (!Diff)
