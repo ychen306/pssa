@@ -6,6 +6,7 @@
 #include "pssa/Visitor.h"
 #include "vegen/Pack.h"
 #include "llvm/ADT/TinyPtrVector.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h" // getUnderlyingObject
 #include "llvm/IR/Instructions.h"
@@ -100,6 +101,16 @@ public:
 
 } // namespace
 
+static unsigned getLoopDepth(PredicatedSSA &PSSA, VLoop *VL) {
+  if (!VL->isLoop())
+    return 0;
+  return PSSA.getOrigLoop(VL)->getLoopDepth();
+}
+
+static unsigned getLoopDepth(PredicatedSSA &PSSA, Instruction *I) {
+  return getLoopDepth(PSSA, PSSA.getLoopForInst(I));
+}
+
 // FIXME: make sure that the packed instructions are independent
 // FIXME: make sure we are packing instructions that have the same nesting depth
 TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
@@ -110,6 +121,11 @@ TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
       return {};
     Insts.push_back(I);
   }
+
+  unsigned Depth = getLoopDepth(PSSA, Insts.front());
+  for (auto *I : drop_begin(Insts))
+    if (getLoopDepth(PSSA, I) != Depth)
+      return {};
 
   if (auto *P = PHIPack::tryPack(Insts, PSSA))
     return {P};
@@ -478,6 +494,11 @@ std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
   auto VectorizeStoreChain = [&](ArrayRef<Instruction *> Stores) {
     if (Stores.size() <= 1)
       return;
+
+    unsigned Depth = getLoopDepth(PSSA, Stores.front());
+    for (auto *I : drop_begin(Stores))
+      if (getLoopDepth(PSSA, I) != Depth)
+        return;
 
     SmallVector<Instruction *> SortedStores;
     // FIXME: deal with cases when there are gaps between the stores
