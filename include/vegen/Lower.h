@@ -7,6 +7,8 @@ namespace llvm {
 class DependenceInfo;
 class AAResults;
 class LoopInfo;
+class Instruction;
+class Value;
 } // namespace llvm
 
 class Pack;
@@ -17,5 +19,13 @@ class PredicatedSSA;
 // Return true if succeeded.
 bool lower(llvm::ArrayRef<Pack *>, PredicatedSSA &, llvm::DependenceInfo &,
            llvm::AAResults &, llvm::LoopInfo &);
+
+const ControlCondition *
+findSpeculativeCond(llvm::Instruction *I,
+                    llvm::ArrayRef<llvm::Instruction *> Users,
+                    PredicatedSSA &PSSA);
+
+bool canSpeculateAt(llvm::Value *V, const ControlCondition *C,
+                    PredicatedSSA &PSSA);
 
 #endif // end VEGEN_LOWER_H

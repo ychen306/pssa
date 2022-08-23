@@ -855,9 +855,9 @@ static Value *getLoadStorePointer(Pack *P) {
 
 // Find a weaker condition C for I so that C *is implied by* the condition of
 // Users
-static const ControlCondition *
-findSpeculativeCond(Instruction *I, ArrayRef<Instruction *> Users,
-                    PredicatedSSA &PSSA) {
+const ControlCondition *findSpeculativeCond(Instruction *I,
+                                            ArrayRef<Instruction *> Users,
+                                            PredicatedSSA &PSSA) {
   auto *VL = PSSA.getLoopForInst(I);
 
   // Collect the conditions for all the users instructions
@@ -883,8 +883,7 @@ findSpeculativeCond(Instruction *I, ArrayRef<Instruction *> Users,
 }
 
 // Check if it's safe for us to produce V at a weaker condition C
-static bool canSpeculateAt(Value *V, const ControlCondition *C,
-                           PredicatedSSA &PSSA) {
+bool canSpeculateAt(Value *V, const ControlCondition *C, PredicatedSSA &PSSA) {
   auto *I = dyn_cast<Instruction>(V);
   if (!I)
     return true;
@@ -904,8 +903,8 @@ static bool canSpeculateAt(Value *V, const ControlCondition *C,
       continue;
     auto *VL2 = PSSA.getLoopForInst(OI);
 
-    bool Available =
-        (VL == VL2 && isImplied(VL2->getInstCond(OI), C)) || VL2->contains(VL);
+    bool Available = (VL == VL2 && isImplied(VL2->getInstCond(OI), C)) ||
+                     (VL != VL2 && VL2->contains(VL));
     if (!Available)
       return false;
   }

@@ -4,6 +4,7 @@
 #include "TripCount.h"
 #include "pssa/VectorHashInfo.h"
 #include "pssa/Visitor.h"
+#include "vegen/Lower.h"
 #include "vegen/Pack.h"
 #include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -127,6 +128,17 @@ TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
     if (getLoopDepth(PSSA, I) != Depth)
       return {};
 
+  if (auto *P = LoadPack::tryPack(Insts, DL, SE, LI, PSSA)) {
+    // Make sure when we pack divergent loads we can speculate the address
+    auto *Ptr =
+        dyn_cast<Instruction>(getLoadStorePointerOperand(P->values().front()));
+    if (!Ptr)
+      return {P};
+    auto *C = findSpeculativeCond(Ptr, Insts, PSSA);
+    if (canSpeculateAt(Ptr, C, PSSA))
+      return {P};
+  }
+
   if (auto *P = PHIPack::tryPack(Insts, PSSA))
     return {P};
   if (auto *P = BlendPack::tryPack(Insts, PSSA))
@@ -135,12 +147,11 @@ TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
     return {P};
   if (auto *P = GEPPack::tryPack(Insts))
     return {P};
-  if (auto *P = LoadPack::tryPack(Insts, DL, SE, LI, PSSA))
-    return {P};
   if (auto P = GatherPack::tryPack(Insts, PSSA))
     return {P};
   if (auto *P = IntrinsicPack::tryPack(Insts))
     return {P};
+
 
   TinyPtrVector<Pack *> Producers;
   if (auto *P = SIMDPack::tryPack(Insts))
@@ -504,6 +515,13 @@ std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
     // FIXME: deal with cases when there are gaps between the stores
     if (!sortByPointers(Stores, SortedStores, DL, SE, LI))
       return;
+
+    if (auto *Ptr = dyn_cast<Instruction>(
+            getLoadStorePointerOperand(SortedStores.front()))) {
+      auto *C = findSpeculativeCond(Ptr, SortedStores, PSSA);
+      if (!canSpeculateAt(Ptr, C, PSSA))
+        return;
+    }
 
     if (!isIndependent(Stores, PSSA, DepChecker))
       return;
