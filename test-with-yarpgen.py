@@ -74,7 +74,7 @@ if __name__ == '__main__':
   if not os.path.exists(outdir):
     os.makedirs(outdir)
 
-  p = multiprocessing.Pool(4)
-  seeds = range(13618, 1_000_000_000)
+  p = multiprocessing.Pool(8)
+  seeds = range(21300, 1_000_000_000)
   for _ in p.imap_unordered(test, seeds):
     pass
