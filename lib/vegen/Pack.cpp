@@ -40,7 +40,8 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
   auto Rest = drop_begin(Insts);
   unsigned Opcode = I->getOpcode();
   // Don't bother vectorizing integer division
-  if (Opcode == Instruction::UDiv || Opcode == Instruction::SDiv)
+  if (Opcode == Instruction::UDiv || Opcode == Instruction::SDiv ||
+      Opcode == Instruction::URem || Opcode == Instruction::SRem)
     return nullptr;
 
   auto *Ty = I->getType();
@@ -48,7 +49,6 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
         return I->getOpcode() != Opcode || I->getType() != Ty;
       }))
     return nullptr;
-
 
   if (auto *Cmp = dyn_cast<CmpInst>(I)) {
     auto Pred = Cmp->getPredicate();
