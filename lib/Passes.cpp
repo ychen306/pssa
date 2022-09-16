@@ -19,8 +19,8 @@
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Scalar/JumpThreading.h"
 #include "llvm/Transforms/Scalar/LoopRotation.h"
-#include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Scalar/Scalarizer.h"
+#include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
 
 using namespace llvm;
@@ -28,6 +28,9 @@ using namespace llvm;
 namespace {
 cl::opt<bool> TestCodeGen("test-pssa-lowering", cl::desc("Test PSSA Lowering"),
                           cl::init(false));
+
+cl::opt<bool> UseGlobalSLP("enable-global-slp", cl::desc("Enable global slp"),
+                           cl::init(false));
 
 cl::list<std::string>
     InstsToPack("p", cl::desc("<comma-separted list of instructions to pack>"));
@@ -175,13 +178,14 @@ static void buildPasses(PassBuilder &PB) {
           addCleanupPasses(FPM);
         });
 
-  PB.registerVectorizerStartEPCallback(
-      [](FunctionPassManager &FPM, OptimizationLevel) {
-        FPM.addPass(ScalarizerPass());
-        addPreprocessingPasses(FPM);
-        FPM.addPass(GlobalSLPPass());
-        addCleanupPasses(FPM);
-      });
+  if (UseGlobalSLP)
+    PB.registerVectorizerStartEPCallback(
+        [](FunctionPassManager &FPM, OptimizationLevel) {
+          FPM.addPass(ScalarizerPass());
+          addPreprocessingPasses(FPM);
+          FPM.addPass(GlobalSLPPass());
+          addCleanupPasses(FPM);
+        });
 }
 
 extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
