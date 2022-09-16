@@ -3,6 +3,7 @@
 #include "vegen/GlobalSLP.h"
 #include "vegen/Lower.h"
 #include "vegen/Pack.h"
+#include "LICM.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -170,13 +171,16 @@ static void buildPasses(PassBuilder &PB) {
         return false;
       });
 
-  if (TestCodeGen)
-    PB.registerScalarOptimizerLateEPCallback(
-        [](FunctionPassManager &FPM, OptimizationLevel) {
-          addPreprocessingPasses(FPM);
+  PB.registerScalarOptimizerLateEPCallback(
+      [](FunctionPassManager &FPM, OptimizationLevel) {
+        addPreprocessingPasses(FPM);
+        if (TestCodeGen) {
           FPM.addPass(PSSAEntry());
-          addCleanupPasses(FPM);
-        });
+        } else {
+          FPM.addPass(MyLICMPass());
+        }
+        addCleanupPasses(FPM);
+      });
 
   if (UseGlobalSLP)
     PB.registerVectorizerStartEPCallback(

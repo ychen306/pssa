@@ -1,7 +1,7 @@
 add_subdirectory(pssa)
 add_subdirectory(vegen)
 
-add_library(PSSA MODULE Passes.cpp)
+add_library(PSSA MODULE Passes.cpp LICM.cpp)
 target_link_libraries(PSSA PSSACore VeGen)
 
 if(APPLE)
