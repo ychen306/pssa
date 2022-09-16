@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+executable=$(basename $0)
+if [ "$executable" == "vegen-clang" ]
+then
+  clang=clang
+elif [ "$executable" == "vegen-clang++" ]
+then
+  clang=clang++
+else
+  echo "Error invoking vegen-clang"
+  exit 1
+fi
+
+LIBRARY_PATH=@CMAKE_BINARY_DIR@/lib/libPSSA.so
+
+exec $clang -fpass-plugin=$LIBRARY_PATH -Xclang -load -Xclang $LIBRARY_PATH $@\
+  -fno-slp-vectorize -fno-vectorize -mllvm -enable-global-slp

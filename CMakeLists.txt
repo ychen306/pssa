@@ -51,4 +51,10 @@ configure_file(${CMAKE_SOURCE_DIR}/utils/pssa-clang.in
 configure_file(${CMAKE_SOURCE_DIR}/utils/pssa-opt.in
                ${CMAKE_BINARY_DIR}/pssa-opt)
 
+configure_file(${CMAKE_SOURCE_DIR}/utils/vegen-clang.in
+               ${CMAKE_BINARY_DIR}/vegen-clang)
+
+configure_file(${CMAKE_SOURCE_DIR}/utils/vegen-clang.in
+               ${CMAKE_BINARY_DIR}/vegen-clang++)
+
 include(fmt.cmake)
