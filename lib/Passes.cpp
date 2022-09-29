@@ -1,9 +1,9 @@
+#include "LICM.h"
 #include "pssa/Lower.h"
 #include "pssa/PSSA.h"
 #include "vegen/GlobalSLP.h"
 #include "vegen/Lower.h"
 #include "vegen/Pack.h"
-#include "LICM.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -160,6 +160,11 @@ static void buildPasses(PassBuilder &PB) {
 
         if (Name == "global-slp") {
           FPM.addPass(GlobalSLPPass());
+          return true;
+        }
+
+        if (Name == "glicm") {
+          FPM.addPass(MyLICMPass());
           return true;
         }
 
