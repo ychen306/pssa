@@ -222,10 +222,8 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
             continue;
 
           auto *PN = dyn_cast<PHINode>(&I);
-          if (PN && !VL->isMu(PN)) {
-            errs() << "!!! getting phi condition for " << *PN << '\n';
+          if (PN && !VL->isMu(PN))
             VL->insert(PN, getIncomingConditions(PN, CDA), C);
-          }
           else if (!PN)
             VL->insert(&I, C);
         }

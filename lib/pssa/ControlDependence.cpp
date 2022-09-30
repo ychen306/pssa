@@ -178,7 +178,6 @@ ControlDependenceAnalysis::getConditionForBranch(BranchInst *Br, bool Taken,
 const ControlCondition *
 ControlDependenceAnalysis::getConditionForEdge(BasicBlock *Src,
                                                BasicBlock *Dst) {
-  errs() << "Getting condition for " << Src->getName() << " -> " << Dst->getName() << '\n';
   auto *Br = cast<BranchInst>(Src->getTerminator());
   return getConditionForBranch(Br, Br->getSuccessor(0) == Dst,
                                LI.getLoopFor(Dst));

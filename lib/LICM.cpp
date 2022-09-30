@@ -34,7 +34,7 @@ bool GLICM::isInvariant(Instruction *I, VLoop *VL) {
 
   // For now, just assume Mu nodes are always variant
   auto *PN = dyn_cast<PHINode>(I);
-  if (PN && VL->isMu(PN))
+  if (PN && PSSA->getLoopForInst(PN)->isMu(PN))
     return false;
 
   if (I->mayReadOrWriteMemory())
@@ -94,8 +94,6 @@ bool GLICM::runOnLoop(VLoop *VL) {
   assert(!Visited.count(VL) && "cycle in loop hierarchy");
   Visited.insert(VL);
 
-  errs() << "??????? running " << VL << '\n';
-
   // Gather the sub loops in a vector to avoid invalidation
   SmallVector<VLoop *> SubLoops;
   for (auto &InstOrLoop : VL->items()) {
@@ -106,10 +104,8 @@ bool GLICM::runOnLoop(VLoop *VL) {
   bool Changed = false;
 
   // Hoist things out of the sub loops first
-  for (auto *SubVL : SubLoops) {
-    errs() << "Visiting " << VL << " -> " << SubVL << '\n';
+  for (auto *SubVL : SubLoops)
     Changed |= runOnLoop(SubVL);
-  }
 
   if (!VL->isLoop())
     return Changed;
