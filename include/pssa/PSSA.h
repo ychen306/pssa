@@ -300,6 +300,6 @@ public:
   llvm::ScalarEvolution *getSE() { return SE; }
 };
 
-bool isConvertibleToPSSA(llvm::Function &, llvm::LoopInfo &);
+bool isConvertibleToPSSA(llvm::Function &, llvm::LoopInfo &, llvm::DominatorTree &);
 
 #endif // end PSSA_H

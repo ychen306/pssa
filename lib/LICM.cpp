@@ -146,7 +146,7 @@ PreservedAnalyses MyLICMPass::run(Function &F, FunctionAnalysisManager &AM) {
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
 
-  if (!isConvertibleToPSSA(F, LI))
+  if (!isConvertibleToPSSA(F, LI, DT))
     return PreservedAnalyses::all();
 
   PredicatedSSA PSSA(&F, LI, DT, PDT);

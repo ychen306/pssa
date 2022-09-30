@@ -3,6 +3,7 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopIterator.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/Analysis/MustExecute.h" // mayContainIrreducibleControl
 
 using namespace llvm;
@@ -221,8 +222,10 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
             continue;
 
           auto *PN = dyn_cast<PHINode>(&I);
-          if (PN && !VL->isMu(PN))
+          if (PN && !VL->isMu(PN)) {
+            errs() << "!!! getting phi condition for " << *PN << '\n';
             VL->insert(PN, getIncomingConditions(PN, CDA), C);
+          }
           else if (!PN)
             VL->insert(&I, C);
         }
@@ -241,7 +244,7 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
   }
 }
 
-bool isConvertibleToPSSA(Function &F, LoopInfo &LI) {
+bool isConvertibleToPSSA(Function &F, LoopInfo &LI, DominatorTree &DT) {
   // Don't deal with irreducible CFG
   if (mayContainIrreducibleControl(F, &LI))
     return false;
@@ -256,6 +259,12 @@ bool isConvertibleToPSSA(Function &F, LoopInfo &LI) {
   // Don't deal with infinite loops or non-rotated loops
   for (auto *L : LI.getLoopsInPreorder()) {
     if (!L->isLoopSimplifyForm() || !L->isRotatedForm() || L->hasNoExitBlocks())
+      return false;
+  }
+
+  // Don't deal with unreachable blocks
+  for (auto &BB : F) {
+    if (!DT.isReachableFromEntry(&BB))
       return false;
   }
 

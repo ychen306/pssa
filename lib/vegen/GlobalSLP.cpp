@@ -32,7 +32,7 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   auto &DI = AM.getResult<DependenceAnalysis>(F);
   auto &AA = AM.getResult<AAManager>(F);
 
-  if (!isConvertibleToPSSA(F, LI))
+  if (!isConvertibleToPSSA(F, LI, DT))
     return PreservedAnalyses::all();
 
   PredicatedSSA PSSA(&F, LI, DT, PDT, &SE);
