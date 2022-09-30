@@ -1,6 +1,7 @@
 #include "LICM.h"
 #include "pssa/Lower.h"
 #include "pssa/PSSA.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/Dominators.h"
@@ -11,19 +12,34 @@ namespace {
 
 // Generalized LICM
 class GLICM {
-  DenseSet<VLoop *> Visited;
   PredicatedSSA *PSSA;
+  AliasAnalysis &AA;
   DenseMap<std::pair<Instruction *, VLoop *>, bool> InstMemo;
   DenseMap<std::pair<const ControlCondition *, VLoop *>, bool> CondMemo;
 
-public:
-  GLICM(PredicatedSSA *PSSA) : PSSA(PSSA) {}
   bool isInvariant(Instruction *, VLoop *);
   bool isInvariant(const ControlCondition *, VLoop *);
+  bool isInvalidatedByLoop(MemoryLocation, VLoop *);
+
+public:
+  GLICM(PredicatedSSA *PSSA, AliasAnalysis &AA) : PSSA(PSSA), AA(AA) {}
   bool runOnLoop(VLoop *);
 };
 
 } // namespace
+
+bool GLICM::isInvalidatedByLoop(MemoryLocation Loc, VLoop *VL) {
+  for (auto &InstOrLoop : VL->items()) {
+    if (auto *I = InstOrLoop.asInstruction()) {
+      if (isModSet(AA.getModRefInfo(I, Loc)))
+        return true;
+    } else {
+      if (isInvalidatedByLoop(Loc, InstOrLoop.asLoop()))
+        return true;
+    }
+  }
+  return false;
+}
 
 // TODO: deal with memory
 // Check is I is invariant w.r.t. VL
@@ -36,6 +52,9 @@ bool GLICM::isInvariant(Instruction *I, VLoop *VL) {
   auto *PN = dyn_cast<PHINode>(I);
   if (PN && PSSA->getLoopForInst(PN)->isMu(PN))
     return false;
+
+  if (auto *LI = dyn_cast<LoadInst>(I))
+    return !isInvalidatedByLoop(MemoryLocation::get(LI), VL);
 
   if (I->mayReadOrWriteMemory())
     return false;
@@ -91,9 +110,6 @@ bool GLICM::isInvariant(const ControlCondition *C, VLoop *VL) {
 }
 
 bool GLICM::runOnLoop(VLoop *VL) {
-  assert(!Visited.count(VL) && "cycle in loop hierarchy");
-  Visited.insert(VL);
-
   // Gather the sub loops in a vector to avoid invalidation
   SmallVector<VLoop *> SubLoops;
   for (auto &InstOrLoop : VL->items()) {
@@ -121,11 +137,13 @@ bool GLICM::runOnLoop(VLoop *VL) {
   auto *ParentVL = VL->getParent();
   auto BeforeVL = PSSA->toIterator(VL);
   for (auto *I : InvariantInsts) {
+    errs() << "!!! hoisting "<< *I << '\n';
     auto *C = VL->getInstCond(I);
     if (auto *PN = dyn_cast<PHINode>(I)) {
       assert(VL->isGatedPhi(PN));
       auto Conds = VL->getPhiConditions(PN);
-      SmallVector<const ControlCondition *, 8> CondVec(Conds.begin(), Conds.end());
+      SmallVector<const ControlCondition *, 8> CondVec(Conds.begin(),
+                                                       Conds.end());
       VL->erase(I);
       ParentVL->insert(PN, Conds, C, BeforeVL);
     } else {
@@ -141,12 +159,13 @@ PreservedAnalyses MyLICMPass::run(Function &F, FunctionAnalysisManager &AM) {
   auto &LI = AM.getResult<LoopAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
+  auto &AA = AM.getResult<AAManager>(F);
 
   if (!isConvertibleToPSSA(F, LI, DT))
     return PreservedAnalyses::all();
 
   PredicatedSSA PSSA(&F, LI, DT, PDT);
-  GLICM LICM(&PSSA);
+  GLICM LICM(&PSSA, AA);
 
   if (!LICM.runOnLoop(&PSSA.getTopLevel()))
     return PreservedAnalyses::all();
