@@ -136,6 +136,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
 
 static void addPreprocessingPasses(FunctionPassManager &FPM) {
   FPM.addPass(UnifyFunctionExitNodesPass());
+  FPM.addPass(SimplifyCFGPass());
   FPM.addPass(LoopSimplifyPass());
   FPM.addPass(createFunctionToLoopPassAdaptor(LoopRotatePass()));
   FPM.addPass(LCSSAPass());
