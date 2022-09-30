@@ -53,11 +53,18 @@ bool GLICM::isInvariant(Instruction *I, VLoop *VL) {
   if (PN && PSSA->getLoopForInst(PN)->isMu(PN))
     return false;
 
-  if (auto *LI = dyn_cast<LoadInst>(I))
-    return !isInvalidatedByLoop(MemoryLocation::get(LI), VL);
-
-  if (I->mayReadOrWriteMemory())
+  if (!isa<LoadInst>(I) && I->mayReadOrWriteMemory())
     return false;
+
+  if (auto *LI = dyn_cast<LoadInst>(I)) {
+    if (!LI->isSimple())
+      return false;
+    auto *Ptr = dyn_cast<Instruction>(LI->getPointerOperand());
+    if (Ptr && !isInvariant(Ptr, VL))
+      return false;
+    if (isInvalidatedByLoop(MemoryLocation::get(LI), VL))
+      return false;
+  }
 
   if (!VL->contains(I))
     return true;
@@ -138,7 +145,7 @@ bool GLICM::runOnLoop(VLoop *VL) {
   auto BeforeVL = PSSA->toIterator(VL);
   for (auto *I : InvariantInsts) {
     errs() << "!!! hoisting "<< *I << '\n';
-    auto *C = VL->getInstCond(I);
+    auto *C = PSSA->concat(VL->getLoopCond(), VL->getInstCond(I));
     if (auto *PN = dyn_cast<PHINode>(I)) {
       assert(VL->isGatedPhi(PN));
       auto Conds = VL->getPhiConditions(PN);
