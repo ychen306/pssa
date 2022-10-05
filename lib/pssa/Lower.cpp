@@ -18,6 +18,18 @@ cl::opt<bool>
                       cl::desc("dump function before erasing old basic blocks"),
                       cl::init(false));
 
+class BatchedPhi {
+  VLoop *VL;
+  VLoop::ItemIterator It;
+  SmallVector<PHINode *> Phis;
+public:
+  BatchedPhi(PredicatedSSA *PSSA, PHINode *PN)
+    : VL(PSSA->getLoopForInst(PN)), It(PSSA->toIterator(PN)), Phis({PN}) {}
+  bool tryAdd(PredicatedSSA *PSSA, PHINode *);
+  unsigned size() const { return Phis.size(); }
+  ArrayRef<PHINode *> phis() const { return Phis; }
+};
+
 class PSSALowering {
   Function *F;
   LLVMContext &Ctx;
@@ -37,6 +49,7 @@ class PSSALowering {
     return Alloca;
   }
 
+  void demoteBatchedPhis(PredicatedSSA *PSSA, const BatchedPhi &);
   void demotePhi(PredicatedSSA *PSSA, PHINode *PN);
 
   DenseMap<PHINode *, Value *> ReplacedPhis;
@@ -46,6 +59,48 @@ public:
   void run(VLoop *TopLevelVL);
 };
 } // namespace
+
+
+void PSSALowering::demoteBatchedPhis(PredicatedSSA *PSSA,
+                                     const BatchedPhi &BP) {
+  DenseMap<PHINode *, AllocaInst *> BatchAllocas;
+  for (auto *PN : BP.phis()) {
+    auto *Alloca = new AllocaInst(PN->getType(), 0, nullptr /*ArraySize*/,
+                                  Align(), PN->getName() + ".demoted");
+    Allocas.push_back(Alloca);
+    BatchAllocas.try_emplace(PN, Alloca);
+    PSSA->getEntry().insert(Alloca, nullptr);
+  }
+
+  auto Phis = BP.phis();
+  PHINode *Leader = Phis.front();
+  auto InsertPt = PSSA->getInsertPoint(Leader);
+  auto *VL = InsertPt.VL;
+
+  unsigned NumValues = Leader->getNumOperands();
+  // Lower one incoming conditions at a time to reduce branching
+  for (unsigned i = 0; i < NumValues; i++) {
+    auto *C = VL->getPhiCondition(Leader, i);
+    for (auto *PN : Phis) {
+      auto *V = PN->getIncomingValue(i);
+      auto *SI = new StoreInst(V, BatchAllocas.lookup(PN), false /*isVolatile*/,
+                               Align());
+      InsertPt.insert(SI, C);
+    }
+  }
+
+  for (auto *PN : Phis) {
+    auto *Reload =
+        new LoadInst(PN->getType(), BatchAllocas.lookup(PN),
+                     PN->getName() + ".reload", false /*isVolatile*/, Align());
+    auto *Cond = VL->getInstCond(PN);
+    InsertPt.insert(Reload, Cond);
+    PN->replaceAllUsesWith(Reload);
+    ReplacedPhis[PN] = Reload;
+  }
+  for (auto *PN : Phis)
+    VL->erase(PN);
+}
 
 void PSSALowering::demotePhi(PredicatedSSA *PSSA, PHINode *PN) {
   // Demote the phi to memory
@@ -235,6 +290,42 @@ PSSALowering::lower(VLoop *VL, BasicBlock *Preheader) {
   return {Header, Exit};
 }
 
+bool BatchedPhi::tryAdd(PredicatedSSA *PSSA, PHINode *PN) {
+  // Only batch phi nodes that appear together
+  if (PSSA->getLoopForInst(PN) != VL)
+    return false;
+  if (std::next(It) != PSSA->toIterator(PN))
+    return false;
+
+  PHINode *Leader = Phis.front();
+  if (PN->getNumOperands() != Leader->getNumOperands())
+    return false;
+  for (auto [C1, C2] :
+      llvm::zip(PSSA->getPhiConditions(Leader), PSSA->getPhiConditions(PN)))
+    if (C1 != C2)
+      return false;
+  ++It;
+  Phis.push_back(PN);
+  return true;
+}
+
+static std::vector<BatchedPhi> batchPhis(PredicatedSSA *PSSA,
+                                         ArrayRef<PHINode *> Phis) {
+  if (Phis.empty())
+    return {};
+
+  std::vector<BatchedPhi> Batches;
+  Batches.emplace_back(PSSA, Phis.front());
+
+  for (auto *PN : drop_begin(Phis)) {
+    if (Batches.back().tryAdd(PSSA, PN))
+      continue;
+    Batches.emplace_back(PSSA, PN);
+  }
+
+  return Batches;
+}
+
 void PSSALowering::run(VLoop *TopLevelVL) {
   // Demote the phi nodes to make lowering easier
   // so that we don't have to consider them.
@@ -252,8 +343,15 @@ void PSSALowering::run(VLoop *TopLevelVL) {
     }
   }
   auto *PSSA = TopLevelVL->getPSSA();
+
+#if 1
+  auto BatchedPhis = batchPhis(PSSA, Phis);
+  for (auto &BP : BatchedPhis)
+    demoteBatchedPhis(PSSA, BP);
+#else
   for (auto *PN : Phis)
     demotePhi(PSSA, PN);
+#endif
 
   /////////
   // Now actually do the lowering

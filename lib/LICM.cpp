@@ -174,6 +174,12 @@ PreservedAnalyses MyLICMPass::run(Function &F, FunctionAnalysisManager &AM) {
   PredicatedSSA PSSA(&F, LI, DT, PDT);
   GLICM LICM(&PSSA, AA);
 
+  if (F.getName().contains("_step")) {
+    lowerPSSAToLLVM(&F, PSSA);
+    errs() << *F.getParent();
+    return PreservedAnalyses::none();
+  }
+
   if (!LICM.runOnLoop(&PSSA.getTopLevel()))
     return PreservedAnalyses::all();
 
