@@ -59,95 +59,65 @@ public:
 
 } // namespace
 
-#if 0
-static Value *
-emitCondition(const ControlCondition *Common, const ControlCondition *C,
-              IRBuilderBase &IRB,
-              std::function<llvm::Value *(llvm::Value *)> EmitCondition);
-// Emit code that computes the disjunction for Conds at BB
-static Value *
-emitDisjunction(const ControlCondition *Common,
-                ArrayRef<const ControlCondition *> Conds, IRBuilderBase &IRB,
-                std::function<llvm::Value *(llvm::Value *)> EmitCondition) {
-  SmallVector<Value *> Values;
-  for (auto *C : Conds)
-    Values.push_back(emitCondition(Common, C, IRB, EmitCondition));
-  return IRB.CreateOr(Values);
-}
-
-static Value *CreateAnd(Value *A, Value *B, IRBuilderBase &IRB) {
-  if (A == ConstantInt::getTrue(IRB.getContext()))
-    return B;
-  return IRB.CreateAnd(A, B);
-}
-
-static Value *
-emitCondition(const ControlCondition *Common, const ControlCondition *C,
-              IRBuilderBase &IRB,
-              std::function<llvm::Value *(llvm::Value *)> EmitCondition) {
-  if (C == Common)
-    return ConstantInt::getTrue(IRB.getContext());
-  assert(C);
-  if (auto *And = dyn_cast<ConditionAnd>(C)) {
-    return CreateAnd(emitCondition(Common, And->Parent, IRB, EmitCondition),
-                     And->IsTrue ? EmitCondition(And->Cond)
-                                 : IRB.CreateNot(EmitCondition(And->Cond)),
-                     IRB);
-  }
-  return emitDisjunction(Common, cast<ConditionOr>(C)->Conds, IRB,
-                         EmitCondition);
-}
-
-// Emit code that computes the disjunction for Conds at BB
-static Value *
-emitDisjunction(BasicBlock *BB, const ControlCondition *Common,
-                ArrayRef<const ControlCondition *> Conds,
-                std::function<llvm::Value *(llvm::Value *)> EmitCondition) {
-  IRBuilder<> IRB(BB);
-  return emitDisjunction(Common, Conds, IRB, EmitCondition);
-}
-#endif
-
 BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
   if (auto *BB = ActiveConds.lookup(C))
     return BB;
 
+  errs() << "!!! getting block for " << *C << '\n';
+
   // Get active conditions that use C and
   // unmark all intermediate semi-active conditions.
   auto GetActiveConds = [&](const ControlCondition *C,
+                            SmallPtrSetImpl<const ControlCondition *> &Visited,
                             SmallPtrSetImpl<const ControlCondition *> &Conds) {
-    SmallPtrSet<const ControlCondition *, 4> Visited;
     SmallVector<const ControlCondition *> Worklist{C};
-    assert(SemiActiveConds.count(C));
+    // assert(SemiActiveConds.count(C));
     while (!Worklist.empty()) {
       auto *C2 = Worklist.pop_back_val();
       if (!Visited.insert(C2).second)
         continue;
 
       if (ActiveConds.count(C2)) {
+        errs() << "!!! visiting active cond " << *C2 << '\n';
         Conds.insert(C2);
+        assert(!SemiActiveConds.count(C2));
         continue;
       }
+      errs() << "!!! visiting semi-active cond " << *C2 << '\n';
 
       auto It = SemiActiveConds.find(C2);
+      if (It == SemiActiveConds.end()) {
+        errs() << "wtf c2 = " << *C2 << '\n';
+      }
       assert(It != SemiActiveConds.end());
       Worklist.append(It->second.begin(), It->second.end());
-      SemiActiveConds.erase(It);
+      // FIXME: if C2 is semi active and has only one successor that's active,
+      // then C2 is also active?
+      // SemiActiveConds.erase(It);
     }
   };
 
   // If C is a semi-active condition,
   // join all of the blocks using C to the block for C
   if (SemiActiveConds.count(C)) {
-    SmallPtrSet<const ControlCondition *, 4> Conds;
-    GetActiveConds(C, Conds);
+    SmallPtrSet<const ControlCondition *, 4> Visited, Conds;
+    GetActiveConds(C, Visited, Conds);
     auto *BB = createBlock();
+    for (auto *C2 : Visited) {
+      auto It = SemiActiveConds.find(C2);
+      if (It != SemiActiveConds.end()) {
+        errs() << "Unmarking " << *C2 << " as semi-active\n"
+          << " \t\t for " << *C << "\n";
+        SemiActiveConds.erase(It);
+      }
+    }
     for (auto *C2 : Conds) {
       auto It = ActiveConds.find(C2);
       assert(It != ActiveConds.end());
       BranchInst::Create(BB, It->second);
       ActiveConds.erase(It);
     }
+
     ActiveConds[C] = BB;
     return BB;
   }
@@ -155,6 +125,9 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
   if (auto *And = dyn_cast<ConditionAnd>(C)) {
     auto *IfTrue = createBlock();
     auto *IfFalse = createBlock();
+    errs() << "~~~ getting and " << *And << '\n';
+    errs() << "~~~~~~ parent condition = " << *And->Parent << '\n';
+    errs() << "\t\t parent active? " << ActiveConds.count(And->Parent) << '\n';
     BranchInst::Create(IfTrue, IfFalse, EmitCondition(And->Cond),
                        getBlockFor(And->Parent));
     auto *BB = And->IsTrue ? IfTrue : IfFalse;
@@ -168,60 +141,57 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
   }
 
   auto *Or = cast<ConditionOr>(C);
-  // At this point, we need a join but not all the conditions we want are
-  // active. Find all the active blocks that are using the greatest common cond.
-  SmallPtrSet<const ControlCondition *, 4> Conds;
-  auto *CommonC = Or->GreatestCommonCond;
-  if (!SemiActiveConds.count(CommonC)) {
-    (void)getBlockFor(CommonC);
-    Conds.insert(CommonC);
-  } else {
-    GetActiveConds(CommonC, Conds);
+  errs() << "!!!! getting block for OR " << *Or << '\n';
+  for (auto *C2 : Or->Conds) {
+    errs() << "??? is semi-active? " << SemiActiveConds.count(C2) 
+      << ", is active? " << ActiveConds.count(C2)
+      << "\n\t cond = " << *C2 << '\n';
+    if (!SemiActiveConds.count(C2))
+      getBlockFor(C2);
   }
 
-  // Join the conditions we want to BB.
-  // Join the other conditions to AuxBB, which then branch conditionally to BB
-  auto *BB = createBlock();
-  auto *AuxBB = createBlock();
-  SmallPtrSet<const ControlCondition *, 4> CondsToJoin, Joined;
-  CondsToJoin.insert(Or->Conds.begin(), Or->Conds.end());
-  for (auto *C2 : Conds) {
-    auto It = ActiveConds.find(C2);
-    assert(It != ActiveConds.end());
-    auto *BB2 = It->second;
-
-    if (CondsToJoin.count(C2)) {
-      BranchInst::Create(BB, BB2);
-      Joined.insert(C2);
-    } else {
-      BranchInst::Create(AuxBB, BB2);
+  bool AllAvailable = all_of(Or->Conds, [&](auto *C2) {
+    return ActiveConds.count(C2) || SemiActiveConds.count(C2);
+  });
+  // Best case scenario: just join all of the terms
+  if (AllAvailable) {
+    auto *BB = createBlock();
+    SmallPtrSet<const ControlCondition *, 8> Visited, Conds;
+    for (auto *C2 : Or->Conds)
+      GetActiveConds(C2, Visited, Conds);
+    //for (auto *C2 : Visited) {
+    //  auto It = SemiActiveConds.find(C2);
+    //  // FIXME: only unmark if all children are unmarked
+    //  if (It != SemiActiveConds.end()) {
+    //    errs() << "Unmarking " << *C2 << " as semi-active\n"
+    //      << " \t\t for " << *C << "\n";
+    //    SemiActiveConds.erase(It);
+    //  }
+    //}
+    for (auto *C2 : Conds) {
+      auto It = ActiveConds.find(C2);
+      assert(It != ActiveConds.end());
+      BranchInst::Create(BB, It->second);
+      ActiveConds.erase(It);
+      SemiActiveConds[C2] = {Or};
     }
-    ActiveConds.erase(It);
+    return ActiveConds[Or] = BB;
   }
 
-  SmallVector<const ControlCondition *, 4> UnjoinedConds;
-  for (auto *C : Or->Conds)
-    if (!Joined.count(C))
-      UnjoinedConds.push_back(C);
-
-  // Branch conditionally from AuxBB to BB
+  auto *CommonC = Or->GreatestCommonCond;
+  auto *AuxBB = getBlockFor(CommonC);
+  auto *BB = createBlock();
   auto *DrainBB = createBlock();
-  if (UnjoinedConds.empty())
-    BranchInst::Create(DrainBB, AuxBB);
-  else {
-    ConditionEmitter CE(AuxBB, CommonC, EmitCondition);
-    BranchInst::Create(BB, DrainBB,
-                       // emitDisjunction(AuxBB, CommonC, UnjoinedConds,
-                       // EmitCondition), AuxBB);
-                       CE.emitDisjunction(UnjoinedConds), AuxBB);
-  }
 
+  ConditionEmitter CE(AuxBB, CommonC, EmitCondition);
+  BranchInst::Create(BB /*if true*/, DrainBB /*if false*/,
+                     CE.emitDisjunction(Or->Conds), AuxBB);
   // Create a dummy condition that represents the complement of the disjunction.
   auto *DummyC = getDummyCondition();
+  ActiveConds.erase(CommonC);
   ActiveConds[C] = BB;
   ActiveConds[DummyC] = DrainBB;
   SemiActiveConds[CommonC] = {C, DummyC};
-  assert(!ActiveConds.lookup(CommonC));
   return BB;
 }
 
