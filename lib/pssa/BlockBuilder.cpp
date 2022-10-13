@@ -66,7 +66,7 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
   if (auto *BB = ActiveConds.lookup(C))
     return BB;
 
-  LLVM_DEBUG(dbgs() << "!!! getting block for " << *C << '\n');
+  LLVM_DEBUG(dbgs() << "Getting block for " << *C << '\n');
 
   // Get active conditions that use C and
   // unmark all intermediate semi-active conditions.
@@ -109,7 +109,7 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
       auto It = SemiActiveConds.find(C2);
       if (It != SemiActiveConds.end()) {
         LLVM_DEBUG(dbgs() << "Unmarking " << *C2 << " as semi-active\n"
-          << " \t\t for " << *C << "\n");
+                          << " \t\t for " << *C << "\n");
         SemiActiveConds.erase(It);
       }
     }
@@ -129,7 +129,8 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
     auto *IfFalse = createBlock();
     LLVM_DEBUG(dbgs() << "Getting AND " << *And << '\n');
     LLVM_DEBUG(dbgs() << "\t parent condition = " << *And->Parent << '\n');
-    LLVM_DEBUG(dbgs() << "\t\t parent active? " << ActiveConds.count(And->Parent) << '\n');
+    LLVM_DEBUG(dbgs() << "\t\t parent active? "
+                      << ActiveConds.count(And->Parent) << '\n');
     BranchInst::Create(IfTrue, IfFalse, EmitCondition(And->Cond),
                        getBlockFor(And->Parent));
     auto *BB = And->IsTrue ? IfTrue : IfFalse;
@@ -146,9 +147,9 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
   LLVM_DEBUG(dbgs() << "Getting block for OR " << *Or << '\n');
   LLVM_DEBUG(dbgs() << "<<<<<<< TERMS TO JOIN <<<<<<<\n");
   for (auto *C2 : Or->Conds) {
-    LLVM_DEBUG(dbgs() << "\t semi-active? " << SemiActiveConds.count(C2) 
-      << ", is active? " << ActiveConds.count(C2)
-      << "\n\t cond = " << *C2 << '\n');
+    LLVM_DEBUG(dbgs() << "\t semi-active? " << SemiActiveConds.count(C2)
+                      << ", is active? " << ActiveConds.count(C2)
+                      << "\n\t cond = " << *C2 << '\n');
     if (!SemiActiveConds.count(C2))
       getBlockFor(C2);
   }
