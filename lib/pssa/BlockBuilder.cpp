@@ -1,8 +1,11 @@
 #include "BlockBuilder.h"
 #include "pssa/ControlDependence.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/Support/Debug.h"
 
 using namespace llvm;
+
+#define DEBUG_TYPE "block-builder"
 
 BlockBuilder::BlockBuilder(
     BasicBlock *EntryBB,
@@ -63,7 +66,7 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
   if (auto *BB = ActiveConds.lookup(C))
     return BB;
 
-  errs() << "!!! getting block for " << *C << '\n';
+  LLVM_DEBUG(dbgs() << "!!! getting block for " << *C << '\n');
 
   // Get active conditions that use C and
   // unmark all intermediate semi-active conditions.
@@ -71,23 +74,22 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
                             SmallPtrSetImpl<const ControlCondition *> &Visited,
                             SmallPtrSetImpl<const ControlCondition *> &Conds) {
     SmallVector<const ControlCondition *> Worklist{C};
-    // assert(SemiActiveConds.count(C));
     while (!Worklist.empty()) {
       auto *C2 = Worklist.pop_back_val();
       if (!Visited.insert(C2).second)
         continue;
 
       if (ActiveConds.count(C2)) {
-        errs() << "!!! visiting active cond " << *C2 << '\n';
+        LLVM_DEBUG(dbgs() << "Visiting active cond " << *C2 << '\n');
         Conds.insert(C2);
         assert(!SemiActiveConds.count(C2));
         continue;
       }
-      errs() << "!!! visiting semi-active cond " << *C2 << '\n';
+      LLVM_DEBUG(dbgs() << "Visiting semi-active cond " << *C2 << '\n');
 
       auto It = SemiActiveConds.find(C2);
       if (It == SemiActiveConds.end()) {
-        errs() << "wtf c2 = " << *C2 << '\n';
+        LLVM_DEBUG(dbgs() << "wtf c2 = " << *C2 << '\n');
       }
       assert(It != SemiActiveConds.end());
       Worklist.append(It->second.begin(), It->second.end());
@@ -106,8 +108,8 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
     for (auto *C2 : Visited) {
       auto It = SemiActiveConds.find(C2);
       if (It != SemiActiveConds.end()) {
-        errs() << "Unmarking " << *C2 << " as semi-active\n"
-          << " \t\t for " << *C << "\n";
+        LLVM_DEBUG(dbgs() << "Unmarking " << *C2 << " as semi-active\n"
+          << " \t\t for " << *C << "\n");
         SemiActiveConds.erase(It);
       }
     }
@@ -125,9 +127,9 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
   if (auto *And = dyn_cast<ConditionAnd>(C)) {
     auto *IfTrue = createBlock();
     auto *IfFalse = createBlock();
-    errs() << "~~~ getting and " << *And << '\n';
-    errs() << "~~~~~~ parent condition = " << *And->Parent << '\n';
-    errs() << "\t\t parent active? " << ActiveConds.count(And->Parent) << '\n';
+    LLVM_DEBUG(dbgs() << "Getting AND " << *And << '\n');
+    LLVM_DEBUG(dbgs() << "\t parent condition = " << *And->Parent << '\n');
+    LLVM_DEBUG(dbgs() << "\t\t parent active? " << ActiveConds.count(And->Parent) << '\n');
     BranchInst::Create(IfTrue, IfFalse, EmitCondition(And->Cond),
                        getBlockFor(And->Parent));
     auto *BB = And->IsTrue ? IfTrue : IfFalse;
@@ -141,11 +143,12 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
   }
 
   auto *Or = cast<ConditionOr>(C);
-  errs() << "!!!! getting block for OR " << *Or << '\n';
+  LLVM_DEBUG(dbgs() << "Getting block for OR " << *Or << '\n');
+  LLVM_DEBUG(dbgs() << "<<<<<<< TERMS TO JOIN <<<<<<<\n");
   for (auto *C2 : Or->Conds) {
-    errs() << "??? is semi-active? " << SemiActiveConds.count(C2) 
+    LLVM_DEBUG(dbgs() << "\t semi-active? " << SemiActiveConds.count(C2) 
       << ", is active? " << ActiveConds.count(C2)
-      << "\n\t cond = " << *C2 << '\n';
+      << "\n\t cond = " << *C2 << '\n');
     if (!SemiActiveConds.count(C2))
       getBlockFor(C2);
   }
@@ -159,15 +162,6 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
     SmallPtrSet<const ControlCondition *, 8> Visited, Conds;
     for (auto *C2 : Or->Conds)
       GetActiveConds(C2, Visited, Conds);
-    //for (auto *C2 : Visited) {
-    //  auto It = SemiActiveConds.find(C2);
-    //  // FIXME: only unmark if all children are unmarked
-    //  if (It != SemiActiveConds.end()) {
-    //    errs() << "Unmarking " << *C2 << " as semi-active\n"
-    //      << " \t\t for " << *C << "\n";
-    //    SemiActiveConds.erase(It);
-    //  }
-    //}
     for (auto *C2 : Conds) {
       auto It = ActiveConds.find(C2);
       assert(It != ActiveConds.end());
