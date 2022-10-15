@@ -110,8 +110,6 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
       if (!Visited.count(C2))
         UnresolvedConds.push_back(C2);
     }
-    errs() << "Getting block for cond " << *C << '\n';
-    errs() << "!!! num unresolved: " << UnresolvedConds.size() << '\n';
 
     assert(UnresolvedConds.empty());
     auto *BB = createBlock();

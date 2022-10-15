@@ -174,14 +174,7 @@ PreservedAnalyses MyLICMPass::run(Function &F, FunctionAnalysisManager &AM) {
   PredicatedSSA PSSA(&F, LI, DT, PDT);
   GLICM LICM(&PSSA, AA);
 
-  if (F.getName().contains("sqlite3VdbeReset")) {
-    lowerPSSAToLLVM(&F, PSSA);
-    errs() << F << '\n';
-    return PreservedAnalyses::none();
-  }
-
-
-  if (!LICM.runOnLoop(&PSSA.getTopLevel()))
+  if (!LICM.runOnLoop(&PSSA.getTopLevel()) && false)
     return PreservedAnalyses::all();
 
   errs() << "Hoisted something in " << F.getName() << '\n';
