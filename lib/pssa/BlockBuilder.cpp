@@ -68,11 +68,13 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
 
   LLVM_DEBUG(dbgs() << "Getting block for " << *C << '\n');
 
+  using CondSet = SmallPtrSet<const ControlCondition *, 4>;
+
   // Get active conditions that use C and
   // unmark all intermediate semi-active conditions.
   auto GetActiveConds = [&](const ControlCondition *C,
-                            SmallPtrSetImpl<const ControlCondition *> &Visited,
-                            SmallPtrSetImpl<const ControlCondition *> &Conds) {
+                            CondSet &Visited,
+                            CondSet &Conds, CondSet &IncomingConds) {
     SmallVector<const ControlCondition *> Worklist{C};
     while (!Worklist.empty()) {
       auto *C2 = Worklist.pop_back_val();
@@ -80,44 +82,59 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
         continue;
 
       if (ActiveConds.count(C2)) {
-        LLVM_DEBUG(dbgs() << "Visiting active cond " << *C2 << '\n');
         Conds.insert(C2);
         assert(!SemiActiveConds.count(C2));
         continue;
       }
-      LLVM_DEBUG(dbgs() << "Visiting semi-active cond " << *C2 << '\n');
 
       auto It = SemiActiveConds.find(C2);
-      if (It == SemiActiveConds.end()) {
-        LLVM_DEBUG(dbgs() << "wtf c2 = " << *C2 << '\n');
-      }
       assert(It != SemiActiveConds.end());
       Worklist.append(It->second.begin(), It->second.end());
-      // FIXME: if C2 is semi active and has only one successor that's active,
-      // then C2 is also active?
-      // SemiActiveConds.erase(It);
+
+      for (auto *C2 : It->second) {
+        if (!C2) continue;
+        assert(ParentConds.count(C2));
+        for (auto *ParentC : ParentConds[C2])
+          IncomingConds.insert(ParentC);
+      }
     }
   };
 
   // If C is a semi-active condition,
   // join all of the blocks using C to the block for C
   if (SemiActiveConds.count(C)) {
-    SmallPtrSet<const ControlCondition *, 4> Visited, Conds;
-    GetActiveConds(C, Visited, Conds);
+    CondSet Visited, Conds, IncomingConds;
+    GetActiveConds(C, Visited, Conds, IncomingConds);
+    SmallVector<const ControlCondition *, 4> UnresolvedConds;
+    for (auto *C2 : IncomingConds) {
+      if (!Visited.count(C2))
+        UnresolvedConds.push_back(C2);
+    }
+    errs() << "Getting block for cond " << *C << '\n';
+    errs() << "!!! num unresolved: " << UnresolvedConds.size() << '\n';
+
+    assert(UnresolvedConds.empty());
     auto *BB = createBlock();
     for (auto *C2 : Visited) {
       auto It = SemiActiveConds.find(C2);
       if (It != SemiActiveConds.end()) {
-        LLVM_DEBUG(dbgs() << "Unmarking " << *C2 << " as semi-active\n"
-                          << " \t\t for " << *C << "\n");
         SemiActiveConds.erase(It);
+        if (C2 && C2 != C) {
+          assert(ParentConds.count(C2));
+          ParentConds.erase(C2);
+        }
       }
     }
+
     for (auto *C2 : Conds) {
       auto It = ActiveConds.find(C2);
       assert(It != ActiveConds.end());
       BranchInst::Create(BB, It->second);
       ActiveConds.erase(It);
+      if (C2) {
+        assert(ParentConds.count(C2));
+        ParentConds.erase(C2);
+      }
     }
 
     ActiveConds[C] = BB;
@@ -127,10 +144,6 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
   if (auto *And = dyn_cast<ConditionAnd>(C)) {
     auto *IfTrue = createBlock();
     auto *IfFalse = createBlock();
-    LLVM_DEBUG(dbgs() << "Getting AND " << *And << '\n');
-    LLVM_DEBUG(dbgs() << "\t parent condition = " << *And->Parent << '\n');
-    LLVM_DEBUG(dbgs() << "\t\t parent active? "
-                      << ActiveConds.count(And->Parent) << '\n');
     BranchInst::Create(IfTrue, IfFalse, EmitCondition(And->Cond),
                        getBlockFor(And->Parent));
     auto *BB = And->IsTrue ? IfTrue : IfFalse;
@@ -140,6 +153,8 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
     SemiActiveConds[And->Parent].assign({And, And->Complement});
     ActiveConds[And] = BB;
     ActiveConds[And->Complement] = And->IsTrue ? IfFalse : IfTrue;
+    ParentConds[And].assign({And->Parent});
+    ParentConds[And->Complement].assign({And->Parent});
     return BB;
   }
 
@@ -160,15 +175,23 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
   // Best case scenario: just join all of the terms
   if (AllAvailable) {
     auto *BB = createBlock();
-    SmallPtrSet<const ControlCondition *, 8> Visited, Conds;
+    CondSet Visited, Conds, IncomingConds;
     for (auto *C2 : Or->Conds)
-      GetActiveConds(C2, Visited, Conds);
+      GetActiveConds(C2, Visited, Conds, IncomingConds);
+    SmallVector<const ControlCondition *, 4> UnresolvedConds;
+    for (auto *C2 : IncomingConds) {
+      if (!Visited.count(C2))
+        UnresolvedConds.push_back(C2);
+    }
+
+    assert(UnresolvedConds.empty());
     for (auto *C2 : Conds) {
       auto It = ActiveConds.find(C2);
       assert(It != ActiveConds.end());
       BranchInst::Create(BB, It->second);
       ActiveConds.erase(It);
       SemiActiveConds[C2] = {Or};
+      ParentConds[Or].push_back(C2);
     }
     return ActiveConds[Or] = BB;
   }
@@ -187,6 +210,8 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
   ActiveConds[C] = BB;
   ActiveConds[DummyC] = DrainBB;
   SemiActiveConds[CommonC] = {C, DummyC};
+  ParentConds[C].assign({CommonC});
+  ParentConds[DummyC].assign({CommonC});
   return BB;
 }
 

@@ -24,6 +24,8 @@ class BlockBuilder {
   // other semi-active conds
   using ConditionVector = llvm::SmallVector<const ControlCondition *, 2>;
   llvm::DenseMap<const ControlCondition *, ConditionVector> SemiActiveConds;
+  // Mapping a (semi) active condition -> parent condition
+  llvm::DenseMap<const ControlCondition *, ConditionVector> ParentConds;
 
   unsigned DummyCounter;
   const ControlCondition *getDummyCondition();
