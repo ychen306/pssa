@@ -166,6 +166,7 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
     if (!SemiActiveConds.count(C2))
       getBlockFor(C2);
   }
+  LLVM_DEBUG(dbgs() << ">>>>>>>>>>>>>\n");
 
   bool AllAvailable = all_of(Or->Conds, [&](auto *C2) {
     return ActiveConds.count(C2) || SemiActiveConds.count(C2);
