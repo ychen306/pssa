@@ -9,10 +9,29 @@
 using namespace llvm;
 
 static SmallVector<const ControlCondition *, 4>
-getIncomingConditions(PHINode *PN, ControlDependenceAnalysis &CDA) {
+canonicalizeAndGetConditions(PHINode *PN, ControlDependenceAnalysis &CDA) {
+  struct Incoming {
+    const ControlCondition *C;
+    BasicBlock *BB;
+    Value *V;
+  };
+  SmallVector<Incoming, 4> Incomings;
+
+  for (auto [BB, V] : zip(PN->blocks(), PN->incoming_values())) {
+    auto *C = CDA.getConditionForEdge(BB, PN->getParent());
+    Incomings.push_back(Incoming{C, BB, V});
+  }
+  // Canonicalize the incoming values by their conditions
+  llvm::sort(Incomings,
+             [](const Incoming &IncomingA, const Incoming &IncomingB) -> bool {
+               return IncomingA.C < IncomingB.C;
+             });
   SmallVector<const ControlCondition *, 4> Conds;
-  for (auto *SrcBB : PN->blocks())
-    Conds.push_back(CDA.getConditionForEdge(SrcBB, PN->getParent()));
+  for (unsigned i = 0; i < Incomings.size(); i++) {
+    PN->setIncomingValue(i, Incomings[i].V);
+    PN->setIncomingBlock(i, Incomings[i].BB);
+    Conds.push_back(Incomings[i].C);
+  }
   return Conds;
 }
 
@@ -150,7 +169,7 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
           continue;
 
         if (auto *PN = dyn_cast<PHINode>(&I)) {
-          TopVL.insert(PN, getIncomingConditions(PN, CDA), C);
+          TopVL.insert(PN, canonicalizeAndGetConditions(PN, CDA), C);
         } else {
           TopVL.insert(&I, C);
         }
@@ -223,7 +242,7 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
 
           auto *PN = dyn_cast<PHINode>(&I);
           if (PN && !VL->isMu(PN))
-            VL->insert(PN, getIncomingConditions(PN, CDA), C);
+            VL->insert(PN, canonicalizeAndGetConditions(PN, CDA), C);
           else if (!PN)
             VL->insert(&I, C);
         }
