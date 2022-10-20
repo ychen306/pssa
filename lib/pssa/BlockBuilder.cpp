@@ -111,6 +111,12 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
         UnresolvedConds.push_back(C2);
     }
 
+    if (!UnresolvedConds.empty()) {
+      UnresolvedConds.push_back(C);
+      getBlockFor(getGreatestCommonCondition(UnresolvedConds));
+      return getBlockFor(C);
+    }
+
     assert(UnresolvedConds.empty());
     auto *BB = createBlock();
     for (auto *C2 : Visited) {
