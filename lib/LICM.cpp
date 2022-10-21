@@ -18,6 +18,7 @@ class GLICM {
   DenseMap<std::pair<const ControlCondition *, VLoop *>, bool> CondMemo;
 
   bool isInvariant(Instruction *, VLoop *);
+  bool isInvariant(VLoop *, VLoop *);
   bool isInvariant(const ControlCondition *, VLoop *);
   bool isInvalidatedByLoop(MemoryLocation, VLoop *);
 
@@ -87,6 +88,88 @@ bool GLICM::isInvariant(Instruction *I, VLoop *VL) {
   return isInvariant(PSSA->getInstCond(I), VL);
 }
 
+static void summarize(VLoop *VL, SmallVectorImpl<Instruction *> &LiveIns,
+                      SmallVectorImpl<Instruction *> &MemoryAccesses) {
+  DenseSet<const ControlCondition *> Processed;
+  std::function<void(const ControlCondition *)> ProcessCondition =
+      [&](const ControlCondition *C) {
+        if (!C)
+          return;
+        if (!Processed.insert(C).second)
+          return;
+        if (auto *And = dyn_cast<ConditionAnd>(C)) {
+          ProcessCondition(And->Parent);
+          auto *I = dyn_cast<Instruction>(And->Cond);
+          if (I && !VL->contains(I))
+            LiveIns.push_back(I);
+          return;
+        }
+        llvm::for_each(cast<ConditionOr>(C)->Conds, ProcessCondition);
+      };
+
+  SmallVector<VLoop *, 8> Worklist{VL};
+  while (!Worklist.empty()) {
+    auto *VL2 = Worklist.pop_back_val();
+
+    ProcessCondition(VL2->getLoopCond());
+    ProcessCondition(VL2->getBackEdgeCond());
+
+    for (auto &InstOrLoop : VL2->items()) {
+      if (auto *SubVL = InstOrLoop.asLoop()) {
+        Worklist.push_back(SubVL);
+        continue;
+      }
+
+      auto *I = InstOrLoop.asInstruction();
+      assert(I);
+      for (auto *O : I->operand_values()) {
+        // Ignore mu of VL
+        auto *PN = dyn_cast<PHINode>(O);
+        if (PN && VL->isMu(PN))
+          continue;
+        auto *OI = dyn_cast<Instruction>(O);
+        if (OI && !VL->contains(OI))
+          LiveIns.push_back(OI);
+      }
+
+      if (auto *PN = dyn_cast<PHINode>(I)) {
+        llvm::for_each(VL2->getPhiConditions(PN), ProcessCondition);
+      }
+
+      if (I->mayReadOrWriteMemory()) {
+        MemoryAccesses.push_back(I);
+      }
+    }
+  }
+}
+
+// Check if `VL` can be hoisted out of its parent loop
+bool GLICM::isInvariant(VLoop *VL, VLoop *ParentVL) {
+  assert(VL->getParent() == ParentVL);
+
+  SmallVector<Instruction *> LiveIns, MemoryAccesses;
+  summarize(VL, LiveIns, MemoryAccesses);
+
+  if (!isInvariant(VL->getLoopCond(), ParentVL))
+    return false;
+
+  for (auto *I : LiveIns) {
+    if (!isInvariant(I, ParentVL))
+      return false;
+  }
+
+  for (auto *I : MemoryAccesses) {
+    auto *LI = dyn_cast<LoadInst>(I);
+    if (!LI && I->mayReadOrWriteMemory())
+      return false;
+    assert(LI);
+    if (isInvalidatedByLoop(MemoryLocation::get(LI), ParentVL))
+      return false;
+  }
+
+  return true;
+}
+
 bool GLICM::isInvariant(const ControlCondition *C, VLoop *VL) {
   // True is invariant
   if (!C)
@@ -135,7 +218,10 @@ bool GLICM::runOnLoop(VLoop *VL) {
 
   // Figure out which instructions are invariant
   SmallVector<Instruction *> InvariantInsts;
+  SmallVector<VLoop *> InvariantLoops;
   for (auto &InstOrLoop : VL->items()) {
+    if (auto *SubVL = InstOrLoop.asLoop(); SubVL && isInvariant(SubVL, VL))
+      InvariantLoops.push_back(SubVL);
     if (auto *I = InstOrLoop.asInstruction(); I && isInvariant(I, VL))
       InvariantInsts.push_back(I);
   }
@@ -144,7 +230,7 @@ bool GLICM::runOnLoop(VLoop *VL) {
   auto *ParentVL = VL->getParent();
   auto BeforeVL = PSSA->toIterator(VL);
   for (auto *I : InvariantInsts) {
-    errs() << "!!! hoisting "<< *I << '\n';
+    errs() << "!!! hoisting " << *I << '\n';
     auto *C = PSSA->concat(VL->getLoopCond(), VL->getInstCond(I));
     if (auto *PN = dyn_cast<PHINode>(I)) {
       assert(VL->isGatedPhi(PN));
@@ -159,7 +245,16 @@ bool GLICM::runOnLoop(VLoop *VL) {
     }
   }
 
-  return Changed | !InvariantInsts.empty();
+  for (auto *SubVL : InvariantLoops) {
+    VL->erase(SubVL);
+    auto *NewLoopCond = PSSA->concat(VL->getLoopCond(), SubVL->getLoopCond());
+    SubVL->setLoopCond(NewLoopCond);
+    ParentVL->insert(SubVL, BeforeVL);
+    assert(SubVL->getParent() == ParentVL);
+    errs() << "Hoisted one *loop-invariant* loop\n";
+  }
+
+  return Changed | !InvariantInsts.empty() | !InvariantLoops.empty();
 }
 
 PreservedAnalyses MyLICMPass::run(Function &F, FunctionAnalysisManager &AM) {
@@ -174,7 +269,7 @@ PreservedAnalyses MyLICMPass::run(Function &F, FunctionAnalysisManager &AM) {
   PredicatedSSA PSSA(&F, LI, DT, PDT);
   GLICM LICM(&PSSA, AA);
 
-  if (!LICM.runOnLoop(&PSSA.getTopLevel()) && false)
+  if (!LICM.runOnLoop(&PSSA.getTopLevel()))
     return PreservedAnalyses::all();
 
   errs() << "Hoisted something in " << F.getName() << '\n';
