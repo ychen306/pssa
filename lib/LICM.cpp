@@ -114,6 +114,12 @@ static void summarize(VLoop *VL, SmallVectorImpl<Instruction *> &LiveIns,
     ProcessCondition(VL2->getLoopCond());
     ProcessCondition(VL2->getBackEdgeCond());
 
+    for (auto *PN : VL2->mus()) {
+      auto *I = dyn_cast<Instruction>(PN->getOperand(0));
+      if (I && !VL->contains(I))
+        LiveIns.push_back(I);
+    }
+
     for (auto &InstOrLoop : VL2->items()) {
       if (auto *SubVL = InstOrLoop.asLoop()) {
         Worklist.push_back(SubVL);
@@ -124,13 +130,14 @@ static void summarize(VLoop *VL, SmallVectorImpl<Instruction *> &LiveIns,
       assert(I);
       for (auto *O : I->operand_values()) {
         // Ignore mu of VL
-        auto *PN = dyn_cast<PHINode>(O);
-        if (PN && VL->isMu(PN))
-          continue;
+        //auto *PN = dyn_cast<PHINode>(O);
+        //if (PN && VL->isMu(PN))
+        //  continue;
         auto *OI = dyn_cast<Instruction>(O);
         if (OI && !VL->contains(OI))
           LiveIns.push_back(OI);
       }
+      ProcessCondition(VL2->getInstCond(I));
 
       if (auto *PN = dyn_cast<PHINode>(I)) {
         llvm::for_each(VL2->getPhiConditions(PN), ProcessCondition);
@@ -147,11 +154,11 @@ static void summarize(VLoop *VL, SmallVectorImpl<Instruction *> &LiveIns,
 bool GLICM::isInvariant(VLoop *VL, VLoop *ParentVL) {
   assert(VL->getParent() == ParentVL);
 
-  SmallVector<Instruction *> LiveIns, MemoryAccesses;
-  summarize(VL, LiveIns, MemoryAccesses);
-
   if (!isInvariant(VL->getLoopCond(), ParentVL))
     return false;
+
+  SmallVector<Instruction *> LiveIns, MemoryAccesses;
+  summarize(VL, LiveIns, MemoryAccesses);
 
   for (auto *I : LiveIns) {
     if (!isInvariant(I, ParentVL))
@@ -245,6 +252,7 @@ bool GLICM::runOnLoop(VLoop *VL) {
     }
   }
 
+#if 1
   for (auto *SubVL : InvariantLoops) {
     VL->erase(SubVL);
     auto *NewLoopCond = PSSA->concat(VL->getLoopCond(), SubVL->getLoopCond());
@@ -253,6 +261,7 @@ bool GLICM::runOnLoop(VLoop *VL) {
     assert(SubVL->getParent() == ParentVL);
     errs() << "Hoisted one *loop-invariant* loop\n";
   }
+#endif
 
   return Changed | !InvariantInsts.empty() | !InvariantLoops.empty();
 }
