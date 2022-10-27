@@ -1,12 +1,14 @@
 #include "LICM.h"
 #include "pssa/Lower.h"
 #include "pssa/PSSA.h"
+#include "pssa/Inserter.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/Dominators.h"
 
 using namespace llvm;
+
 
 namespace {
 
@@ -18,6 +20,7 @@ class GLICM {
   DenseMap<std::pair<const ControlCondition *, VLoop *>, bool> CondMemo;
 
   bool isInvariant(Instruction *, VLoop *);
+  bool isInvariant(Value *, VLoop *);
   bool isInvariant(VLoop *, VLoop *);
   bool isInvariant(const ControlCondition *, VLoop *);
   bool isInvalidatedByLoop(MemoryLocation, VLoop *);
@@ -40,6 +43,11 @@ bool GLICM::isInvalidatedByLoop(MemoryLocation Loc, VLoop *VL) {
     }
   }
   return false;
+}
+
+bool GLICM::isInvariant(Value *V, VLoop *VL) {
+  auto *I = dyn_cast<Instruction>(V);
+  return !I || isInvariant(I, VL);
 }
 
 // TODO: deal with memory
@@ -206,6 +214,69 @@ bool GLICM::isInvariant(const ControlCondition *C, VLoop *VL) {
   return CondMemo[{C, VL}] = Invariant;
 }
 
+// We only assume LI is done unconditionally within the loop
+static void hoistLoadSpeculatively(LoadInst *LI, VLoop *VL, PredicatedSSA *PSSA, AliasAnalysis &AA) {
+  auto *ParentVL = VL->getParent();
+  auto BeforeVL = PSSA->toIterator(VL);
+
+  VL->erase(LI);
+  ParentVL->insert(LI, nullptr, BeforeVL);
+
+  auto *Mu = VL->createMu(LI);
+  // The value we are replacing the load with
+  Value *LoadRep = Mu;
+
+  auto *Ty = LI->getType();
+  auto *Ptr = LI->getPointerOperand();
+  auto Loc = MemoryLocation::get(LI);
+  SmallVector<Instruction *> Insts;
+  // Collect the instructions first to avoid invalidating iterator
+  DenseSet<Instruction *> InvalidatingInsts;
+  for (auto &InstOrLoop : VL->items()) {
+    if (auto *I = InstOrLoop.asInstruction()) {
+      Insts.push_back(I);
+      if (isModSet(AA.getModRefInfo(I, Loc)))
+        InvalidatingInsts.insert(I);
+    }
+  }
+  for (auto *I : Insts) {
+    for (unsigned i = 0; i < I->getNumOperands(); i++) {
+      auto *LI2 = dyn_cast<LoadInst>(I->getOperand(i));
+      if (LI2 && LI2->getPointerOperand() == Ptr && LI2->getType() == Ty) {
+        I->setOperand(i, LoadRep);
+      }
+    }
+
+    if (!InvalidatingInsts.count(I))
+      continue;
+
+    // If it's a store, just forward conditionally
+    if (auto *Store = dyn_cast<StoreInst>(I); Store && Store->getValueOperand()->getType() == Ty) {
+      // If we know the pointer that could be invalidated, just check the pointer
+      auto *StoreC = VL->getInstCond(Store);
+      Inserter InsertAfter(VL, StoreC, std::next(VL->toIterator(Store)));
+      auto *Eq = cast<Instruction>(InsertAfter.create<CmpInst>(Instruction::ICmp, CmpInst::ICMP_EQ, Store->getPointerOperand(), Ptr));
+      Inserter InsertAfterEq(VL, nullptr/*true*/, std::next(VL->toIterator(Eq)));
+      LoadRep = InsertAfterEq.createOneHotPhi(
+          PSSA->getAnd(StoreC, Eq, true/*is true*/), /* update the load if load happens and the pointers are equal */
+          Store->getValueOperand(), /* if true: forward the store */
+          LoadRep /* if false: keep the cached value */);
+      continue;
+    }
+
+    // Just reload for other instructions
+    auto *C = VL->getInstCond(I);
+    Inserter InsertAfter(VL, C, std::next(VL->toIterator(I)));
+    auto *Reload = cast<Instruction>(InsertAfter.make<LoadInst>(Ty, Ptr, LI->getName() + ".reload", false/*is volatile*/, LI->getAlign()));
+    Inserter InsertAfterReload(VL, nullptr/* true */, std::next(VL->toIterator(Reload)));
+    LoadRep = InsertAfterReload.createOneHotPhi(
+        C /* update if this instruction happens */,
+        Reload, LoadRep);
+  }
+
+  Mu->setIncomingValue(1, LoadRep);
+}
+
 bool GLICM::runOnLoop(VLoop *VL) {
   // Gather the sub loops in a vector to avoid invalidation
   SmallVector<VLoop *> SubLoops;
@@ -226,12 +297,30 @@ bool GLICM::runOnLoop(VLoop *VL) {
   // Figure out which instructions are invariant
   SmallVector<Instruction *> InvariantInsts;
   SmallVector<VLoop *> InvariantLoops;
+  std::map<std::pair<Value *, Type *>, SmallVector<LoadInst *, 8>> ConditionallyInvariantLoads;
+  unsigned NumRedundantLoads = 0;
   for (auto &InstOrLoop : VL->items()) {
-    if (auto *SubVL = InstOrLoop.asLoop(); SubVL && isInvariant(SubVL, VL))
+    if (auto *SubVL = InstOrLoop.asLoop(); SubVL && isInvariant(SubVL, VL)) {
       InvariantLoops.push_back(SubVL);
-    if (auto *I = InstOrLoop.asInstruction(); I && isInvariant(I, VL))
+      continue;
+    }
+
+    if (auto *I = InstOrLoop.asInstruction(); I && isInvariant(I, VL)) {
       InvariantInsts.push_back(I);
+      continue;
+    }
+
+    if (auto *LI = dyn_cast_or_null<LoadInst>(InstOrLoop.asInstruction());
+        LI && isInvariant(LI->getPointerOperand(), VL) &&
+        !VL->getInstCond(LI)) {
+      auto *Ptr = LI->getPointerOperand();
+      ConditionallyInvariantLoads[{Ptr, LI->getType()}].push_back(LI);
+      NumRedundantLoads++;
+    }
   }
+
+  if (!ConditionallyInvariantLoads.empty())
+    errs() << "Num possibly invariant loads: " << NumRedundantLoads << '\n';
 
   // Hoist the invariant instructions to before the loop
   auto *ParentVL = VL->getParent();
@@ -252,7 +341,7 @@ bool GLICM::runOnLoop(VLoop *VL) {
     }
   }
 
-#if 1
+#if 0
   for (auto *SubVL : InvariantLoops) {
     VL->erase(SubVL);
     auto *NewLoopCond = PSSA->concat(VL->getLoopCond(), SubVL->getLoopCond());
@@ -263,7 +352,13 @@ bool GLICM::runOnLoop(VLoop *VL) {
   }
 #endif
 
-  return Changed | !InvariantInsts.empty() | !InvariantLoops.empty();
+  for (auto KV : ConditionallyInvariantLoads) {
+    auto *LI = KV.second.front();
+    hoistLoadSpeculatively(LI, VL, PSSA, AA);
+    break;
+  }
+
+  return Changed | !InvariantInsts.empty() | !InvariantLoops.empty() | !ConditionallyInvariantLoads.empty();
 }
 
 PreservedAnalyses MyLICMPass::run(Function &F, FunctionAnalysisManager &AM) {
