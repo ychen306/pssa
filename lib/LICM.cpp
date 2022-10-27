@@ -6,9 +6,11 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
 
+static cl::list<std::string> FuncsToSkip("funcs-to-skip", cl::CommaSeparated);
 
 namespace {
 
@@ -366,6 +368,10 @@ PreservedAnalyses MyLICMPass::run(Function &F, FunctionAnalysisManager &AM) {
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
   auto &AA = AM.getResult<AAManager>(F);
+
+  for (StringRef FName : FuncsToSkip)
+    if (FName == F.getName())
+      return PreservedAnalyses::all();
 
   if (!isConvertibleToPSSA(F, LI, DT))
     return PreservedAnalyses::all();
