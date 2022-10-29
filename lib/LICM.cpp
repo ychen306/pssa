@@ -7,6 +7,7 @@
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
 
 using namespace llvm;
 
@@ -250,8 +251,7 @@ void GLICM::hoistLoadSpeculatively(LoadInst *LI, VLoop *VL) {
 
   auto *Mu = VL->createMu(PreLoad);
   // The value we are replacing the load with
-  Value *LoadRep = Mu;
-  Value *LoadVal = LoadRep;
+  Value *LoadVal = Mu;
 
   SmallVector<Item> Items;
   // Collect the instructions first to avoid invalidating iterator
@@ -271,15 +271,9 @@ void GLICM::hoistLoadSpeculatively(LoadInst *LI, VLoop *VL) {
   }
   for (auto &InstOrLoop : Items) {
     if (auto *I = InstOrLoop.asInstruction()) {
-      for (unsigned i = 0; i < I->getNumOperands(); i++) {
-        auto *LI2 = dyn_cast<LoadInst>(I->getOperand(i));
-        if (LI2 && LI2->getPointerOperand() == Ptr && LI2->getType() == Ty) {
-          I->setOperand(i, LoadRep);
-        }
-      }
       if (auto *LI2 = dyn_cast<LoadInst>(I);
           LI2 && LI2->getPointerOperand() == Ptr && LI2->getType() == Ty) {
-        LoadRep = LoadVal;
+        LI2->replaceAllUsesWith(LoadVal);
       }
     }
 
@@ -304,6 +298,7 @@ void GLICM::hoistLoadSpeculatively(LoadInst *LI, VLoop *VL) {
                                              the pointers are equal */
           Store->getValueOperand(),       /* if true: forward the store */
           LoadVal /* if false: keep the cached value */);
+      LoadVal->setName(LI->getName()+".forward");
       continue;
     }
 
@@ -346,6 +341,7 @@ bool GLICM::runOnLoop(VLoop *VL) {
   std::map<std::pair<Value *, Type *>, SmallVector<LoadInst *, 8>>
       ConditionallyInvariantLoads;
   unsigned NumRedundantLoads = 0;
+
   for (auto &InstOrLoop : VL->items()) {
     if (auto *SubVL = InstOrLoop.asLoop(); SubVL && isInvariant(SubVL, VL)) {
       InvariantLoops.push_back(SubVL);

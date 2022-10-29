@@ -180,11 +180,11 @@ static void buildPasses(PassBuilder &PB) {
   PB.registerScalarOptimizerLateEPCallback(
       [](FunctionPassManager &FPM, OptimizationLevel) {
         addPreprocessingPasses(FPM);
-        if (TestCodeGen) {
-          FPM.addPass(PSSAEntry());
-        } else {
+        //if (TestCodeGen) {
+        //  FPM.addPass(PSSAEntry());
+        //} else {
           FPM.addPass(MyLICMPass());
-        }
+        //}
         addCleanupPasses(FPM);
       });
 

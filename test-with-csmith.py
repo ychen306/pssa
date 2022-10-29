@@ -13,18 +13,30 @@ def run_csmith(seed, outdir=default_outdir):
   src = subprocess.check_output(['csmith', '--seed', str(seed), '--no-volatiles', '--no-volatile-pointers'], stderr=subprocess.DEVNULL)
   with NamedTemporaryFile(suffix='.c') as src_f\
       , NamedTemporaryFile() as clang_exe\
+      , NamedTemporaryFile() as gcc_exe\
       , NamedTemporaryFile() as pssa_exe:
     src_f.write(src)
     src_f.flush()
-    subprocess.check_call(['clang', src_f.name, '-O3', '-o', clang_exe.name, '-I/usr/local/include/csmith-2.3.0/'], stderr=subprocess.DEVNULL)
     try:
+      subprocess.check_call(['clang', src_f.name, '-O3', '-o', clang_exe.name, '-I/usr/local/include/csmith-2.3.0/'], stderr=subprocess.DEVNULL, timeout=1)
       clang_out = subprocess.check_output([clang_exe.name], stderr=subprocess.DEVNULL, timeout=1)
     except subprocess.TimeoutExpired:
       print('clang binary timed out, seed =', seed)
       return
+
+    try:
+      subprocess.check_call(['gcc-12', src_f.name, '-O3', '-o', gcc_exe.name, '-I/usr/local/include/csmith-2.3.0/'], stderr=subprocess.DEVNULL, timeout=1)
+      gcc_out = subprocess.check_output([gcc_exe.name], stderr=subprocess.DEVNULL, timeout=1)
+    except subprocess.TimeoutExpired:
+      print('gcc binary timed out, seed =', seed)
+      return
+
+    if gcc_out != clang_out:
+      print('gcc and clang disagree')
+      return 
   
     try:
-      subprocess.check_output(['pssa-clang', src_f.name, '-O3', '-o', pssa_exe.name, '-I/usr/local/include/csmith-2.3.0/'], stderr=subprocess.DEVNULL)
+      subprocess.check_output(['pssa-clang', src_f.name, '-O3', '-o', pssa_exe.name, '-I/usr/local/include/csmith-2.3.0/'], stderr=subprocess.DEVNULL, timeout=5)
     except:
       save_bad_src(src, outdir+'/'+str(seed)+'.c')
       print('pssa failed at compile time, seed =', seed)
@@ -43,9 +55,15 @@ def run_csmith(seed, outdir=default_outdir):
       print('PSSA seems correct, seed =', seed )
       return
 
+def try_run_csmith(s):
+  try:
+    run_csmith(s)
+  except:
+    pass
+
 if __name__ == '__main__':
   import itertools
-  seeds = itertools.count(0)
   p = multiprocessing.Pool(8)
-  for s in seeds:
-    p.apply_async(run_csmith, (s,))
+  seeds = range(6000, 1_000_000_000)
+  for _ in p.imap_unordered(try_run_csmith, seeds):
+    pass
