@@ -64,6 +64,6 @@ def try_run_csmith(s):
 if __name__ == '__main__':
   import itertools
   p = multiprocessing.Pool(8)
-  seeds = range(6000, 1_000_000_000)
+  seeds = range(100000, 1_000_000_000)
   for _ in p.imap_unordered(try_run_csmith, seeds):
     pass

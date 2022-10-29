@@ -79,6 +79,9 @@ bool GLICM::isInvariant(Instruction *I, VLoop *VL) {
   if (It != InstMemo.end())
     return It->second;
 
+  if (VL->contains(I) && PSSA->getLoopForInst(I) != VL)
+    return InstMemo[{I, VL}] = false;
+
   // For now, just assume Mu nodes are always variant
   auto *PN = dyn_cast<PHINode>(I);
   if (PN && PSSA->getLoopForInst(PN)->isMu(PN))
