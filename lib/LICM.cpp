@@ -427,9 +427,6 @@ PreservedAnalyses MyLICMPass::run(Function &F, FunctionAnalysisManager &AM) {
   if (!isConvertibleToPSSA(F, LI, DT))
     return PreservedAnalyses::all();
 
-  if (F.getName() != "sqlite3IdListDelete")
-    return PreservedAnalyses::all();
-
   PredicatedSSA PSSA(&F, LI, DT, PDT);
   GLICM LICM(&PSSA, AA);
 
