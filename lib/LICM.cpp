@@ -247,7 +247,7 @@ bool GLICM::isInvariant(const ControlCondition *C, VLoop *VL) {
 // We only assume LI is done unconditionally within the loop
 void GLICM::hoistLoadSpeculatively(LoadInst *LI, VLoop *VL) {
   auto *ParentVL = VL->getParent();
-  Inserter InsertBeforeVL(ParentVL, nullptr, PSSA->toIterator(VL));
+  Inserter InsertBeforeVL(ParentVL, VL->getLoopCond(), PSSA->toIterator(VL));
 
   auto *Ty = LI->getType();
   auto *Ptr = LI->getPointerOperand();
@@ -425,6 +425,9 @@ PreservedAnalyses MyLICMPass::run(Function &F, FunctionAnalysisManager &AM) {
       return PreservedAnalyses::all();
 
   if (!isConvertibleToPSSA(F, LI, DT))
+    return PreservedAnalyses::all();
+
+  if (F.getName() != "sqlite3IdListDelete")
     return PreservedAnalyses::all();
 
   PredicatedSSA PSSA(&F, LI, DT, PDT);
