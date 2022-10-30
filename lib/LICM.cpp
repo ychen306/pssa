@@ -21,6 +21,7 @@ class GLICM {
   AliasAnalysis &AA;
   DenseMap<std::pair<Instruction *, VLoop *>, bool> InstMemo;
   DenseMap<std::pair<const ControlCondition *, VLoop *>, bool> CondMemo;
+  std::vector<std::pair<Value *, Value *>> RAUWs;
 
   bool isInvariant(Instruction *, VLoop *);
   bool isInvariant(Value *, VLoop *);
@@ -33,6 +34,10 @@ class GLICM {
 public:
   GLICM(PredicatedSSA *PSSA, AliasAnalysis &AA) : PSSA(PSSA), AA(AA) {}
   bool runOnLoop(VLoop *);
+  void doRAUW() {
+    for (auto [OldV, NewV] : RAUWs)
+      OldV->replaceAllUsesWith(NewV);
+  }
 };
 
 } // namespace
@@ -276,7 +281,8 @@ void GLICM::hoistLoadSpeculatively(LoadInst *LI, VLoop *VL) {
     if (auto *I = InstOrLoop.asInstruction()) {
       if (auto *LI2 = dyn_cast<LoadInst>(I);
           LI2 && LI2->getPointerOperand() == Ptr && LI2->getType() == Ty) {
-        LI2->replaceAllUsesWith(LoadVal);
+        // Replace later so that we don't break alias analysis!
+        RAUWs.emplace_back(LI2, LoadVal);
       }
     }
 
@@ -426,6 +432,8 @@ PreservedAnalyses MyLICMPass::run(Function &F, FunctionAnalysisManager &AM) {
 
   if (!LICM.runOnLoop(&PSSA.getTopLevel()))
     return PreservedAnalyses::all();
+
+  LICM.doRAUW();
 
   errs() << "Hoisted something in " << F.getName() << '\n';
 
