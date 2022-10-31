@@ -23,11 +23,14 @@ class GLICM {
   DenseMap<std::pair<const ControlCondition *, VLoop *>, bool> CondMemo;
   std::vector<std::pair<Value *, Value *>> RAUWs;
 
+  DenseSet<Value *> Allocas;
+
   bool isInvariant(Instruction *, VLoop *);
   bool isInvariant(Value *, VLoop *);
   bool isInvariant(VLoop *, VLoop *);
   bool isInvariant(const ControlCondition *, VLoop *);
   bool isInvalidatedByLoop(MemoryLocation, VLoop *);
+  bool requiresReload(MemoryLocation, VLoop *);
   void hoistLoadSpeculatively(LoadInst *LI, VLoop *VL);
   MemoryLocation getLoadLocation(LoadInst *);
 
@@ -62,6 +65,43 @@ bool GLICM::isInvalidatedByLoop(MemoryLocation Loc, VLoop *VL) {
           return true;
         continue;
       }
+      if (auto *SI = dyn_cast<StoreInst>(I);
+          SI && Allocas.count(SI->getPointerOperand())) {
+        if (Loc.Ptr == SI->getPointerOperand())
+          return true;
+        continue;
+      }
+      if (isModSet(AA.getModRefInfo(I, Loc)))
+        return true;
+    } else {
+      if (isInvalidatedByLoop(Loc, InstOrLoop.asLoop()))
+        return true;
+    }
+  }
+  return false;
+}
+
+bool GLICM::requiresReload(MemoryLocation Loc, VLoop *VL) {
+  for (auto &InstOrLoop : VL->items()) {
+    if (auto *I = InstOrLoop.asInstruction()) {
+      if (auto *SI = dyn_cast<StoreInst>(I);
+          SI && Allocas.count(SI->getPointerOperand())) {
+        continue;
+      }
+      if (auto *SI = dyn_cast<StoreInst>(I)) {
+        const auto &DL = PSSA->getFunction()->getParent()->getDataLayout();
+
+        MemoryLocation Loc2(
+            SI->getPointerOperand(),
+            LocationSize::precise(DL.getTypeStoreSize(SI->getValueOperand()->getType())),
+            SI->getAAMetadata());
+        if (AA.alias(Loc, Loc2) && Loc.Size != Loc2.Size) {
+          return true;
+        }
+        continue;
+      }
+      if (!I->mayWriteToMemory())
+        continue;
       if (isModSet(AA.getModRefInfo(I, Loc)))
         return true;
     } else {
@@ -246,8 +286,13 @@ bool GLICM::isInvariant(const ControlCondition *C, VLoop *VL) {
 
 // We only assume LI is done unconditionally within the loop
 void GLICM::hoistLoadSpeculatively(LoadInst *LI, VLoop *VL) {
+  errs() << "!!! Hoisting " << *LI << " speculatively\n";
   auto *ParentVL = VL->getParent();
   Inserter InsertBeforeVL(ParentVL, VL->getLoopCond(), PSSA->toIterator(VL));
+
+  auto *Alloca = InsertBeforeVL.make<AllocaInst>(LI->getType(), 0, nullptr, "", 
+      PSSA->getFunction()->getEntryBlock().getFirstNonPHI());
+  Allocas.insert(Alloca);
 
   auto *Ty = LI->getType();
   auto *Ptr = LI->getPointerOperand();
@@ -256,6 +301,7 @@ void GLICM::hoistLoadSpeculatively(LoadInst *LI, VLoop *VL) {
   auto *PreLoad =
       InsertBeforeVL.make<LoadInst>(Ty, Ptr, LI->getName() + ".preload",
                                     false /*is volatile*/, LI->getAlign());
+  InsertBeforeVL.make<StoreInst>(PreLoad, Alloca, false, LI->getAlign());
 
   auto *Mu = VL->createMu(PreLoad);
   // The value we are replacing the load with
@@ -267,6 +313,12 @@ void GLICM::hoistLoadSpeculatively(LoadInst *LI, VLoop *VL) {
   for (auto &InstOrLoop : VL->items()) {
     Items.push_back(InstOrLoop);
     if (auto *I = InstOrLoop.asInstruction()) {
+      if (auto *SI = dyn_cast<StoreInst>(I);
+          SI && Allocas.count(SI->getPointerOperand())) {
+        if (Loc.Ptr == SI->getPointerOperand())
+          InvalidatingItems.insert(I);
+        continue;
+      }
       if (I->mayWriteToMemory() && isModSet(AA.getModRefInfo(I, Loc)))
         InvalidatingItems.insert(I);
       continue;
@@ -282,6 +334,9 @@ void GLICM::hoistLoadSpeculatively(LoadInst *LI, VLoop *VL) {
       if (auto *LI2 = dyn_cast<LoadInst>(I);
           LI2 && LI2->getPointerOperand() == Ptr && LI2->getType() == Ty) {
         // Replace later so that we don't break alias analysis!
+        Inserter InsertAfter(VL, VL->getInstCond(I), std::next(VL->toIterator(I)));
+        Value *Reload = InsertAfter.make<LoadInst>(Ty, Alloca, "", false, LI->getAlign());
+        LoadVal = Reload;
         RAUWs.emplace_back(LI2, LoadVal);
       }
     }
@@ -299,15 +354,20 @@ void GLICM::hoistLoadSpeculatively(LoadInst *LI, VLoop *VL) {
       auto *Eq = cast<Instruction>(
           InsertAfter.create<CmpInst>(Instruction::ICmp, CmpInst::ICMP_EQ,
                                       Store->getPointerOperand(), Ptr));
-      Inserter InsertAfterEq(VL, nullptr /*true*/,
-                             std::next(VL->toIterator(Eq)));
-      LoadVal = InsertAfterEq.createOneHotPhi(
-          PSSA->getAnd(StoreC, Eq,
-                       true /*is true*/), /* update the load if load happens and
-                                             the pointers are equal */
-          Store->getValueOperand(),       /* if true: forward the store */
-          LoadVal /* if false: keep the cached value */);
-      LoadVal->setName(LI->getName()+".forward");
+      Inserter InsertAfterEq(VL, 
+          PSSA->getAnd(StoreC, Eq, true /*is true*/),
+          std::next(VL->toIterator(Eq)));
+      InsertAfterEq.make<StoreInst>(Store->getValueOperand(), Alloca, false, LI->getAlign());
+      //Inserter InsertAfterEq(VL, nullptr /*true*/,
+      //                       std::next(VL->toIterator(Eq)));
+      //LoadVal = InsertAfterEq.createOneHotPhi(
+      //    PSSA->getAnd(StoreC, Eq,
+      //                 true /*is true*/), /* update the load if load happens and
+      //                                       the pointers are equal */
+      //    Store->getValueOperand(),       /* if true: forward the store */
+      //    LoadVal /* if false: keep the cached value */);
+      //LoadVal->setName(LI->getName()+".forward");
+      errs() << "Forwarding conditionally\n";
       continue;
     }
 
@@ -318,10 +378,11 @@ void GLICM::hoistLoadSpeculatively(LoadInst *LI, VLoop *VL) {
     auto *Reload = cast<Instruction>(
         InsertAfter.make<LoadInst>(Ty, Ptr, LI->getName() + ".reload",
                                    false /*is volatile*/, LI->getAlign()));
-    Inserter InsertAfterReload(VL, nullptr /* true */,
-                               std::next(VL->toIterator(Reload)));
-    LoadVal = InsertAfterReload.createOneHotPhi(
-        C /* update if this instruction happens */, Reload, LoadVal);
+    InsertAfter.make<StoreInst>(Reload, Alloca, false, LI->getAlign());
+    //Inserter InsertAfterReload(VL, nullptr /* true */,
+    //                           std::next(VL->toIterator(Reload)));
+    //LoadVal = InsertAfterReload.createOneHotPhi(
+    //    C /* update if this instruction happens */, Reload, LoadVal);
   }
 
   Mu->setIncomingValue(1, LoadVal);
@@ -364,7 +425,7 @@ bool GLICM::runOnLoop(VLoop *VL) {
 
     if (auto *LI = dyn_cast_or_null<LoadInst>(InstOrLoop.asInstruction());
         LI && isInvariant(LI->getPointerOperand(), VL) &&
-        !VL->getInstCond(LI)) {
+        !VL->getInstCond(LI) && !requiresReload(getLoadLocation(LI), VL)) {
       auto *Ptr = LI->getPointerOperand();
       ConditionallyInvariantLoads[{Ptr, LI->getType()}].push_back(LI);
       NumRedundantLoads++;
