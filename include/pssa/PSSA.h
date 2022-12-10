@@ -287,6 +287,10 @@ public:
     return CT.getAnd(ParentC, V, IsTrue);
   }
 
+  const ControlCondition *concat(const ControlCondition *C1, const ControlCondition *C2) {
+    return CT.concat(C1, C2);
+  }
+
   const ControlCondition *
   getOr(llvm::ArrayRef<const ControlCondition *> Conds) {
     return CT.getOr(Conds);
@@ -296,6 +300,6 @@ public:
   llvm::ScalarEvolution *getSE() { return SE; }
 };
 
-bool isConvertibleToPSSA(llvm::Function &, llvm::LoopInfo &);
+bool isConvertibleToPSSA(llvm::Function &, llvm::LoopInfo &, llvm::DominatorTree &);
 
 #endif // end PSSA_H
