@@ -2,6 +2,7 @@
 #define PSSA_INSERTER_H
 
 #include "pssa/PSSA.h"
+#include "vegen/Pack.h"
 #include "llvm/IR/ConstantFolder.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/Alignment.h"
@@ -15,7 +16,7 @@ class Inserter {
   VLoop *VL;
   const ControlCondition *C;
   VLoop::ItemIterator InsertBefore;
-
+  std::shared_ptr<llvm::Module> InstWrappers;
   llvm::Type *getInt32Ty() const;
   llvm::Constant *getInt32(int32_t) const;
   llvm::Value *
@@ -25,8 +26,9 @@ class Inserter {
 
 public:
   Inserter(VLoop *VL, const ControlCondition *C,
-           VLoop::ItemIterator InsertBefore)
-      : VL(VL), C(C), InsertBefore(InsertBefore) {}
+           VLoop::ItemIterator InsertBefore,
+           std::shared_ptr<llvm::Module> InstWrappers = nullptr)
+      : VL(VL), C(C), InsertBefore(InsertBefore), InstWrappers(InstWrappers) {}
 
   const ControlCondition *getCondition() const { return C; }
   llvm::LLVMContext &getContext() const;
@@ -47,6 +49,9 @@ public:
   llvm::Value *createIntrinsicCall(llvm::Intrinsic::ID,
                                    llvm::ArrayRef<llvm::Type *>,
                                    llvm::ArrayRef<llvm::Value *>);
+
+  llvm::Value *createGeneral(const GeneralPack *,
+                             llvm::ArrayRef<llvm::Value *>) const;
 
   // Wrapper around <InstType>::Create
   template <typename InstType, typename... ArgTypes>

@@ -27,6 +27,164 @@ SmallVector<OperandPack, 2> Pack::getOperands() const {
 
   return Operands;
 }
+// FIXME: we need to generalize the definition of an operand pack
+// because some of the input lanes are "DONT CARES" (e.g. _mm_div_pd)
+SmallVector<OperandPack, 2> GeneralPack::getOperands() const {
+  auto &Sig = Inst->getSignature();
+  unsigned NumInputs = Sig.numInputs();
+  auto LaneOps = Inst->getLaneOps();
+  unsigned NumLanes = LaneOps.size();
+  std::vector<OperandPack> OperandPacks(NumInputs);
+
+  struct BoundInput {
+    InputSlice Slice;
+    Value *V;
+    // Order by offset of the slice
+    bool operator<(const BoundInput &Other) const {
+      return Slice < Other.Slice;
+    }
+  };
+  errs() << "getOperands " << Inst->getName() << " " << NumInputs << " inputs "
+         << NumLanes << " lanes \n";
+  // Figure out which input packs we need
+  for (unsigned i = 0; i < NumInputs; i++) {
+    std::vector<BoundInput> InputValues;
+    // Size of one element in this input vector
+    unsigned ElementSize = 0;
+    LLVMContext *Ctx = nullptr;
+    // Find output lanes that uses input `i` and record those uses
+    for (unsigned j = 0; j < NumLanes; j++) {
+      ArrayRef<InputSlice> BoundSlices = LaneOps[j].getBoundSlices();
+      // errs() << BoundSlices.size() << " slices\n";
+      if (Matches[j]) {
+        // TODO: make this part of packer state
+        Ctx = &Matches[j]->Output->getContext();
+      }
+      for (unsigned k = 0; k < BoundSlices.size(); k++) {
+        auto &BS = BoundSlices[k];
+        if (BS.InputId != i)
+          continue;
+        ElementSize = BS.size();
+        InputValues.push_back(
+            {BS, Matches[j] ? Matches[j]->Inputs[k] : nullptr});
+      }
+    }
+    assert(ElementSize != 0);
+    assert(Ctx);
+    // Sort the input values by their slice offset
+    std::sort(InputValues.begin(), InputValues.end());
+
+    unsigned CurOffset = 0;
+    unsigned Stride = InputValues[0].Slice.size();
+    auto &OP = OperandPacks[i];
+    for (const BoundInput &BV : InputValues) {
+      while (CurOffset < BV.Slice.Lo) {
+        OP.push_back(nullptr);
+        CurOffset += Stride;
+      }
+      assert(CurOffset == BV.Slice.Lo);
+      OP.push_back(BV.V);
+      CurOffset += Stride;
+    }
+    unsigned InputSize = Sig.InputBitwidths[i];
+    while (CurOffset < InputSize) {
+      OP.push_back(nullptr);
+      CurOffset += Stride;
+    }
+    assert(OP.size() * Stride == InputSize);
+
+    // // Compute the type of don't care vector as special cases
+    if (!OP.front() && is_splat(OP)) {
+      OP.VecTy =
+          FixedVectorType::get(IntegerType::get(*Ctx, ElementSize), OP.size());
+    }
+  }
+  // assert(OperandPacks.size() <= 2);
+  // if (OperandPacks.size() == 1) {
+  //   return {OperandPacks[0]};
+  // } else {
+  //   return {OperandPacks[0], OperandPacks[1]};
+  // }
+  for (auto &op : OperandPacks) {
+    errs() << op << '\n';
+  }
+  return SmallVector<OperandPack, 2>(OperandPacks.begin(), OperandPacks.end());
+}
+std::vector<GeneralPack *>
+GeneralPack::tryAllPack(ArrayRef<Instruction *> Insts, MatchManager &MM,
+                        std::vector<const InstBinding *> SupportedIntrinsics) {
+  if (Insts.empty())
+    return {};
+  errs() << "tryAllPack\n";
+  for (auto *I : Insts) {
+    if (I)
+      errs() << "instruction " << *I << '\n';
+    else
+      errs() << "DC" << '\n';
+  }
+  size_t NumLanes = Insts.size();
+  std::vector<GeneralPack *> packs;
+  for (const auto *Inst : SupportedIntrinsics) {
+    auto LaneOps = Inst->getLaneOps();
+    if (LaneOps.size() < NumLanes)
+      continue;
+
+    std::vector<const Operation::Match *> Lanes;
+    for (size_t OutLane = 0; OutLane < NumLanes; OutLane++) {
+      if (!Insts[OutLane]) {
+        Lanes.push_back(nullptr);
+        continue;
+      }
+      auto Matches = MM.getMatchesForOutput(LaneOps[OutLane].getOperation(),
+                                            Insts[OutLane]);
+      if (Matches.empty()) {
+        break;
+      }
+      Lanes.push_back(&Matches[0]);
+      // for (size_t OpLane = 0; OpLane < LaneOps.size(); OpLane++) {
+      //   auto Matches =
+      // MM.getMatchesForOutput(LaneOps[OpLane].getOperation(),
+      //                                         Insts[OutLane]);
+      //   if (Matches.empty()) {
+      //     continue;
+      //   }
+      // }
+    }
+    // if (!Lanes.empty()) {
+    // errs() << "match intrinsic " << Inst->getName() << '\n';
+    // for (int i = 0; i < Lanes.size(); i++) {
+    //   if (Lanes[i]) {
+    //     errs() << "Lane " << i << " " << *Lanes[i]->Output << '\n';
+    //   } else {
+    //     // errs() << "Lane " << i << " "
+    //     //        << "DC" << '\n';
+    //   }
+    // }
+    // }
+    if (Lanes.size() >= NumLanes) {
+      while (Lanes.size() < LaneOps.size()) {
+        Lanes.push_back(nullptr);
+      }
+      packs.push_back(new GeneralPack(Inst, Lanes, Insts));
+      // errs() << "Full match\n";
+      errs() << "match intrinsic " << Inst->getName() << '\n';
+      for (int i = 0; i < Lanes.size(); i++) {
+        if (Lanes[i]) {
+          errs() << "Lane " << i << " " << *Lanes[i]->Output << '\n';
+        } else {
+          // errs() << "Lane " << i << " "
+          //        << "DC" << '\n';
+        }
+      }
+    }
+  }
+  return packs;
+}
+
+Value *GeneralPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
+  errs() << "Emit " << Inst->getName() << '\n';
+  return Insert.createGeneral(this, Operands);
+}
 
 SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
   if (Insts.empty())
@@ -202,8 +360,14 @@ static bool isControlFlowEquivalent(ArrayRef<Instruction *> Insts,
 LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
                             ScalarEvolution &SE, LoopInfo &LI,
                             PredicatedSSA &PSSA) {
+  // TODO: load packs with don't care values
+  // return nullptr;
   SmallVector<Value *, 8> Ptrs;
   for (auto *I : Insts) {
+    // position of don't cares doesn't matter; shuffle later to get desired pack
+    if (!I) {
+      continue;
+    }
     if (auto *LI = dyn_cast<LoadInst>(I))
       Ptrs.push_back(LI->getPointerOperand());
     else
@@ -584,11 +748,13 @@ raw_ostream &operator<<(raw_ostream &OS, Pack &P) {
 raw_ostream &operator<<(raw_ostream &OS, OperandPack &O) {
   OS << '[';
   for (auto &V : O) {
-    if (V->hasName())
-      OS << V->getName();
-    else
+    if (V) {
+      // if (V->hasName())
+      //   OS << V->getName();
+      // else
       OS << *V;
-    OS << "; ";
+      OS << "; ";
+    }
   }
   OS << ']';
   return OS;

@@ -22,6 +22,8 @@ Pack *PackSet::getPackForValue(Value *V) const {
 bool PackSet::isPacked(Instruction *I) const { return InstToPackMap.count(I); }
 
 bool PackSet::isPacked(Value *V) const {
+  if (!V)
+    return false;
   auto *I = dyn_cast<Instruction>(V);
   return I && isPacked(I);
 }

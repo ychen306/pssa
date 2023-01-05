@@ -1,6 +1,8 @@
 #ifndef VEGEN_PACK_H
 #define VEGEN_PACK_H
 
+#include "vegen/InstSema.h"
+#include "vegen/MatchManager.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/InstructionCost.h"
@@ -17,7 +19,12 @@ class LoopInfo;
 class PredicatedSSA;
 class Inserter;
 
-using OperandPack = llvm::SmallVector<llvm::Value *, 8>;
+// using OperandPack = llvm::SmallVector<llvm::Value *, 8>;
+struct OperandPack : public llvm::SmallVector<llvm::Value *, 8> {
+  using T = llvm::SmallVector<llvm::Value *, 8>;
+  using T::T;
+  llvm::VectorType *VecTy;
+};
 class ControlCondition;
 using VectorMask = llvm::SmallVector<const ControlCondition *, 8>;
 
@@ -34,7 +41,8 @@ public:
     PK_PHI,
     PK_Mu,
     PK_Blend,
-    PK_GEP
+    PK_GEP,
+    PK_General
   };
 
 private:
@@ -109,9 +117,43 @@ public:
   Pack *clone() const override { return new SIMDPack(Insts); }
 };
 
+class GeneralPack : public Pack {
+  GeneralPack(const InstBinding *Inst,
+              std::vector<const Operation::Match *> Matches,
+              llvm::ArrayRef<llvm::Instruction *> Insts)
+      : Pack(Insts, PK_General), Inst(Inst), Matches(Matches) {}
+
+public:
+  const InstBinding *Inst;
+  std::vector<const Operation::Match *> Matches;
+  virtual llvm::SmallVector<OperandPack, 2> getOperands() const override;
+
+  static std::vector<GeneralPack *>
+  tryAllPack(llvm::ArrayRef<llvm::Instruction *> Insts, MatchManager &MM,
+             std::vector<const InstBinding *> SupportedIntrinsics);
+  llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
+  static bool classof(const Pack *P) { return P->getKind() == PK_General; }
+  void print(llvm::raw_ostream &OS) const override {
+    OS << Inst->getName() << " [";
+    for (auto *I : values()) {
+      if (!I)
+        OS << "dont_care; ";
+      else if (I->hasName())
+        OS << I->getName() << "; ";
+      else
+        OS << *I << "; ";
+    }
+    OS << ']';
+  }
+  // Pack *clone() const override { return new GeneralPack(Inst, Matches,
+  // Insts); }
+  Pack *clone() const override { return new GeneralPack(Inst, Matches, Insts); }
+};
+
 // A pack of math intrinsic
 class IntrinsicPack : public Pack {
-  IntrinsicPack(llvm::ArrayRef<llvm::Instruction *> Insts) : Pack(Insts, PK_Intrinsic) {}
+  IntrinsicPack(llvm::ArrayRef<llvm::Instruction *> Insts)
+      : Pack(Insts, PK_Intrinsic) {}
 
 public:
   static IntrinsicPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts);

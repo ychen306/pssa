@@ -2,7 +2,9 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
-
+#include "llvm/IR/Module.h"
+#include "llvm/Support/FormatVariadic.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
 using namespace llvm;
 
 LLVMContext &Inserter::getContext() const {
@@ -25,8 +27,10 @@ Constant *Inserter::getInt32(int32_t V) const {
 
 Value *Inserter::operator()(Value *V) const {
   assert(!isa<PHINode>(V) && "can't insert phi node directly");
-  if (auto *I = dyn_cast<Instruction>(V))
+  if (auto *I = dyn_cast<Instruction>(V)) {
+    // errs() << "Insert " << *I << '\n';
     VL->insert(I, C, InsertBefore);
+  }
   return V;
 }
 
@@ -164,4 +168,84 @@ Value *Inserter::createIntrinsicCall(Intrinsic::ID ID, ArrayRef<Type *> Types,
   Module *M = VL->getPSSA()->getFunction()->getParent();
   auto *F = Intrinsic::getDeclaration(M, ID, Types);
   return create<CallInst>(F, Args);
+}
+
+Value *Inserter::createGeneral(const GeneralPack *P,
+                               ArrayRef<Value *> Operands) const {
+  assert(InstWrappers != nullptr);
+  // errs() << "createGeneral " << P->Inst->getName() << '\n';
+  StringRef Name = P->Inst->getName();
+  unsigned char Imm8 = 0;
+  std::string WrapperName =
+      llvm::formatv("intrinsic_wrapper_{0}_{1}", Name, Imm8).str();
+  auto *F = InstWrappers->getFunction(WrapperName);
+  assert(F && "Intrinsic wrapper undefined.");
+
+  assert(std::distance(F->begin(), F->end()) == 1 &&
+         "Intrinsic Wrapper should have a single basic block");
+  auto &BB = *F->begin();
+
+  unsigned NumArgs = std::distance(F->arg_begin(), F->arg_end());
+  assert(Operands.size() == NumArgs);
+
+  // for (int i = 0; i < NumArgs; i++) {
+  //   errs() << "Operand " << *Operands[i] << '\n';
+  // }
+  // map wrapper arg to operands
+  ValueToValueMapTy VMap;
+  for (unsigned i = 0; i < NumArgs; i++) {
+    Value *Arg = F->getArg(i);
+    // errs() << "arg " << *Arg << "\noperand " << *Operands[i] << '\n';
+    assert(CastInst::castIsValid(Instruction::CastOps::BitCast, Operands[i],
+                                 Arg->getType()) &&
+           "Invalid input type");
+    Value *Operand = create<CastInst>(Instruction::CastOps::BitCast,
+                                      Operands[i], Arg->getType());
+    VMap[Arg] = Operand;
+  }
+
+  Value *RetVal = nullptr;
+  for (auto &I : BB) {
+    // errs() << "BB " << I << '\n';
+    if (auto *Ret = dyn_cast<ReturnInst>(&I)) {
+      RetVal = Ret->getReturnValue();
+      break;
+    }
+    auto *NewI = I.clone();
+    (*this)(NewI);
+    // Insert(NewI, I.getName() + ".vec");
+    VMap[&I] = NewI;
+    RemapInstruction(NewI, VMap,
+                     RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
+    if (auto *CI = dyn_cast<CallInst>(NewI)) {
+      auto *Callee = CI->getCalledFunction();
+      assert(Callee->isIntrinsic());
+      // If the intrinsic wrapper calls an llvm intrinsic,
+      // that intrinsic is declared inside `IntrinsicWrappers`.
+      // We need to redeclare that intrinsic.
+      Module *M = VL->getPSSA()
+                      ->getFunction()
+                      ->getParent(); // CI->getParent()->getModule();
+      FunctionCallee IntrinsicDecl =
+          M->getOrInsertFunction(Callee->getName(), Callee->getFunctionType(),
+                                 Callee->getAttributes());
+      CI->setCalledFunction(cast<Function>(IntrinsicDecl.getCallee()));
+    }
+    // errs() << "Remapped to " << *NewI << '\n';
+  }
+  assert(RetVal && "Wrapper not returning explicitly");
+  Value *Output = VMap.lookup(RetVal);
+  assert(Output);
+  // bitcast retval to correct type
+  // errs() << "Try cast to "
+  //        << *FixedVectorType::get(P->Matches[0]->Output->getType(),
+  //                                 P->Inst->getLaneOps().size())
+  //        << '\n';
+  Value *CastRetVal =
+      create<CastInst>(Instruction::CastOps::BitCast, Output,
+                       FixedVectorType::get(P->Matches[0]->Output->getType(),
+                                            P->Inst->getLaneOps().size()));
+  // errs() << "Cast output " << *CastRetVal << '\n';
+  return CastRetVal;
+  // return nullptr;
 }

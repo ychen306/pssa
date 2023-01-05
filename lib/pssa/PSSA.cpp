@@ -3,8 +3,8 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/LoopIterator.h"
-#include "llvm/IR/Dominators.h"
 #include "llvm/Analysis/MustExecute.h" // mayContainIrreducibleControl
+#include "llvm/IR/Dominators.h"
 
 using namespace llvm;
 
@@ -22,8 +22,9 @@ canonicalizeAndGetConditions(PHINode *PN, ControlDependenceAnalysis &CDA) {
     Incomings.push_back(Incoming{C, BB, V});
   }
   // Canonicalize the incoming values by their conditions
-  //llvm::sort(Incomings,
-  //           [](const Incoming &IncomingA, const Incoming &IncomingB) -> bool {
+  // llvm::sort(Incomings,
+  //           [](const Incoming &IncomingA, const Incoming &IncomingB) -> bool
+  //           {
   //             return IncomingA.C < IncomingB.C;
   //           });
   SmallVector<const ControlCondition *, 4> Conds;
@@ -41,6 +42,7 @@ VLoop::ItemIterator VLoop::insert(Instruction *I, const ControlCondition *C,
          "need to register phi conds before insert");
   InstConds[I] = C;
   auto It = Items.insert(InsertBefore ? *InsertBefore : Items.end(), I);
+  // errs() << "Mapitemtoloop " << It->asInstruction() << '\n';
   PSSA->mapItemToLoop(It, this);
   return It;
 }

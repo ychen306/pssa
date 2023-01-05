@@ -22,9 +22,10 @@ class BatchedPhi {
   VLoop *VL;
   VLoop::ItemIterator It;
   SmallVector<PHINode *> Phis;
+
 public:
   BatchedPhi(PredicatedSSA *PSSA, PHINode *PN)
-    : VL(PSSA->getLoopForInst(PN)), It(PSSA->toIterator(PN)), Phis({PN}) {}
+      : VL(PSSA->getLoopForInst(PN)), It(PSSA->toIterator(PN)), Phis({PN}) {}
   bool tryAdd(PredicatedSSA *PSSA, PHINode *);
   unsigned size() const { return Phis.size(); }
   ArrayRef<PHINode *> phis() const { return Phis; }
@@ -59,7 +60,6 @@ public:
   void run(VLoop *TopLevelVL);
 };
 } // namespace
-
 
 void PSSALowering::demoteBatchedPhis(PredicatedSSA *PSSA,
                                      const BatchedPhi &BP) {
@@ -301,7 +301,7 @@ bool BatchedPhi::tryAdd(PredicatedSSA *PSSA, PHINode *PN) {
   if (PN->getNumOperands() != Leader->getNumOperands())
     return false;
   for (auto [C1, C2] :
-      llvm::zip(PSSA->getPhiConditions(Leader), PSSA->getPhiConditions(PN)))
+       llvm::zip(PSSA->getPhiConditions(Leader), PSSA->getPhiConditions(PN)))
     if (C1 != C2)
       return false;
   ++It;

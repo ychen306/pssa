@@ -123,6 +123,7 @@ class VectorGen {
   LoopInfo &LI;
   ValueIndex<Value *, Pack> ValueIdx;
   ValueIndex<const ControlCondition *, ConditionPack> MaskIdx;
+  std::shared_ptr<llvm::Module> InstWrappers;
 
   // Set unordered is don't care about order of the elements
   template <typename ValueType, typename PackType>
@@ -135,7 +136,7 @@ class VectorGen {
 
   Value *gatherOperand(ArrayRef<Value *> Values, VLoop *VL,
                        const ControlCondition *C, VLoop::ItemIterator It) {
-    Inserter InsertBefore(VL, C, It);
+    Inserter InsertBefore(VL, C, It, InstWrappers);
     return gatherOperand(Values, InsertBefore);
   }
 
@@ -210,9 +211,11 @@ class VectorGen {
 
 public:
   VectorGen(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI,
-            AAResults &AA, LoopInfo &LI)
+            AAResults &AA, LoopInfo &LI,
+            std::shared_ptr<llvm::Module> InstWrappers)
       : Packs(Packs), PSSA(PSSA), DI(DI), AA(AA), LI(LI),
-        Remapper(VM, RF_None, nullptr, &Extracter) {}
+        InstWrappers(InstWrappers), Remapper(VM, RF_None, nullptr, &Extracter) {
+  }
   bool run();
 };
 
@@ -347,7 +350,6 @@ static bool merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
 
 static EquivalenceClasses<VLoop *> partitionLoops(ArrayRef<Pack *> Packs,
                                                   PredicatedSSA &PSSA) {
-
   EquivalenceClasses<VLoop *> LoopsToFuse;
   SmallVector<SmallItemVector> Worklist(
       llvm::map_range(Packs, [](Pack *P) { return toItems(P->values()); }));
@@ -705,8 +707,9 @@ Value *VectorGen::gatherValues(ArrayRef<ValueType> Values,
   SmallDenseMap<Value *, SmallVector<GatherEdge, 4>> SrcPacks;
   // Mapping scalar -> index that we need to insert into
   SmallVector<std::pair<Value *, unsigned>, 8> SrcScalars;
-
+  errs() << "gatherValues " << Values.size() << "\n";
   // Figure out sources of the values in `Values`
+  bool allUndef = true;
   for (auto &X : enumerate(Values)) {
     auto *V = X.value();
     unsigned i = X.index();
@@ -714,15 +717,20 @@ Value *VectorGen::gatherValues(ArrayRef<ValueType> Values,
     // Null means don't care/undef
     if (std::is_same<Value *, ValueType>::value && !V)
       continue;
+    errs() << "source of " << *V << ": ";
+    allUndef = false;
     if (auto L = ValueIdx.getLane(V)) {
       // Remember we need to gather from this vector to the `i`th element
+      errs() << *L->Vec << '\n';
       SrcPacks[L->Vec].push_back({L->Idx, i});
     } else {
       // Remember that we need to insert `V` as the `i`th element
+      errs() << "scalar\n";
       SrcScalars.emplace_back(materializeValue(V, Insert), i);
     }
   }
-
+  if (allUndef)
+    return nullptr;
   using ShuffleMaskTy = SmallVector<Constant *, 8>;
   const unsigned NumValues = Values.size();
   Value *SomeValue =
@@ -801,11 +809,14 @@ Value *VectorGen::gatherValues(ArrayRef<ValueType> Values,
     Type *ScalarTy = SrcScalars.front().first->getType();
     auto *VecTy = FixedVectorType::get(ScalarTy, Values.size());
     Acc = UndefValue::get(VecTy);
+    // errs() << "All inserts, acc=" << *Acc << '\n';
   }
 
   // 3) Insert the scalar values
-  for (const auto &[V, Idx] : SrcScalars)
+  for (const auto &[V, Idx] : SrcScalars) {
     Acc = Insert.CreateInsertElement(Acc, V, toInt64(Ctx, Idx));
+    // errs() << "Inserted, acc=" << *Acc << '\n';
+  }
 
   assert(Acc);
   return Acc;
@@ -919,7 +930,8 @@ void VectorGen::runOnLoop(VLoop *VL) {
       Or && any_of(Or->Conds, IsPacked)) {
     auto *ParentVL = VL->getParent();
     assert(ParentVL);
-    Inserter InsertBefore(ParentVL, nullptr, ParentVL->toIterator(VL));
+    Inserter InsertBefore(ParentVL, nullptr, ParentVL->toIterator(VL),
+                          InstWrappers);
     auto *Vec = gatherMask(Or->Conds, InsertBefore, true /*unordered*/);
     auto *Rdx = InsertBefore.createOrReduce(Vec);
     VL->setLoopCond(PSSA.getAnd(nullptr, Rdx, true));
@@ -983,7 +995,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
       auto *C = getGreatestCommonCondition(Conds);
 
       auto Iterator = VL->toIterator(I);
-      Inserter InsertBeforeI(VL, C, Iterator);
+      Inserter InsertBeforeI(VL, C, Iterator, InstWrappers);
       Value *V = nullptr;
       if (isa<PHIPack>(P)) {
         // Special lowering path for phi pack
@@ -996,8 +1008,18 @@ void VectorGen::runOnLoop(VLoop *VL) {
         V = InsertBeforeI.createPhi(Operands, VL->getPhiConditions(PN));
       } else {
         SmallVector<Value *, 8> Operands;
-        for (OperandPack OP : P->getOperands())
-          Operands.push_back(gatherOperand(OP, InsertBeforeI));
+        errs() << "Gathering operands for pack " << *P << '\n';
+        for (OperandPack OP : P->getOperands()) {
+          errs() << "Gather " << OP << '\n';
+          const auto operand = gatherOperand(OP, InsertBeforeI);
+          if (!operand) { // entire operand is don't care
+            assert(OP.VecTy && "type of undef operand is unknown");
+            Operands.push_back(UndefValue::get(OP.VecTy));
+          } else {
+            Operands.push_back(operand);
+          }
+          errs() << "Gathered with " << **Operands.rbegin() << '\n';
+        }
         // Some instructions (e.g., masked store) also require masking
         for (auto &M : P->masks())
           Operands.push_back(gatherMask(M, InsertBeforeI));
@@ -1009,7 +1031,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
       I = cast<Instruction>(V);
       if (!OrigName.empty())
         I->setName(OrigName + ".vec");
-
+      errs() << "Emitted " << *I << '\n';
       // In some rare cases the packs gets constant-folded
       // and takes the value of one of its operands,
       // which can be one of the vec mu nodes.
@@ -1265,7 +1287,8 @@ bool VectorGen::run() {
 }
 
 bool lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI,
-           AAResults &AA, LoopInfo &LI) {
-  VectorGen Gen(Packs, PSSA, DI, AA, LI);
+           AAResults &AA, LoopInfo &LI,
+           std::shared_ptr<llvm::Module> InstWrappers) {
+  VectorGen Gen(Packs, PSSA, DI, AA, LI, InstWrappers);
   return Gen.run();
 }

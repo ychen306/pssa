@@ -59,8 +59,19 @@ PreservedAnalyses PSSAEntry::run(Function &F, FunctionAnalysisManager &AM) {
 
   return PreservedAnalyses::none();
 }
-
+extern llvm::cl::opt<std::string> WrappersDir;
 PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
+  std::string Wrapper;
+  std::shared_ptr<llvm::Module> InstWrappers;
+  Wrapper = "/x86.bc";
+  llvm::SMDiagnostic Err;
+
+  errs() << "Loading inst wrappers: " << WrappersDir + Wrapper << '\n';
+  InstWrappers =
+      std::move(parseIRFile(WrappersDir + Wrapper, Err, F.getContext()));
+  if (!InstWrappers)
+    report_fatal_error(std::string("Error parsing Inst Wrappers") +
+                       Err.getMessage());
   DenseMap<StringRef, Instruction *> NameToInstMap;
   DenseMap<StringRef, Instruction *> NameToStoreMap;
   for (auto &I : instructions(&F)) {
@@ -124,7 +135,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     errs() << "Packing " << *Packs.back() << '\n';
   }
 
-  lower(Packs, PSSA, DI, AA, LI);
+  lower(Packs, PSSA, DI, AA, LI, InstWrappers);
   lowerPSSAToLLVM(&F, PSSA);
 
   for (auto *P : Packs)

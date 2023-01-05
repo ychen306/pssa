@@ -1,3 +1,4 @@
+#include "vegen/Heuristics.h"
 #include "AddrUtil.h"
 #include "DependenceChecker.h"
 #include "PackSet.h"
@@ -23,11 +24,15 @@ class Packer {
   const llvm::DataLayout &DL;
   ScalarEvolution &SE;
   llvm::LoopInfo &LI;
+  MatchManager &MM;
+  std::vector<const InstBinding *> &SupportedIntrinsics;
 
 public:
   Packer(PredicatedSSA &PSSA, const llvm::DataLayout &DL,
-         llvm::ScalarEvolution &SE, llvm::LoopInfo &LI)
-      : PSSA(PSSA), DL(DL), SE(SE), LI(LI) {}
+         llvm::ScalarEvolution &SE, llvm::LoopInfo &LI, MatchManager &MM,
+         std::vector<const InstBinding *> &SupportedIntrinsics)
+      : PSSA(PSSA), DL(DL), SE(SE), LI(LI), MM(MM),
+        SupportedIntrinsics(SupportedIntrinsics) {}
   TinyPtrVector<Pack *> getProducers(llvm::ArrayRef<llvm::Value *>);
 };
 
@@ -73,8 +78,9 @@ class BottomUpHeuristic {
 public:
   BottomUpHeuristic(PredicatedSSA &PSSA, const llvm::DataLayout &DL,
                     llvm::ScalarEvolution &SE, llvm::LoopInfo &LI,
-                    TargetTransformInfo &TTI)
-      : Pkr(PSSA, DL, SE, LI), TTI(TTI) {}
+                    TargetTransformInfo &TTI, MatchManager &MM,
+                    std::vector<const InstBinding *> &SupportedIntrinsics)
+      : Pkr(PSSA, DL, SE, LI, MM, SupportedIntrinsics), TTI(TTI) {}
   Pack *getProducer(ArrayRef<Value *> Values) { return solve(Values).P; }
 };
 
@@ -115,19 +121,29 @@ static unsigned getLoopDepth(PredicatedSSA &PSSA, Instruction *I) {
 // FIXME: make sure that the packed instructions are independent
 // FIXME: make sure we are packing instructions that have the same nesting depth
 TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
+  errs() << "getProducers ";
+  for (auto *I : Values) {
+    if (I)
+      errs() << *I << " ;";
+    else
+      errs() << "nullptr ;";
+  }
+  errs() << '\n';
   SmallVector<Instruction *, 8> Insts;
   for (auto *V : Values) {
     auto *I = dyn_cast_or_null<Instruction>(V);
     if (!I)
-      return {};
+      continue; // return {};  // TODO: allow null
     Insts.push_back(I);
   }
 
   unsigned Depth = getLoopDepth(PSSA, Insts.front());
-  for (auto *I : drop_begin(Insts))
+  for (auto *I : drop_begin(Insts)) {
+    if (!I)
+      continue;
     if (getLoopDepth(PSSA, I) != Depth)
       return {};
-
+  }
   if (auto *P = LoadPack::tryPack(Insts, DL, SE, LI, PSSA)) {
     // Make sure when we pack divergent loads we can speculate the address
     auto *Ptr =
@@ -139,23 +155,20 @@ TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
       return {P};
   }
 
-  if (auto *P = PHIPack::tryPack(Insts, PSSA))
-    return {P};
-  if (auto *P = BlendPack::tryPack(Insts, PSSA))
-    return {P};
-  if (auto *P = MuPack::tryPack(Insts, PSSA))
-    return {P};
-  if (auto *P = GEPPack::tryPack(Insts))
-    return {P};
-  if (auto P = GatherPack::tryPack(Insts, PSSA))
-    return {P};
-  if (auto *P = IntrinsicPack::tryPack(Insts))
-    return {P};
-
+  // if (auto *P = PHIPack::tryPack(Insts, PSSA)) return {P};
+  // if (auto *P = BlendPack::tryPack(Insts, PSSA)) return {P};
+  // if (auto *P = MuPack::tryPack(Insts, PSSA)) return {P};
+  // if (auto *P = GEPPack::tryPack(Insts)) return {P};
+  // if (auto P = GatherPack::tryPack(Insts, PSSA)) return {P};
+  // if (auto *P = IntrinsicPack::tryPack(Insts)) return {P};
 
   TinyPtrVector<Pack *> Producers;
-  if (auto *P = SIMDPack::tryPack(Insts))
-    Producers.push_back(P);
+  // if (auto *P = SIMDPack::tryPack(Insts)) Producers.push_back(P);
+  // if (auto *P = GeneralPack::tryPack(Insts)) Producers.push_back(P);
+  {
+    auto P = GeneralPack::tryAllPack(Insts, MM, SupportedIntrinsics);
+    Producers.insert(Producers.end(), P.begin(), P.end());
+  }
 
   return Producers;
 }
@@ -169,11 +182,10 @@ static bool isUndefOrConstant(Value *V) { return !V || isa<Constant>(V); }
 
 BottomUpHeuristic::SolutionView
 BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
-  auto *VecTy = getVectorType(Values);
-
   // No cost for constant/undef vector
   if (all_of(Values, isUndefOrConstant))
     return Solution(nullptr, 0);
+  auto *VecTy = getVectorType(Values);
 
   // If we can produce this vector by broadcast ...
   if (is_splat(Values)) {
@@ -202,9 +214,40 @@ BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
   }
 
   Solution Soln(nullptr, ScalarCost);
-  for (auto *P : Pkr.getProducers(Values))
-    Soln.update(P, getCost(P));
+  std::vector<std::string> candidates;
+  for (auto *P : Pkr.getProducers(Values)) {
+    auto c = getCost(P);
+    std::string s;
+    raw_string_ostream os(s);
+    os << "Cost of pack " << *P << " =" << c << '\n';
+    candidates.push_back(os.str());
+    Soln.update(P, c);
+  }
 
+  errs() << "Solve "
+         << "[ ";
+  for (int i = 0; i < Values.size(); i++) {
+    if (Values[i]) {
+      errs() << *Values[i] << ";\n";
+    } else {
+      // errs() << "DC"
+      //        << ";\n";
+    }
+  }
+  errs() << " ]\n";
+  // errs() << "Cost of scalar ";
+  // errs() << "=" << ScalarCost << '\n';
+  for (auto &s : candidates) {
+    errs() << s;
+  }
+  if (Soln.P)
+    errs() << "Optimal pack " << *Soln.P << " cost " << Soln.Cost << '\n';
+  errs() << "Cost of [";
+  for (auto &O : Values) {
+    if (O)
+      errs() << *O << "; ";
+  }
+  errs() << "] = " << ScalarCost << '\n';
   SolutionView Ret = Soln;
   Solutions.find_as(Values)->second = std::move(Soln);
   return Ret;
@@ -214,6 +257,9 @@ InstructionCost BottomUpHeuristic::getCost(Pack *P) {
   auto Cost = P->getCost();
   for (auto &O : P->getOperands())
     Cost += solve(O).Cost;
+  // errs() << "Cost of ";
+  // P->print(errs());
+  // errs() << "=" << Cost << '\n';
   return Cost;
 }
 
@@ -237,27 +283,43 @@ InstructionCost BottomUpHeuristic::getCost(Value *V) {
   auto Cost = getScalarCost(I, TTI);
   for (auto *O : I->operand_values())
     Cost += getCost(O);
+  // errs() << "Cost of " << *V << "=" << Cost << '\n';
   return ScalarCosts[I] = Cost;
 }
 
 // FIXME: INISH
 static InstructionCost getSaving(const PackSet &Packs,
                                  TargetTransformInfo &TTI) {
+  // return 1;
+  errs() << "getSaving ";
+  for (auto &pack : Packs) {
+    pack->print(errs());
+    errs() << ", ";
+  }
+  errs() << '\n';
   DenseSet<OperandPack, VectorHashInfo<OperandPack>> ShuffledOps;
   InstructionCost Saving = 0;
   auto IsPacked = [&Packs](Value *V) { return Packs.isPacked(V); };
   for (auto *P : Packs) {
+    errs() << "pack ";
+    P->print(errs());
+    errs() << '\n';
     Type *VecTy = nullptr;
     if (!isa<StorePack>(P))
       VecTy = getVectorType(P->values());
 
     // Cost from running the vector inst.
     Saving -= P->getCost();
+    errs() << "vector cost " << P->getCost() << '\n';
     for (auto X : enumerate(P->values())) {
       Instruction *I = X.value();
       // FIXME: take into account of complex operation like FMA
       // Saving from killing the scalar instruction
-      Saving += getScalarCost(I, TTI);
+      if (I) {
+        Saving += getScalarCost(I, TTI);
+        errs() << "Saved scalar cost " << getScalarCost(I, TTI) << " from "
+               << *I << '\n';
+      }
 
 #if 1
       // Figure out if we need to extract for scalar use
@@ -298,6 +360,8 @@ static InstructionCost getSaving(const PackSet &Packs,
       SmallPtrSet<Pack *, 2> SrcPacks;
       for (auto X : enumerate(O)) {
         Value *V = X.value();
+        if (!V)
+          continue;
         // Remember the vectors that we need to shuffle from
         if (auto *P2 = Packs.getPackForValue(V)) {
           SrcPacks.insert(P2);
@@ -399,7 +463,8 @@ static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
       ProcessMaskOperands(M);
     LoopBundle Loops;
     for (auto *I : P->values())
-      Loops.push_back(PSSA.getLoopForInst(I));
+      if (I)
+        Loops.push_back(PSSA.getLoopForInst(I));
     ProcessLoopBundle(Loops);
   }
 }
@@ -489,16 +554,17 @@ static void partitionStores(ArrayRef<Instruction *> Stores,
   }
 }
 
-std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
-                                 ScalarEvolution &SE, LoopInfo &LI,
-                                 AAResults &AA, DependenceInfo &DI,
-                                 TargetTransformInfo &TTI) {
+std::vector<Pack *>
+packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL, ScalarEvolution &SE,
+             LoopInfo &LI, AAResults &AA, DependenceInfo &DI,
+             TargetTransformInfo &TTI, MatchManager &MM,
+             std::vector<const InstBinding *> &SupportedIntrinsics) {
   StoreGrouper::ObjToInstMapTy ObjToStoreMap;
   visitWith<StoreGrouper>(PSSA, ObjToStoreMap);
 
   DependenceChecker DepChecker(PSSA, DI, AA, LI);
 
-  BottomUpHeuristic Heuristic(PSSA, DL, SE, LI, TTI);
+  BottomUpHeuristic Heuristic(PSSA, DL, SE, LI, TTI, MM, SupportedIntrinsics);
   PackSet Packs;
   auto PrevSaving = getSaving(Packs, TTI);
 
@@ -535,14 +601,14 @@ std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
     Scratch.add(StoreP);
     auto Operands = StoreP->getOperands();
     runBottomUp(Operands.front(), Heuristic, PSSA, SE, Scratch);
-    auto NewSaving = getSaving(Scratch, TTI);
-    // FIXME: need to check for dep cycle
-    errs() << "Prev saving: " << PrevSaving << ", new saving " << NewSaving
-           << '\n';
-    if (NewSaving >= PrevSaving) {
-      PrevSaving = NewSaving;
+    // auto NewSaving = getSaving(Scratch, TTI);
+    // // FIXME: need to check for dep cycle
+    // errs() << "Prev saving: " << PrevSaving << ", new saving " << NewSaving
+    //        << '\n';
+    if (true) // || NewSaving >= PrevSaving) {
+              // PrevSaving = NewSaving;
       Packs = std::move(Scratch);
-    }
+    // }
   };
 
   for (ArrayRef<Instruction *> Stores : make_second_range(ObjToStoreMap)) {

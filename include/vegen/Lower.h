@@ -18,7 +18,7 @@ class PredicatedSSA;
 // May bail out due to circular deps introduced by the packs.
 // Return true if succeeded.
 bool lower(llvm::ArrayRef<Pack *>, PredicatedSSA &, llvm::DependenceInfo &,
-           llvm::AAResults &, llvm::LoopInfo &);
+           llvm::AAResults &, llvm::LoopInfo &, std::shared_ptr<llvm::Module>);
 
 const ControlCondition *
 findSpeculativeCond(llvm::Instruction *I,

@@ -2,8 +2,8 @@
 #include "PackSet.h"
 #include "pssa/PSSA.h"
 #include "vegen/Pack.h"
-#include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 
 using namespace llvm;
@@ -73,7 +73,6 @@ static bool isExclusive(const ControlCondition *C1,
 
   return false;
 }
-
 
 static MemoryLocation getLocation(Instruction *I) {
   if (StoreInst *SI = dyn_cast<StoreInst>(I))
@@ -244,6 +243,8 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
       // we also need to check their dependences
       ArrayRef<Instruction *> Insts = P ? P->values() : I;
       for (auto *I : Insts) {
+        if (!I)
+          continue;
         for_each(I->operand_values(), VisitValue);
         VisitCond(VL->getInstCond(I));
         if (auto *PN = dyn_cast<PHINode>(I); PN && VL->isGatedPhi(PN))
