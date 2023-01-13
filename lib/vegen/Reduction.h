@@ -38,11 +38,8 @@ class ReductionInfo {
   void processLoop(VLoop *);
 public:
   ReductionInfo(PredicatedSSA &);
-  const Reduction *getReductionFor(llvm::Value *V) {
-    auto *Rdx = ValueToReductionMap.lookup(V);
-    if (Rdx && Rdx->Root == V)
-      return Rdx;
-    return nullptr;
+  const Reduction *getReductionFor(llvm::Value *V) const {
+    return ValueToReductionMap.lookup(V);
   }
 };
 

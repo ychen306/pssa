@@ -48,6 +48,7 @@ raw_ostream &operator<<(raw_ostream &OS, const Reduction &Rdx) {
     else
       OS << " " << *V;
   }
+  OS << ")";
   return OS;
 }
 
@@ -105,6 +106,7 @@ void ReductionInfo::processLoop(VLoop *VL) {
       bool CanMergeB = RdxB && RdxB->Kind == Rdx->Kind && Rdx->B->hasOneUse();
       assert(!CanMergeA || RdxA->Root == Rdx->A);
       assert(!CanMergeB || RdxB->Root == Rdx->B);
+      Reduction *Merged = nullptr;
       if (CanMergeA) {
         if (CanMergeB) {
           RdxA->Leaves.append(RdxB->Leaves);
@@ -113,16 +115,19 @@ void ReductionInfo::processLoop(VLoop *VL) {
           // forward B to A's reduction group
           ValueToReductionMap[Rdx->B] = RdxA;
         }
-        ValueToReductionMap[I] = RdxA;
+        Merged = RdxA;
       } else if (CanMergeB) {
         RdxB->Leaves.push_back(Rdx->A);
-        ValueToReductionMap[I] = RdxB;
+        Merged = RdxB;
       } else {
         Reduction *AB = newReduction();
         AB->Kind = Rdx->Kind;
         AB->Leaves = {Rdx->A, Rdx->B};
-        ValueToReductionMap[I] = AB;
+        Merged = AB;
       }
+      ValueToReductionMap[I] = Merged;
+      Merged->Root = I;
+      continue;
     }
     assert(It.asLoop());
     processLoop(It.asLoop());

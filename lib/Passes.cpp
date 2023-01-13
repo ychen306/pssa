@@ -3,6 +3,7 @@
 #include "vegen/GlobalSLP.h"
 #include "vegen/Lower.h"
 #include "vegen/Pack.h"
+#include "vegen/Reduction.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -40,6 +41,10 @@ struct PSSAEntry : public PassInfoMixin<PSSAEntry> {
 };
 
 struct TestVectorGen : public PassInfoMixin<TestVectorGen> {
+  PreservedAnalyses run(Function &, FunctionAnalysisManager &);
+};
+
+struct ReductionPrinter : public PassInfoMixin<ReductionPrinter> {
   PreservedAnalyses run(Function &, FunctionAnalysisManager &);
 };
 } // namespace
@@ -133,6 +138,35 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   return PreservedAnalyses::none();
 }
 
+PreservedAnalyses ReductionPrinter::run(Function &F,
+                                        FunctionAnalysisManager &AM) {
+  auto &LI = AM.getResult<LoopAnalysis>(F);
+  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
+
+  if (!isConvertibleToPSSA(F, LI, DT))
+    return PreservedAnalyses::all();
+
+  PredicatedSSA PSSA(&F, LI, DT, PDT);
+  ReductionInfo RI(PSSA);
+
+  std::function<void(VLoop *)> Print = [&](VLoop *VL) {
+    for (auto &It : VL->items()) {
+      if (auto *SubVL = It.asLoop()) {
+        Print(SubVL);
+        continue;
+      }
+      auto *I = It.asInstruction();
+      if (auto *Rdx = RI.getReductionFor(I); Rdx && Rdx->Root == I)
+        outs() << "Reduction for " << *I << " is " << *Rdx << '\n';
+    }
+  };
+
+  Print(&PSSA.getTopLevel());
+
+  return PreservedAnalyses::all();
+}
+
 static void addPreprocessingPasses(FunctionPassManager &FPM) {
   FPM.addPass(UnifyFunctionExitNodesPass());
   FPM.addPass(LoopSimplifyPass());
@@ -164,6 +198,11 @@ static void buildPasses(PassBuilder &PB) {
 
         if (Name == "test-vector-codegen") {
           FPM.addPass(TestVectorGen());
+          return true;
+        }
+
+        if (Name == "print-reductions") {
+          FPM.addPass(ReductionPrinter());
           return true;
         }
 
