@@ -1,5 +1,6 @@
 #include "Reduction.h"
 #include "pssa/PSSA.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -39,6 +40,12 @@ static StringRef getName(RecurKind Kind) {
   }
 }
 
+// Identify loop by their headers
+static StringRef getName(VLoop *VL) {
+  auto *PSSA = VL->getPSSA();
+  return PSSA->getOrigLoop(VL)->getHeader()->getName();
+}
+
 raw_ostream &operator<<(raw_ostream &OS, const Reduction &Rdx) {
   OS << "(" << getName(Rdx.Kind);
   for (auto &Elt : Rdx.Leaves) {
@@ -46,7 +53,12 @@ raw_ostream &operator<<(raw_ostream &OS, const Reduction &Rdx) {
     if (V->hasName())
       OS << " " << V->getName();
     else
-      OS << " " << *V;
+      OS << " (" << *V << ')';
+    if (Elt.Loops.empty())
+      continue;
+    OS << ":" << getName(Elt.Loops.front());
+    for (auto *VL : drop_begin(Elt.Loops))
+      OS << "," << getName(VL);
   }
   OS << ")";
   return OS;
@@ -135,6 +147,33 @@ void ReductionInfo::processLoop(VLoop *VL) {
 
   // Inspect the Mu nodes and see if we can
   // generalize some of the "straightline" reductions into loop reductions
+  for (auto *Mu : VL->mus()) {
+    // Generalize instances of `rec = (+ mu(init, rec) x0 x1 ...)`
+    // into `rec = (+ init x0^L x1^L ...)`
+    auto *Init = Mu->getIncomingValue(0);
+    auto *Rec = Mu->getIncomingValue(1);
+    auto *Rdx = ValueToReductionMap.lookup(Rec);
+    if (!Rdx || Rdx->Root != Rec)
+      continue;
+    // Make sure `Rec` is only used once inside `VL` (by `Mu`)
+    if (any_of(Rec->users(), [&](User *U) {
+          return U != Mu && VL->contains(cast<Instruction>(U));
+        }))
+      continue;
+    auto It = llvm::find_if(Rdx->Leaves, [Mu](const ReductionElement &Elt) {
+      return Elt.Val == Mu && Elt.Loops.empty();
+    });
+    if (It == Rdx->Leaves.end())
+      continue;
+    for (auto It2 = Rdx->Leaves.begin(), End = Rdx->Leaves.end(); It2 != End;
+         ++It2) {
+      if (It2 == It) {
+        It2->Val = Init;
+        continue;
+      }
+      It2->Loops.push_back(VL);
+    }
+  }
 }
 
 ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
