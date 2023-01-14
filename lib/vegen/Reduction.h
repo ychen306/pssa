@@ -25,7 +25,7 @@ struct ReductionElement {
 struct Reduction {
   llvm::RecurKind Kind;
   llvm::SmallVector<ReductionElement, 4> Leaves;
-  llvm::Value *Root;
+  llvm::SmallPtrSet<llvm::Value *, 2> Roots;
 };
 
 class ReductionInfo {

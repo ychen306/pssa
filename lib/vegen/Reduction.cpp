@@ -109,6 +109,17 @@ Optional<SimpleReduction> matchReduction(Instruction *I) {
 void ReductionInfo::processLoop(VLoop *VL) {
   for (auto &It : VL->items()) {
     if (auto *I = It.asInstruction()) {
+      if (auto *PN = dyn_cast<PHINode>(I)) {
+        if (PN->getNumOperands() == 1) {
+          // detect identity phis created by LCSSA
+          auto *Val = PN->getIncomingValue(0);
+          if (auto *Rdx = ValueToReductionMap.lookup(Val)) {
+            Rdx->Roots.insert(PN);
+            ValueToReductionMap[PN] = Rdx;
+          }
+        }
+      }
+
       auto Rdx = matchReduction(I);
       if (!Rdx)
         continue;
@@ -116,16 +127,17 @@ void ReductionInfo::processLoop(VLoop *VL) {
       Reduction *RdxB = ValueToReductionMap.lookup(Rdx->B);
       bool CanMergeA = RdxA && RdxA->Kind == Rdx->Kind && Rdx->A->hasOneUse();
       bool CanMergeB = RdxB && RdxB->Kind == Rdx->Kind && Rdx->B->hasOneUse();
-      assert(!CanMergeA || RdxA->Root == Rdx->A);
-      assert(!CanMergeB || RdxB->Root == Rdx->B);
+      assert(!CanMergeA || RdxA->Roots.count(Rdx->A));
+      assert(!CanMergeB || RdxB->Roots.count(Rdx->B));
       Reduction *Merged = nullptr;
       if (CanMergeA) {
         if (CanMergeB) {
           RdxA->Leaves.append(RdxB->Leaves);
+          // forward B to A's reduction group
+          RdxB->Roots.clear();
+          ValueToReductionMap[Rdx->B] = RdxA;
         } else {
           RdxA->Leaves.push_back(Rdx->B);
-          // forward B to A's reduction group
-          ValueToReductionMap[Rdx->B] = RdxA;
         }
         Merged = RdxA;
       } else if (CanMergeB) {
@@ -138,7 +150,7 @@ void ReductionInfo::processLoop(VLoop *VL) {
         Merged = AB;
       }
       ValueToReductionMap[I] = Merged;
-      Merged->Root = I;
+      Merged->Roots.insert(I);
       continue;
     }
     assert(It.asLoop());
@@ -148,13 +160,17 @@ void ReductionInfo::processLoop(VLoop *VL) {
   // Inspect the Mu nodes and see if we can
   // generalize some of the "straightline" reductions into loop reductions
   for (auto *Mu : VL->mus()) {
+    if (!Mu->hasOneUse())
+      continue;
     // Generalize instances of `rec = (+ mu(init, rec) x0 x1 ...)`
     // into `rec = (+ init x0^L x1^L ...)`
     auto *Init = Mu->getIncomingValue(0);
     auto *Rec = Mu->getIncomingValue(1);
     auto *Rdx = ValueToReductionMap.lookup(Rec);
-    if (!Rdx || Rdx->Root != Rec)
+
+    if (!Rdx || !Rdx->Roots.count(Rec))
       continue;
+
     // Make sure `Rec` is only used once inside `VL` (by `Mu`)
     if (any_of(Rec->users(), [&](User *U) {
           return U != Mu && VL->contains(cast<Instruction>(U));
@@ -167,11 +183,20 @@ void ReductionInfo::processLoop(VLoop *VL) {
       continue;
     for (auto It2 = Rdx->Leaves.begin(), End = Rdx->Leaves.end(); It2 != End;
          ++It2) {
-      if (It2 == It) {
-        It2->Val = Init;
+      if (It2 == It)
         continue;
-      }
       It2->Loops.push_back(VL);
+    }
+    Rdx->Leaves.erase(It);
+    auto *InitRdx = ValueToReductionMap.lookup(Init);
+    // Merge init's reduction group if it has one
+    if (InitRdx && InitRdx->Kind == Rdx->Kind && Init->hasOneUse()) {
+      Rdx->Leaves.append(InitRdx->Leaves);
+      // Forward init's reduction group to rdx
+      InitRdx->Roots.clear();
+      ValueToReductionMap[Init] = Rdx;
+    } else {
+      Rdx->Leaves.push_back(Init);
     }
   }
 }
