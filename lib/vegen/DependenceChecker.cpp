@@ -264,8 +264,9 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
         if (!mayReadOrWriteMemory(*I))
           continue;
         for (auto &It2 : Coupled)
-          if (DepChecker.depends(*I, It2))
+          if (ComesBefore(*I, It2) && DepChecker.depends(*I, It2)) {
             Visit(*I, true);
+          }
       }
     }
 
