@@ -1,8 +1,7 @@
 ; RUN: %opt -passes=global-slp -vectorize-only=kernel %s | lli
 ; RUN: %opt -passes=global-slp -vectorize-only=kernel -S %s | FileCheck %s
 
-target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-apple-macosx10.15.0"
+target triple = "x86_64-unknown-linux-gnu"
 
 ; CHECK:  fcmp oeq <4 x float>
 ; CHECK-NEXT:  fadd <4 x float>

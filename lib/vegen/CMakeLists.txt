@@ -9,4 +9,8 @@ set(LIB_VEGEN_SRC
     GlobalSLP.cpp
     Reduction.cpp)
 
-add_library(VeGen STATIC ${LIB_VEGEN_SRC})
+if (APPLE)
+  add_library(VeGen STATIC ${LIB_VEGEN_SRC})
+else()
+  add_library(VeGen SHARED ${LIB_VEGEN_SRC})
+endif(APPLE)
