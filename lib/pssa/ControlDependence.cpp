@@ -310,6 +310,5 @@ static void dump(raw_ostream &OS, const ControlCondition *C) {
 
 raw_ostream &operator<<(raw_ostream &OS, const ControlCondition &C) {
   dump(OS, &C);
-  OS << "(" << &C << ")";
   return OS;
 }

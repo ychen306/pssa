@@ -47,13 +47,6 @@ static StringRef getName(VLoop *VL) {
 }
 
 raw_ostream &operator<<(raw_ostream &OS, const Reduction &Rdx) {
-  DenseMap<const ControlCondition *, unsigned> ConditionIds;
-  auto GetConditionId = [&ConditionIds](const ControlCondition *C) -> unsigned {
-    if (ConditionIds.count(C))
-      return ConditionIds[C];
-    return ConditionIds[C] = ConditionIds.size();
-  };
-
   OS << "(" << getName(Rdx.Kind);
   for (auto &Elt : Rdx.Elements) {
     Value *V = Elt.Val;
@@ -72,12 +65,9 @@ raw_ostream &operator<<(raw_ostream &OS, const Reduction &Rdx) {
       OS << getName(VL);
     }
     if (Elt.C)
-      OS << "@c" << GetConditionId(Elt.C);
+      OS << "@" << *Elt.C;
   }
-  OS << ")\n";
-  OS << "\twhere:\n";
-  for (auto [C, Id] : ConditionIds)
-    OS << "\t\tc" << Id << " = " << *C << '\n';
+  OS << ')';
   return OS;
 }
 
