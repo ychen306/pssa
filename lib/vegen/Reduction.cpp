@@ -47,20 +47,37 @@ static StringRef getName(VLoop *VL) {
 }
 
 raw_ostream &operator<<(raw_ostream &OS, const Reduction &Rdx) {
+  DenseMap<const ControlCondition *, unsigned> ConditionIds;
+  auto GetConditionId = [&ConditionIds](const ControlCondition *C) -> unsigned {
+    if (ConditionIds.count(C))
+      return ConditionIds[C];
+    return ConditionIds[C] = ConditionIds.size();
+  };
+
   OS << "(" << getName(Rdx.Kind);
-  for (auto &Elt : Rdx.Leaves) {
+  for (auto &Elt : Rdx.Elements) {
     Value *V = Elt.Val;
     if (V->hasName())
       OS << " " << V->getName();
     else
       OS << " (" << *V << ')';
-    if (Elt.Loops.empty())
-      continue;
-    OS << ":" << getName(Elt.Loops.front());
-    for (auto *VL : drop_begin(Elt.Loops))
-      OS << "," << getName(VL);
+    bool IsFirst = true;
+    for (auto *VL : Elt.Loops) {
+      if (IsFirst) {
+        OS << ":";
+        IsFirst = false;
+      } else {
+        OS << ",";
+      }
+      OS << getName(VL);
+    }
+    if (Elt.C)
+      OS << "@c" << GetConditionId(Elt.C);
   }
-  OS << ")";
+  OS << ")\n";
+  OS << "\twhere:\n";
+  for (auto [C, Id] : ConditionIds)
+    OS << "\t\tc" << Id << " = " << *C << '\n';
   return OS;
 }
 
@@ -106,17 +123,98 @@ Optional<SimpleReduction> matchReduction(Instruction *I) {
   return Rdx;
 }
 
+// Detect the case when the elements of `B` is a supper set of `A`.
+// Return the set difference
+Optional<std::set<ReductionElement>> getDifference(Reduction *A, Reduction *B) {
+  std::set<ReductionElement> AElts(A->Elements.begin(), A->Elements.end());
+  std::set<ReductionElement> BElts(B->Elements.begin(), B->Elements.end());
+  if (!all_of(AElts, [&](auto &Elt) { return BElts.count(Elt); }))
+    return None;
+  std::set<ReductionElement> Diff;
+  for (auto &Elt : BElts)
+    if (!AElts.count(Elt))
+      Diff.insert(Elt);
+  return Diff;
+}
+
+// Detect the case where Init is one of Rdx's reduction element and return the
+// difference
+Optional<std::set<ReductionElement>>
+getDifference(Value *Init, const ControlCondition *C, Reduction *Rdx) {
+  ReductionElement Elt0(Init, C);
+  std::set<ReductionElement> Elts(Rdx->Elements.begin(), Rdx->Elements.end());
+  if (!Elts.count(Elt0))
+    return None;
+  std::set<ReductionElement> Diff;
+  for (auto &Elt : Elts) {
+    if (Elt == Elt0)
+      continue;
+    Diff.insert(Elt);
+  }
+  return Diff;
+}
+
+// Get C1 /\ C2
+const ControlCondition *getAnd(PredicatedSSA *PSSA, const ControlCondition *C1,
+                               const ControlCondition *C2) {
+  if (isImplied(C1, C2))
+    return C2;
+  if (isImplied(C2, C1))
+    return C1;
+  return PSSA->concat(C1, C2);
+}
+
 void ReductionInfo::processLoop(VLoop *VL) {
+  auto MatchPhiReduction = [&](PHINode *PN, unsigned A,
+                               unsigned B) -> Reduction * {
+    // Detect the following pattern:
+    //   phi [not c: A, c: B]
+    // where the elements of `B` is a superset of `A`
+    // and assign the phi node the following reduction
+    //   (+ <elts of rdx1> <diff1 predicated with c>)
+    auto *Rdx1 = ValueToReductionMap.lookup(PN->getIncomingValue(A));
+    auto *Rdx2 = ValueToReductionMap.lookup(PN->getIncomingValue(B));
+    const ControlCondition *C = VL->getPhiCondition(PN, B);
+    if (!Rdx2)
+      return nullptr;
+    // TODO: detect even when rdx1 and rdx2 are swapped
+    auto Diff = Rdx1 ? getDifference(Rdx1, Rdx2)
+                     : getDifference(PN->getIncomingValue(A),
+                                     VL->getPhiCondition(PN, B), Rdx2);
+    if (!Diff)
+      return nullptr;
+    auto *Merged = newReduction();
+    *Merged = *Rdx2;
+    for (auto &Elt : Merged->Elements) {
+      if (!Diff->count(Elt)) {
+        // in the case the A is not a reduction
+        // but showed up in both side,
+        // we set its condition to be disjunction of both side
+        // (which is just the condition of phi node);
+        if (!Rdx1)
+          Elt.C = VL->getInstCond(PN);
+        continue;
+      }
+      // FIXME: it's possible that this creates cyclic control dependences
+      // maybe only do this transformation if one of C and Elt.C implies the other
+      Elt.C = getAnd(VL->getPSSA(), Elt.C, C);
+    }
+    return Merged;
+  };
+
   for (auto &It : VL->items()) {
     if (auto *I = It.asInstruction()) {
       if (auto *PN = dyn_cast<PHINode>(I)) {
         if (PN->getNumOperands() == 1) {
           // detect identity phis created by LCSSA
           auto *Val = PN->getIncomingValue(0);
-          if (auto *Rdx = ValueToReductionMap.lookup(Val)) {
-            Rdx->Roots.insert(PN);
+          if (auto *Rdx = ValueToReductionMap.lookup(Val))
             ValueToReductionMap[PN] = Rdx;
-          }
+        } else if (PN->getNumOperands() == 2) {
+          if (auto *Rdx = MatchPhiReduction(PN, 0, 1))
+            ValueToReductionMap[PN] = Rdx;
+          else if (auto *Rdx = MatchPhiReduction(PN, 1, 0))
+            ValueToReductionMap[PN] = Rdx;
         }
       }
 
@@ -125,32 +223,29 @@ void ReductionInfo::processLoop(VLoop *VL) {
         continue;
       Reduction *RdxA = ValueToReductionMap.lookup(Rdx->A);
       Reduction *RdxB = ValueToReductionMap.lookup(Rdx->B);
-      bool CanMergeA = RdxA && RdxA->Kind == Rdx->Kind && Rdx->A->hasOneUse();
-      bool CanMergeB = RdxB && RdxB->Kind == Rdx->Kind && Rdx->B->hasOneUse();
-      assert(!CanMergeA || RdxA->Roots.count(Rdx->A));
-      assert(!CanMergeB || RdxB->Roots.count(Rdx->B));
-      Reduction *Merged = nullptr;
+      bool CanMergeA =
+          RdxA && RdxA->Kind == Rdx->Kind /* && Rdx->A->hasOneUse()*/;
+      bool CanMergeB =
+          RdxB && RdxB->Kind == Rdx->Kind /* && Rdx->B->hasOneUse()*/;
+      auto *C = VL->getInstCond(I);
+      Reduction *Merged = newReduction();
       if (CanMergeA) {
+        *Merged = *RdxA;
         if (CanMergeB) {
-          RdxA->Leaves.append(RdxB->Leaves);
-          // forward B to A's reduction group
-          RdxB->Roots.clear();
-          ValueToReductionMap[Rdx->B] = RdxA;
+          llvm::append_range(Merged->Elements, RdxB->Elements);
         } else {
-          RdxA->Leaves.push_back(Rdx->B);
+          Merged->Elements.emplace_back(Rdx->B, C);
         }
-        Merged = RdxA;
       } else if (CanMergeB) {
-        RdxB->Leaves.push_back(Rdx->A);
-        Merged = RdxB;
+        *Merged = *RdxB;
+        Merged->Elements.emplace_back(Rdx->A, C);
       } else {
-        Reduction *AB = newReduction();
-        AB->Kind = Rdx->Kind;
-        AB->Leaves = {Rdx->A, Rdx->B};
-        Merged = AB;
+        Merged->Kind = Rdx->Kind;
+        Merged->Elements = {ReductionElement(Rdx->A, C),
+                            ReductionElement(Rdx->B, C)};
+        Merged->ParentLoop = VL;
       }
       ValueToReductionMap[I] = Merged;
-      Merged->Roots.insert(I);
       continue;
     }
     assert(It.asLoop());
@@ -160,15 +255,16 @@ void ReductionInfo::processLoop(VLoop *VL) {
   // Inspect the Mu nodes and see if we can
   // generalize some of the "straightline" reductions into loop reductions
   for (auto *Mu : VL->mus()) {
-    if (!Mu->hasOneUse())
-      continue;
+    // if (!Mu->hasOneUse())
+    //   continue;
+
     // Generalize instances of `rec = (+ mu(init, rec) x0 x1 ...)`
     // into `rec = (+ init x0^L x1^L ...)`
     auto *Init = Mu->getIncomingValue(0);
     auto *Rec = Mu->getIncomingValue(1);
     auto *Rdx = ValueToReductionMap.lookup(Rec);
 
-    if (!Rdx || !Rdx->Roots.count(Rec))
+    if (!Rdx)
       continue;
 
     // Make sure `Rec` is only used once inside `VL` (by `Mu`)
@@ -176,27 +272,28 @@ void ReductionInfo::processLoop(VLoop *VL) {
           return U != Mu && VL->contains(cast<Instruction>(U));
         }))
       continue;
-    auto It = llvm::find_if(Rdx->Leaves, [Mu](const ReductionElement &Elt) {
-      return Elt.Val == Mu && Elt.Loops.empty();
+    auto It = llvm::find_if(Rdx->Elements, [Mu](const ReductionElement &Elt) {
+      return Elt.Val == Mu && !Elt.reducedByLoop();
     });
-    if (It == Rdx->Leaves.end())
+    if (It == Rdx->Elements.end())
       continue;
-    for (auto It2 = Rdx->Leaves.begin(), End = Rdx->Leaves.end(); It2 != End;
-         ++It2) {
+
+    for (auto It2 = Rdx->Elements.begin(), End = Rdx->Elements.end();
+         It2 != End; ++It2) {
       if (It2 == It)
         continue;
       It2->Loops.push_back(VL);
     }
-    Rdx->Leaves.erase(It);
+    Rdx->Elements.erase(It);
+
     auto *InitRdx = ValueToReductionMap.lookup(Init);
     // Merge init's reduction group if it has one
-    if (InitRdx && InitRdx->Kind == Rdx->Kind && Init->hasOneUse()) {
-      Rdx->Leaves.append(InitRdx->Leaves);
-      // Forward init's reduction group to rdx
-      InitRdx->Roots.clear();
-      ValueToReductionMap[Init] = Rdx;
+    if (InitRdx && InitRdx->Kind == Rdx->Kind /* && Init->hasOneUse()*/) {
+      // FIXME: need to strengthen the condition of these elements with the loop
+      // cond of VL
+      llvm::append_range(Rdx->Elements, InitRdx->Elements);
     } else {
-      Rdx->Leaves.push_back(Init);
+      Rdx->Elements.emplace_back(Init, VL->getLoopCond());
     }
   }
 }

@@ -13,19 +13,32 @@ class raw_ostream;
 
 class VLoop;
 class PredicatedSSA;
+class ControlCondition;
 
 struct ReductionElement {
   llvm::Value *Val;
-  // Parent loops; inner loops go first
+
+  // Condition under which we will accumulate `Val`
+  const ControlCondition *C;
   std::vector<VLoop *> Loops;
 
-  ReductionElement(llvm::Value *V) : Val(V) {}
+
+  ReductionElement(llvm::Value *V, const ControlCondition *C) : Val(V), C(C) {}
+  bool operator==(const ReductionElement &Other) const {
+    return Val == Other.Val && Loops == Other.Loops;
+  }
+  bool operator<(const ReductionElement &Other) const {
+    return std::tie(Val, Loops) < std::tie(Other.Val, Other.Loops);
+  }
+  bool reducedByLoop() const {
+    return !Loops.empty();
+  }
 };
 
 struct Reduction {
   llvm::RecurKind Kind;
-  llvm::SmallVector<ReductionElement, 4> Leaves;
-  llvm::SmallPtrSet<llvm::Value *, 2> Roots;
+  std::vector<ReductionElement> Elements;
+  VLoop *ParentLoop; // where this value is available
 };
 
 class ReductionInfo {

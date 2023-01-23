@@ -157,7 +157,7 @@ PreservedAnalyses ReductionPrinter::run(Function &F,
         continue;
       }
       auto *I = It.asInstruction();
-      if (auto *Rdx = RI.getReductionFor(I); Rdx && Rdx->Roots.count(I))
+      if (auto *Rdx = RI.getReductionFor(I))
         outs() << "Reduction for " << *I << " is " << *Rdx << '\n';
     }
   };
