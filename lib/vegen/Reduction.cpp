@@ -185,9 +185,14 @@ void ReductionInfo::processLoop(VLoop *VL) {
           Elt.C = VL->getInstCond(PN);
         continue;
       }
-      // FIXME: it's possible that this creates cyclic control dependences
-      // maybe only do this transformation if one of C and Elt.C implies the other
-      Elt.C = getAnd(VL->getPSSA(), Elt.C, C);
+      // Strengthen the reduction condition based on the phi
+      // but skip if the condition happens to be the condition of the outermost loop
+      // that we are reducing over (in which case it's redundant)
+      if (Elt.Loops.empty() || Elt.Loops.back()->getLoopCond() != C) {
+        // FIXME: it's possible that this creates cyclic control dependences
+        // maybe only do this transformation if one of C and Elt.C implies the other
+        Elt.C = getAnd(VL->getPSSA(), C, Elt.C);
+      }
     }
     return Merged;
   };
@@ -283,7 +288,7 @@ void ReductionInfo::processLoop(VLoop *VL) {
       // cond of VL
       llvm::append_range(Rdx->Elements, InitRdx->Elements);
     } else {
-      Rdx->Elements.emplace_back(Init, VL->getLoopCond());
+      Rdx->Elements.emplace_back(Init, nullptr);
     }
   }
 }
