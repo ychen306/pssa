@@ -1,7 +1,6 @@
 ; RUN: %opt -passes=print-reductions %s -o /dev/null | FileCheck %s
 
-; CHECK-DAG: Reduction for %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1 is (add indvars.iv (i64 1))
-; CHECK-DAG: Reduction for %add = add nsw i32 %x, %s.05 is (add x:for.body (i32 0))
+; CHECK-DAG: Reduction for %add = add nsw i32 %x, %s.05 is (add x:for.body (i32 0)@(cmp4))
 
 target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"
