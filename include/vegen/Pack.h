@@ -4,6 +4,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/InstructionCost.h"
+#include "llvm/Analysis/IVDescriptors.h"
 
 namespace llvm {
 class Instruction;
@@ -34,7 +35,8 @@ public:
     PK_PHI,
     PK_Mu,
     PK_Blend,
-    PK_GEP
+    PK_GEP,
+    PK_Reduction, // *horizontal* reduction
   };
 
 private:
@@ -111,7 +113,8 @@ public:
 
 // A pack of math intrinsic
 class IntrinsicPack : public Pack {
-  IntrinsicPack(llvm::ArrayRef<llvm::Instruction *> Insts) : Pack(Insts, PK_Intrinsic) {}
+  IntrinsicPack(llvm::ArrayRef<llvm::Instruction *> Insts)
+      : Pack(Insts, PK_Intrinsic) {}
 
 public:
   static IntrinsicPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts);
@@ -240,6 +243,20 @@ public:
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>,
                     llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
+};
+
+struct Reduction;
+class ReductionPack : public Pack {
+  llvm::RecurKind RdxKind;
+  llvm::SmallVector<llvm::Value *, 8> Elts;
+  // `Root` is the result of combinging `Elts`
+  ReductionPack(llvm::RecurKind RdxKind, llvm::Instruction *Root, llvm::ArrayRef<llvm::Value *> Elts)
+      : Pack({Root}, PK_Reduction), RdxKind(RdxKind), Elts(Elts.begin(), Elts.end()) {}
+public:
+  llvm::SmallVector<OperandPack, 2> getOperands() const override;
+  llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
+  void print(llvm::raw_ostream &OS) const override;
+  Pack *clone() const override;
 };
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, Pack &);

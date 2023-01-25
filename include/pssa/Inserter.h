@@ -43,7 +43,23 @@ public:
   llvm::Value *createMaskedGather(llvm::Type *Ty, llvm::Value *Ptrs,
                                   llvm::Align, llvm::Value *Mask) const;
   llvm::Value *createVectorSplat(unsigned NumElems, llvm::Value *V) const;
+
+  // Vector horizontal reduction
+  llvm::Value *createAddReduce(llvm::Value *) const;
+  llvm::Value *createMulReduce(llvm::Value *) const;
+  llvm::Value *createAndReduce(llvm::Value *) const;
   llvm::Value *createOrReduce(llvm::Value *) const;
+  llvm::Value *createXorReduce(llvm::Value *) const;
+  llvm::Value *createFAddReduce(llvm::Value *) const;
+  llvm::Value *createFMulReduce(llvm::Value *) const;
+  llvm::Value *createSMaxReduce(llvm::Value *) const;
+  llvm::Value *createSMinReduce(llvm::Value *) const;
+  llvm::Value *createUMaxReduce(llvm::Value *) const;
+  llvm::Value *createUMinReduce(llvm::Value *) const;
+  llvm::Value *createFMaxReduce(llvm::Value *) const;
+  llvm::Value *createFMinReduce(llvm::Value *) const;
+  // end vector horizontal reduction
+
   llvm::Value *createIntrinsicCall(llvm::Intrinsic::ID,
                                    llvm::ArrayRef<llvm::Type *>,
                                    llvm::ArrayRef<llvm::Value *>);

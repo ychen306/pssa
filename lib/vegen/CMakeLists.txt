@@ -7,7 +7,8 @@ set(LIB_VEGEN_SRC
     DependenceChecker.cpp
     Heuristics.cpp
     GlobalSLP.cpp
-    Reduction.cpp)
+    Reduction.cpp
+    TestReductionLowering.cpp)
 
 if (APPLE)
   add_library(VeGen STATIC ${LIB_VEGEN_SRC})

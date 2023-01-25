@@ -154,9 +154,77 @@ static Value *getReductionIntrinsic(Intrinsic::ID ID, Value *Src, Module *M,
   return Insert.create<CallInst>(Decl, Ops);
 }
 
+Value *Inserter::createAddReduce(Value *Src) const {
+  Module *M = VL->getPSSA()->getFunction()->getParent();
+  return getReductionIntrinsic(Intrinsic::vector_reduce_add, Src, M, *this);
+}
+
+Value *Inserter::createMulReduce(Value *Src) const {
+  Module *M = VL->getPSSA()->getFunction()->getParent();
+  return getReductionIntrinsic(Intrinsic::vector_reduce_mul, Src, M, *this);
+}
+
+Value *Inserter::createAndReduce(Value *Src) const {
+  Module *M = VL->getPSSA()->getFunction()->getParent();
+  return getReductionIntrinsic(Intrinsic::vector_reduce_and, Src, M, *this);
+}
+
 Value *Inserter::createOrReduce(Value *Src) const {
   Module *M = VL->getPSSA()->getFunction()->getParent();
   return getReductionIntrinsic(Intrinsic::vector_reduce_or, Src, M, *this);
+}
+
+Value *Inserter::createXorReduce(Value *Src) const {
+  Module *M = VL->getPSSA()->getFunction()->getParent();
+  return getReductionIntrinsic(Intrinsic::vector_reduce_xor, Src, M, *this);
+}
+
+Value *Inserter::createFAddReduce(Value *Src) const {
+  Module *M = VL->getPSSA()->getFunction()->getParent();
+  auto *SrcVecEltTy = cast<VectorType>(Src->getType())->getElementType();
+  Value *Ops[] = {ConstantFP::getNegativeZero(SrcVecEltTy), Src};
+  auto Decl = Intrinsic::getDeclaration(M, Intrinsic::vector_reduce_fadd,
+                                        {Src->getType()});
+  return create<CallInst>(Decl, Ops);
+}
+
+Value *Inserter::createFMulReduce(Value *Src) const {
+  Module *M = VL->getPSSA()->getFunction()->getParent();
+  auto *SrcVecEltTy = cast<VectorType>(Src->getType())->getElementType();
+  Value *Ops[] = {ConstantFP::get(SrcVecEltTy, 1.0), Src};
+  auto Decl = Intrinsic::getDeclaration(M, Intrinsic::vector_reduce_fmul,
+                                        {Src->getType()});
+  return create<CallInst>(Decl, Ops);
+}
+
+Value *Inserter::createSMaxReduce(Value *Src) const {
+  Module *M = VL->getPSSA()->getFunction()->getParent();
+  return getReductionIntrinsic(Intrinsic::vector_reduce_smax, Src, M, *this);
+}
+
+Value *Inserter::createSMinReduce(Value *Src) const {
+  Module *M = VL->getPSSA()->getFunction()->getParent();
+  return getReductionIntrinsic(Intrinsic::vector_reduce_smin, Src, M, *this);
+}
+
+Value *Inserter::createUMaxReduce(Value *Src) const {
+  Module *M = VL->getPSSA()->getFunction()->getParent();
+  return getReductionIntrinsic(Intrinsic::vector_reduce_umax, Src, M, *this);
+}
+
+Value *Inserter::createUMinReduce(Value *Src) const {
+  Module *M = VL->getPSSA()->getFunction()->getParent();
+  return getReductionIntrinsic(Intrinsic::vector_reduce_umin, Src, M, *this);
+}
+
+Value *Inserter::createFMaxReduce(Value *Src) const {
+  Module *M = VL->getPSSA()->getFunction()->getParent();
+  return getReductionIntrinsic(Intrinsic::vector_reduce_fmax, Src, M, *this);
+}
+
+Value *Inserter::createFMinReduce(Value *Src) const {
+  Module *M = VL->getPSSA()->getFunction()->getParent();
+  return getReductionIntrinsic(Intrinsic::vector_reduce_fmin, Src, M, *this);
 }
 
 Value *Inserter::createIntrinsicCall(Intrinsic::ID ID, ArrayRef<Type *> Types,

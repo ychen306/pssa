@@ -576,6 +576,59 @@ Value *AndPack::emit(ArrayRef<Value *> ReifiedMasks, ArrayRef<Value *> Operands,
   return Insert.CreateBinOp(BinaryOperator::And, ReifiedMasks.front(), Operand);
 }
 
+SmallVector<OperandPack, 2> ReductionPack::getOperands() const {
+  return {OperandPack(Elts.begin(), Elts.end())};
+}
+
+Value *ReductionPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
+  assert(Operands.size() == 1 &&
+         "reduction pack expects exactly one vector argument");
+  Value *Src = Operands.front();
+  switch (RdxKind) {
+  case RecurKind::Add:
+    return Insert.createAddReduce(Src);
+  case RecurKind::Mul:
+    return Insert.createMulReduce(Src);
+  case RecurKind::And:
+    return Insert.createAndReduce(Src);
+  case RecurKind::Or:
+    return Insert.createOrReduce(Src);
+  case RecurKind::Xor:
+    return Insert.createXorReduce(Src);
+  case RecurKind::FAdd:
+    return Insert.createFAddReduce(Src);
+  case RecurKind::FMul:
+    return Insert.createFMulReduce(Src);
+  case RecurKind::SMax:
+    return Insert.createSMaxReduce(Src);
+  case RecurKind::SMin:
+    return Insert.createSMinReduce(Src);
+  case RecurKind::UMax:
+    return Insert.createUMaxReduce(Src);
+  case RecurKind::UMin:
+    return Insert.createUMinReduce(Src);
+  case RecurKind::FMax:
+    return Insert.createFMaxReduce(Src);
+  case RecurKind::FMin:
+    return Insert.createFMinReduce(Src);
+  default:
+    llvm_unreachable("unexpected reduction kind");
+  }
+}
+
+void ReductionPack::print(raw_ostream &OS) const {
+  OS << "reduce { ";
+  for (Value *Elt : Elts)
+    OS << *Elt << ", ";
+  OS << "}";
+}
+
+Pack *ReductionPack::clone() const {
+  assert(Insts.size() == 1 &&
+         "reduction pack should produce exactly one value");
+  return new ReductionPack(RdxKind, Insts.front(), Elts);
+}
+
 raw_ostream &operator<<(raw_ostream &OS, Pack &P) {
   P.print(OS);
   return OS;
