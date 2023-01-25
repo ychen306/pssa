@@ -4,6 +4,7 @@
 #include "vegen/Lower.h"
 #include "vegen/Pack.h"
 #include "vegen/Reduction.h"
+#include "vegen/TestReductionLowering.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -198,6 +199,11 @@ static void buildPasses(PassBuilder &PB) {
 
         if (Name == "test-vector-codegen") {
           FPM.addPass(TestVectorGen());
+          return true;
+        }
+
+        if (Name == "test-reduction-lowering") {
+          FPM.addPass(TestReductionLowering());
           return true;
         }
 
