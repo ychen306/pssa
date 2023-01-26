@@ -8,6 +8,7 @@ set(LIB_VEGEN_SRC
     Heuristics.cpp
     GlobalSLP.cpp
     Reduction.cpp
+    Reducer.cpp
     TestReductionLowering.cpp)
 
 if (APPLE)

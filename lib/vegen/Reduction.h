@@ -36,10 +36,14 @@ struct ReductionElement {
   }
 };
 
-struct Reduction : public llvm::Instruction {
-  // For supporting isa<> and friends. Ajay said use 120
-  static constexpr unsigned ReductionValID = 120;
+// For supporting llvm::isa<> and friends.
+static constexpr unsigned ReductionValID = 120;
+static constexpr unsigned ReducerValID = 121;
 
+struct Reduction : public llvm::Instruction {
+  // True if this value represents the previous iteration
+  // of a recurrent reduction
+  bool IsPrev;
   llvm::RecurKind Kind;
   std::vector<ReductionElement> Elements;
   VLoop *ParentLoop; // where this value is available
@@ -49,9 +53,10 @@ struct Reduction : public llvm::Instruction {
     Kind = Rdx->Kind;
     Elements = Rdx->Elements;
     ParentLoop = Rdx->ParentLoop;
+    IsPrev = Rdx->IsPrev;
   }
 
-  Reduction(llvm::Type *Ty) : Instruction(Ty, ReductionValID, nullptr, 0) {}
+  Reduction(llvm::Type *Ty) : Instruction(Ty, ReductionValID, nullptr, 0), IsPrev(false) {}
   void *operator new(size_t S) { return User::operator new(S, 0); }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
