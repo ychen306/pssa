@@ -173,8 +173,8 @@ void ReductionInfo::processLoop(VLoop *VL) {
                                      VL->getPhiCondition(PN, B), Rdx2);
     if (!Diff)
       return nullptr;
-    auto *Merged = newReduction();
-    *Merged = *Rdx2;
+    auto *Merged = newReduction(PN->getType());
+    Merged->copyFrom(Rdx2);
     for (auto &Elt : Merged->Elements) {
       if (!Diff->count(Elt)) {
         // in the case the A is not a reduction
@@ -223,16 +223,16 @@ void ReductionInfo::processLoop(VLoop *VL) {
       bool CanMergeB =
           RdxB && RdxB->Kind == Rdx->Kind /* && Rdx->B->hasOneUse()*/;
       auto *C = VL->getInstCond(I);
-      Reduction *Merged = newReduction();
+      Reduction *Merged = newReduction(I->getType());
       if (CanMergeA) {
-        *Merged = *RdxA;
+        Merged->copyFrom(RdxA);
         if (CanMergeB) {
           llvm::append_range(Merged->Elements, RdxB->Elements);
         } else {
           Merged->Elements.emplace_back(Rdx->B, C);
         }
       } else if (CanMergeB) {
-        *Merged = *RdxB;
+        Merged->copyFrom(RdxB);
         Merged->Elements.emplace_back(Rdx->A, C);
       } else {
         Merged->Kind = Rdx->Kind;
