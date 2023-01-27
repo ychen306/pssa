@@ -75,13 +75,13 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
   }
 
   // Packing a list of `Reducers`
-  if (auto *Rdx0 = dyn_cast<Reducer>(Insts.front())) {
-    if (Rdx0->getNumOperands() != 2)
+  if (auto *R0 = dyn_cast<Reducer>(Insts.front())) {
+    if (R0->getNumOperands() != 2)
       return nullptr;
-    if (any_of(Rest, [Rdx0](Instruction *I) {
-          auto *Rdx = dyn_cast<Reducer>(I);
-          return !Rdx || Rdx->getKind() != Rdx0->getKind() ||
-                 Rdx->getNumOperands() != 2;
+    if (any_of(Rest, [R0](Instruction *I) {
+          auto *R = dyn_cast<Reducer>(I);
+          return !R || R->getKind() != R0->getKind() ||
+                 R->getNumOperands() != 2;
         }))
       return nullptr;
   }
@@ -91,6 +91,49 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
 
 Value *SIMDPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   auto *I = Insts.front();
+
+  if (auto *R = dyn_cast<Reducer>(Insts.front())) {
+    assert(R->getNumOperands() == 2);
+    assert(Operands.size() == 2);
+    auto *VecTy = FixedVectorType::get(R->getType(), Insts.size());
+    switch (R->getKind()) {
+    case RecurKind::Add:
+      return Insert.CreateBinOp(Instruction::BinaryOps::Add, Operands[0],
+                                Operands[1]);
+    case RecurKind::Mul:
+      return Insert.CreateBinOp(Instruction::BinaryOps::Mul, Operands[0],
+                                Operands[1]);
+    case RecurKind::And:
+      return Insert.CreateBinOp(Instruction::BinaryOps::And, Operands[0],
+                                Operands[1]);
+    case RecurKind::Or:
+      return Insert.CreateBinOp(Instruction::BinaryOps::Or, Operands[0],
+                                Operands[1]);
+    case RecurKind::Xor:
+      return Insert.CreateBinOp(Instruction::BinaryOps::Xor, Operands[0],
+                                Operands[1]);
+    case RecurKind::FAdd:
+      return Insert.CreateBinOp(Instruction::BinaryOps::FAdd, Operands[0],
+                                Operands[1]);
+    case RecurKind::FMul:
+      return Insert.CreateBinOp(Instruction::BinaryOps::FMul, Operands[0],
+                                Operands[1]);
+    case RecurKind::SMax:
+      return Insert.createIntrinsicCall(Intrinsic::smax, {VecTy}, Operands);
+    case RecurKind::SMin:
+      return Insert.createIntrinsicCall(Intrinsic::smin, {VecTy}, Operands);
+    case RecurKind::UMax:
+      return Insert.createIntrinsicCall(Intrinsic::umax, {VecTy}, Operands);
+    case RecurKind::UMin:
+      return Insert.createIntrinsicCall(Intrinsic::umin, {VecTy}, Operands);
+    case RecurKind::FMax:
+      return Insert.createIntrinsicCall(Intrinsic::maxnum, {VecTy}, Operands);
+    case RecurKind::FMin:
+      return Insert.createIntrinsicCall(Intrinsic::minnum, {VecTy}, Operands);
+    default:
+      llvm_unreachable("unexpected reduction kind");
+    }
+  }
 
   if (auto *BO = dyn_cast<BinaryOperator>(I)) {
     assert(Operands.size() == 2);
