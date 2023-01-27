@@ -70,6 +70,11 @@ struct Reduction : public llvm::Instruction {
 
 class ReductionInfo {
   llvm::DenseMap<llvm::Value *, Reduction *> ValueToReductionMap;
+  // Mapping value to the its corresponding recurrent reduction.
+  // For example, consider `for (int i ... ) s += x[i];`.
+  // Inside the loop, the add may have the reduction `(+ phi x[i])`
+  // But its live-out reduction is `(+ s.init x[i]:loop)`.
+  llvm::DenseMap<llvm::Value *, std::pair<Reduction *, VLoop *>> LiveOutRdxs;
   std::vector<std::unique_ptr<Reduction>> Reductions;
   Reduction *newReduction(llvm::Type *Ty) {
     Reductions.emplace_back(new Reduction(Ty));

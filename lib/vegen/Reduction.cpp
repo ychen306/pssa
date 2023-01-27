@@ -203,8 +203,15 @@ void ReductionInfo::processLoop(VLoop *VL) {
         if (PN->getNumOperands() == 1) {
           // detect identity phis created by LCSSA
           auto *Val = PN->getIncomingValue(0);
-          if (auto *Rdx = ValueToReductionMap.lookup(Val))
+          if (auto *Rdx = ValueToReductionMap.lookup(Val)) {
             ValueToReductionMap[PN] = Rdx;
+            if (LiveOutRdxs.count(Val)) {
+              auto [LiveOutRdx, ProducerVL] = LiveOutRdxs[Val];
+              // Ensure that this is indeed a LCSSA Phi
+              if (!ProducerVL->contains(PN))
+                ValueToReductionMap[PN] = LiveOutRdx;
+            }
+          }
         } else if (PN->getNumOperands() == 2) {
           if (auto *Rdx = MatchPhiReduction(PN, 0, 1))
             ValueToReductionMap[PN] = Rdx;
@@ -257,10 +264,13 @@ void ReductionInfo::processLoop(VLoop *VL) {
     // into `rec = (+ init x0^L x1^L ...)`
     auto *Init = Mu->getIncomingValue(0);
     auto *Rec = Mu->getIncomingValue(1);
-    auto *Rdx = ValueToReductionMap.lookup(Rec);
+    auto *OrigRdx = ValueToReductionMap.lookup(Rec);
 
-    if (!Rdx)
+    if (!OrigRdx)
       continue;
+
+    auto *Rdx = newReduction(Mu->getType());
+    Rdx->copyFrom(OrigRdx);
 
     // Make sure `Rec` is only used once inside `VL` (by `Mu`)
     if (any_of(Rec->users(), [&](User *U) {
@@ -290,6 +300,8 @@ void ReductionInfo::processLoop(VLoop *VL) {
     } else {
       Rdx->Elements.emplace_back(Init, nullptr);
     }
+    // If we use `Rec` outside of `VL`, we are actually using the reduction `Rdx`
+    LiveOutRdxs[Rec] = {Rdx, VL};
   }
 }
 
