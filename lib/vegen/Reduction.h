@@ -10,7 +10,7 @@
 namespace llvm {
 class Value;
 class raw_ostream;
-}
+} // namespace llvm
 
 class VLoop;
 class PredicatedSSA;
@@ -23,7 +23,6 @@ struct ReductionElement {
   const ControlCondition *C;
   std::vector<VLoop *> Loops;
 
-
   ReductionElement(llvm::Value *V, const ControlCondition *C) : Val(V), C(C) {}
   bool operator==(const ReductionElement &Other) const {
     return Val == Other.Val && Loops == Other.Loops;
@@ -31,9 +30,7 @@ struct ReductionElement {
   bool operator<(const ReductionElement &Other) const {
     return std::tie(Val, Loops) < std::tie(Other.Val, Other.Loops);
   }
-  bool reducedByLoop() const {
-    return !Loops.empty();
-  }
+  bool reducedByLoop() const { return !Loops.empty(); }
 };
 
 // For supporting llvm::isa<> and friends.
@@ -46,7 +43,7 @@ struct Reduction : public llvm::Instruction {
   bool IsPrev;
   llvm::RecurKind Kind;
   std::vector<ReductionElement> Elements;
-  VLoop *ParentLoop; // where this value is available
+  VLoop *ParentLoop;                  // where this value is available
   const ControlCondition *ParentCond; // "when" this value is available
 
   void copyFrom(const Reduction *Rdx) {
@@ -57,7 +54,8 @@ struct Reduction : public llvm::Instruction {
     IsPrev = Rdx->IsPrev;
   }
 
-  Reduction(llvm::Type *Ty) : Instruction(Ty, ReductionValID, nullptr, 0), IsPrev(false) {}
+  Reduction(llvm::Type *Ty)
+      : Instruction(Ty, ReductionValID, nullptr, 0), IsPrev(false) {}
   void *operator new(size_t S) { return User::operator new(S, 0); }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
@@ -87,13 +85,21 @@ class ReductionInfo {
     return Rdx;
   }
   void processLoop(VLoop *);
+
 public:
   ReductionInfo(PredicatedSSA &);
   Reduction *getReductionFor(llvm::Value *V) const {
     return ValueToReductionMap.lookup(V);
   }
+  // Split a reduction into sub redutions evenly
+  // Examples:
+  //    (+ a b c d) by 4 -> a, b, c, d
+  //    (+ a b c d) by 2 -> (+ a c), (+ b d)
+  void split(const Reduction *Rdx, unsigned Parts,
+             llvm::SmallVectorImpl<Reduction *> &SubRdxs);
 };
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Reduction &);
+llvm::StringRef getReductionName(llvm::RecurKind);
 
 #endif

@@ -36,7 +36,12 @@ cl::opt<bool> UseGlobalSLP("enable-global-slp", cl::desc("Enable global slp"),
 cl::list<std::string>
     InstsToPack("p", cl::desc("<comma-separted list of instructions to pack>"));
 
-cl::opt<std::string> ReductionToPack("rdx-to-pack", cl::desc("<reduction to pack>"));
+cl::opt<std::string> ReductionToPack("rdx-to-pack",
+                                     cl::desc("<reduction to pack>"));
+
+cl::opt<unsigned> ReductionWidth("rdx-width",
+                                 cl::desc("<size of the horizontal reduction>"),
+                                 cl::init(4));
 
 struct PSSAEntry : public PassInfoMixin<PSSAEntry> {
   PreservedAnalyses run(Function &, FunctionAnalysisManager &);
@@ -94,7 +99,6 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   }
   assert(ReductionToPack.empty() || Rdx);
 
-
   SmallVector<Pack *> Packs;
   for (StringRef Arg : InstsToPack) {
     SmallVector<StringRef> Names;
@@ -135,6 +139,17 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     }
 
     errs() << "Packing " << *Packs.back() << '\n';
+  }
+
+  if (Rdx) {
+    errs() << "Packing reduction " << *Rdx << '\n';
+    SmallVector<Reduction *, 4> SubRdxs;
+    RI.split(Rdx, std::min<unsigned>(ReductionWidth, Rdx->Elements.size()),
+             SubRdxs);
+    errs() << "!! split into {\n";
+    for (auto *SubRdx : SubRdxs)
+      errs() << "\t " << *SubRdx << '\n';
+    errs() << "}\n";
   }
 
   lower(Packs, PSSA, DI, AA, LI);

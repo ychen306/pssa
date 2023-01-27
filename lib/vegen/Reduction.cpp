@@ -7,7 +7,7 @@
 using namespace llvm;
 using namespace PatternMatch;
 
-static StringRef getName(RecurKind Kind) {
+StringRef getReductionName(RecurKind Kind) {
   switch (Kind) {
   case RecurKind::Add:
     return "add";
@@ -47,7 +47,7 @@ static StringRef getName(VLoop *VL) {
 }
 
 raw_ostream &operator<<(raw_ostream &OS, const Reduction &Rdx) {
-  OS << "(" << getName(Rdx.Kind);
+  OS << "(" << getReductionName(Rdx.Kind);
   for (auto &Elt : Rdx.Elements) {
     Value *V = Elt.Val;
     if (V->hasName())
@@ -318,4 +318,21 @@ ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
     assert(PSSA.getLoopForInst(I) == Rdx->ParentLoop);
   }
 #endif
+}
+
+void ReductionInfo::split(const Reduction *Rdx, unsigned Parts,
+                          SmallVectorImpl<Reduction *> &SubRdxs) {
+  unsigned N = Rdx->Elements.size();
+  assert(isPowerOf2_32(Parts));
+  assert(isPowerOf2_32(N));
+  assert(N % Parts == 0);
+  unsigned Stride = N / Parts;
+  for (unsigned i = 0; i < Parts; i++) {
+    // FIXME: copy more efficiently
+    auto *SubRdx = copyReduction(Rdx);
+    SubRdx->Elements.clear();
+    for (unsigned j = i; j < N; j += Parts)
+      SubRdx->Elements.push_back(Rdx->Elements[j]);
+    SubRdxs.push_back(SubRdx);
+  }
 }

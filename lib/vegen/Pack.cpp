@@ -233,11 +233,14 @@ void Pack::print(raw_ostream &OS) const {
   OS << "[";
   for (auto *I : values()) {
     if (!I)
-      OS << "dont_care; ";
+      OS << "dont_care";
+    else if (auto *R = dyn_cast<Reducer>(I)) 
+      R->dump(OS);
     else if (I->hasName())
-      OS << I->getName() << "; ";
+      OS << I->getName();
     else
-      OS << *I << "; ";
+      OS << *I;
+    OS << "; ";
   }
   OS << ']';
 }

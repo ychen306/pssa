@@ -9,6 +9,8 @@
 
 namespace llvm {
 
+class raw_ostream;
+
 // A concrete way to implement a reduction
 class Reducer : public Instruction {
   Reduction *Result; // the reduction we are implementing
@@ -29,6 +31,7 @@ public:
   static bool classof(const Value *V) {
     return llvm::isa<Instruction>(V) && classof(llvm::cast<Instruction>(V));
   }
+  void dump(llvm::raw_ostream &);
 };
 
 template <>
