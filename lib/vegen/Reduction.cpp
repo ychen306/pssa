@@ -173,8 +173,7 @@ void ReductionInfo::processLoop(VLoop *VL) {
                                      VL->getPhiCondition(PN, B), Rdx2);
     if (!Diff)
       return nullptr;
-    auto *Merged = newReduction(PN->getType());
-    Merged->copyFrom(Rdx2);
+    auto *Merged = copyReduction(Rdx2);
     for (auto &Elt : Merged->Elements) {
       if (!Diff->count(Elt)) {
         // in the case the A is not a reduction
@@ -245,8 +244,9 @@ void ReductionInfo::processLoop(VLoop *VL) {
         Merged->Kind = Rdx->Kind;
         Merged->Elements = {ReductionElement(Rdx->A, C),
                             ReductionElement(Rdx->B, C)};
-        Merged->ParentLoop = VL;
       }
+      Merged->ParentLoop = VL;
+      Merged->ParentCond = C;
       ValueToReductionMap[I] = Merged;
       continue;
     }
@@ -269,8 +269,7 @@ void ReductionInfo::processLoop(VLoop *VL) {
     if (!OrigRdx)
       continue;
 
-    auto *Rdx = newReduction(Mu->getType());
-    Rdx->copyFrom(OrigRdx);
+    auto *Rdx = copyReduction(OrigRdx);
 
     // Make sure `Rec` is only used once inside `VL` (by `Mu`)
     if (any_of(Rec->users(), [&](User *U) {
@@ -300,6 +299,8 @@ void ReductionInfo::processLoop(VLoop *VL) {
     } else {
       Rdx->Elements.emplace_back(Init, nullptr);
     }
+    Rdx->ParentLoop = VL->getParent();
+    Rdx->ParentCond = VL->getLoopCond();
     // If we use `Rec` outside of `VL`, we are actually using the reduction `Rdx`
     LiveOutRdxs[Rec] = {Rdx, VL};
   }

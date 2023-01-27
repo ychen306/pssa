@@ -47,6 +47,7 @@ struct Reduction : public llvm::Instruction {
   llvm::RecurKind Kind;
   std::vector<ReductionElement> Elements;
   VLoop *ParentLoop; // where this value is available
+  const ControlCondition *ParentCond; // "when" this value is available
 
   void copyFrom(const Reduction *Rdx) {
     assert(getType() == Rdx->getType());
@@ -79,6 +80,11 @@ class ReductionInfo {
   Reduction *newReduction(llvm::Type *Ty) {
     Reductions.emplace_back(new Reduction(Ty));
     return Reductions.back().get();
+  }
+  Reduction *copyReduction(const Reduction *OrigRdx) {
+    auto *Rdx = newReduction(OrigRdx->getType());
+    Rdx->copyFrom(OrigRdx);
+    return Rdx;
   }
   void processLoop(VLoop *);
 public:
