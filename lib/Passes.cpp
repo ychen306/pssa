@@ -4,7 +4,6 @@
 #include "vegen/Lower.h"
 #include "vegen/Pack.h"
 #include "vegen/Reduction.h"
-#include "vegen/TestReductionLowering.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -37,6 +36,8 @@ cl::opt<bool> UseGlobalSLP("enable-global-slp", cl::desc("Enable global slp"),
 cl::list<std::string>
     InstsToPack("p", cl::desc("<comma-separted list of instructions to pack>"));
 
+cl::opt<std::string> ReductionToPack("rdx-to-pack", cl::desc("<reduction to pack>"));
+
 struct PSSAEntry : public PassInfoMixin<PSSAEntry> {
   PreservedAnalyses run(Function &, FunctionAnalysisManager &);
 };
@@ -67,18 +68,6 @@ PreservedAnalyses PSSAEntry::run(Function &F, FunctionAnalysisManager &AM) {
 }
 
 PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
-  DenseMap<StringRef, Instruction *> NameToInstMap;
-  DenseMap<StringRef, Instruction *> NameToStoreMap;
-  for (auto &I : instructions(&F)) {
-    if (I.hasName())
-      NameToInstMap[I.getName()] = &I;
-    if (auto *SI = dyn_cast<StoreInst>(&I)) {
-      auto *V = SI->getValueOperand();
-      if (V->hasName())
-        NameToStoreMap[V->getName()] = SI;
-    }
-  }
-
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
   auto &DL = F.getParent()->getDataLayout();
   auto &LI = AM.getResult<LoopAnalysis>(F);
@@ -87,6 +76,24 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   auto &DI = AM.getResult<DependenceAnalysis>(F);
   auto &AA = AM.getResult<AAManager>(F);
   PredicatedSSA PSSA(&F, LI, DT, PDT, &SE);
+  ReductionInfo RI(PSSA);
+
+  DenseMap<StringRef, Instruction *> NameToInstMap;
+  DenseMap<StringRef, Instruction *> NameToStoreMap;
+  Reduction *Rdx = nullptr;
+  for (auto &I : instructions(&F)) {
+    if (I.hasName())
+      NameToInstMap[I.getName()] = &I;
+    if (auto *SI = dyn_cast<StoreInst>(&I)) {
+      auto *V = SI->getValueOperand();
+      if (V->hasName())
+        NameToStoreMap[V->getName()] = SI;
+    }
+    if (I.getName() == ReductionToPack)
+      Rdx = RI.getReductionFor(&I);
+  }
+  assert(ReductionToPack.empty() || Rdx);
+
 
   SmallVector<Pack *> Packs;
   for (StringRef Arg : InstsToPack) {
@@ -199,11 +206,6 @@ static void buildPasses(PassBuilder &PB) {
 
         if (Name == "test-vector-codegen") {
           FPM.addPass(TestVectorGen());
-          return true;
-        }
-
-        if (Name == "test-reduction-lowering") {
-          FPM.addPass(TestReductionLowering());
           return true;
         }
 
