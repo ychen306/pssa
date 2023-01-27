@@ -193,6 +193,8 @@ void ReductionInfo::processLoop(VLoop *VL) {
         Elt.C = getAnd(VL->getPSSA(), C, Elt.C);
       }
     }
+    Merged->ParentCond = VL->getInstCond(PN);
+    Merged->ParentLoop = VL;
     return Merged;
   };
 
@@ -308,4 +310,12 @@ void ReductionInfo::processLoop(VLoop *VL) {
 
 ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
   processLoop(&PSSA.getTopLevel());
+#ifndef NDEBUG
+  // Check that we recorded the context of reduction properly
+  for (auto [V, Rdx] : ValueToReductionMap) {
+    auto *I = cast<Instruction>(V);
+    assert(PSSA.getInstCond(I) == Rdx->ParentCond);
+    assert(PSSA.getLoopForInst(I) == Rdx->ParentLoop);
+  }
+#endif
 }
