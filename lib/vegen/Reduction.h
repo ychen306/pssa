@@ -78,7 +78,7 @@ class ReductionInfo {
   void processLoop(VLoop *);
 public:
   ReductionInfo(PredicatedSSA &);
-  const Reduction *getReductionFor(llvm::Value *V) const {
+  Reduction *getReductionFor(llvm::Value *V) const {
     return ValueToReductionMap.lookup(V);
   }
 };

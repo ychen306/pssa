@@ -1,4 +1,5 @@
 #include "vegen/Pack.h"
+#include "Reducer.h"
 #include "AddrUtil.h"
 #include "pssa/Inserter.h"
 #include "pssa/PSSA.h"
@@ -70,6 +71,18 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
 
   if (auto *UO = dyn_cast<UnaryOperator>(I)) {
     if (UO->getOpcode() != Instruction::FNeg)
+      return nullptr;
+  }
+
+  // Packing a list of `Reducers`
+  if (auto *Rdx0 = dyn_cast<Reducer>(Insts.front())) {
+    if (Rdx0->getNumOperands() != 2)
+      return nullptr;
+    if (any_of(Rest, [Rdx0](Instruction *I) {
+          auto *Rdx = dyn_cast<Reducer>(I);
+          return !Rdx || Rdx->getKind() != Rdx0->getKind() ||
+                 Rdx->getNumOperands() != 2;
+        }))
       return nullptr;
   }
 

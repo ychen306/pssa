@@ -1,6 +1,6 @@
 #include "vegen/TestReductionLowering.h"
-#include "pssa/PSSA.h"
 #include "Reduction.h"
+#include "pssa/PSSA.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -8,14 +8,16 @@
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
 
-cl::opt<std::string>
-    ReductionToPack("p", cl::desc("<comma-separted list of instructions to pack>"));
+cl::opt<std::string> ReductionToPack("rdx-to-pack",
+                                     cl::desc("<reduction to pack>"));
 
-PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
+PreservedAnalyses TestReductionLowering::run(Function &F,
+                                             FunctionAnalysisManager &AM) {
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
   auto &DL = F.getParent()->getDataLayout();
   auto &LI = AM.getResult<LoopAnalysis>(F);
@@ -28,6 +30,23 @@ PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
   if (!isConvertibleToPSSA(F, LI, DT))
     return PreservedAnalyses::all();
 
+  if (ReductionToPack.empty())
+    return PreservedAnalyses::all();
+
   PredicatedSSA PSSA(&F, LI, DT, PDT, &SE);
   ReductionInfo RI(PSSA);
+
+  Reduction *Rdx = nullptr;
+  for (auto &I : instructions(&F)) {
+    if (I.getName() == ReductionToPack) {
+      Rdx = RI.getReductionFor(&I);
+      break;
+    }
+  }
+
+  if (!Rdx)
+    return PreservedAnalyses::all();
+
+  errs() << "Packing reduction " << *Rdx << '\n';
+  return PreservedAnalyses::none();
 }
