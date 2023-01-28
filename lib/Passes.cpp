@@ -1,3 +1,4 @@
+#include "vegen/Reducer.h"
 #include "pssa/Lower.h"
 #include "pssa/PSSA.h"
 #include "vegen/GlobalSLP.h"
@@ -70,6 +71,47 @@ PreservedAnalyses PSSAEntry::run(Function &F, FunctionAnalysisManager &AM) {
   lowerPSSAToLLVM(&F, PSSA);
 
   return PreservedAnalyses::none();
+}
+
+// Decompose a list of reductions with binary reducers and pack those reducers
+template<typename InstType>
+static Pack *decomposeAndPack(ReductionInfo &RI, ArrayRef<InstType *> Insts) {
+  SmallVector<Instruction *, 4> Reducers;
+  for (auto *I : Insts) {
+    auto *Rdx = dyn_cast<Reduction>(I);
+    if (!Rdx)
+      return nullptr;
+    auto *R = RI.decomposeWithBinary(Rdx);
+    if (!R)
+      return nullptr;
+    Reducers.push_back(R);
+  }
+  return SIMDPack::tryPack(Reducers);
+}
+
+static Optional<SmallVector<Reduction *>> asReductions(ArrayRef<Value *> Vals) {
+  SmallVector<Reduction *> Rdxs;
+  for (auto *V : Vals) {
+    auto *Rdx = dyn_cast<Reduction>(V);
+    if (!Rdx)
+      return None;
+    Rdxs.push_back(Rdx);
+  }
+  return Rdxs;
+}
+
+// Light-weight bottom-up heuristic for packing reductions
+static void packReductions(ArrayRef<Reduction *> Rdxs, SmallVectorImpl<Pack *> &Packs, ReductionInfo &RI) {
+  std::function<void (ArrayRef<Reduction *>)> PackRec = [&](ArrayRef<Reduction *> Rdxs) {
+    auto *P = decomposeAndPack(RI, Rdxs);
+    if (!P)
+      return;
+    Packs.push_back(P);
+    for (auto O : P->getOperands())
+      if (auto SubRdxs = asReductions(O))
+        PackRec(*SubRdxs);
+  };
+  PackRec(Rdxs);
 }
 
 PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
@@ -146,10 +188,11 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     SmallVector<Reduction *, 4> SubRdxs;
     RI.split(Rdx, std::min<unsigned>(ReductionWidth, Rdx->Elements.size()),
              SubRdxs);
-    errs() << "!! split into {\n";
-    for (auto *SubRdx : SubRdxs)
-      errs() << "\t " << *SubRdx << '\n';
-    errs() << "}\n";
+    // Produce the decomposed reductions as a vector
+    errs() << "??? num packs before packing reductions: " << Packs.size() << '\n';
+    packReductions(SubRdxs, Packs, RI);
+    errs() << "!!! num packs after packing reductions: " << Packs.size() << '\n';
+    abort();
   }
 
   lower(Packs, PSSA, DI, AA, LI);

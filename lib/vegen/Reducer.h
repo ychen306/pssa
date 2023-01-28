@@ -17,7 +17,7 @@ class Reducer : public Instruction {
   Reducer(Reduction *Result, ArrayRef<Value *> Elements);
 
 public:
-  Reducer *Create(Reduction *Result, ArrayRef<Value *> Elements) {
+  static Reducer *Create(Reduction *Result, ArrayRef<Value *> Elements) {
     return new (Elements.size()) Reducer(Result, Elements);
   }
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);

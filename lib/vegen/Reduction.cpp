@@ -1,4 +1,5 @@
 #include "Reduction.h"
+#include "Reducer.h"
 #include "pssa/PSSA.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/PatternMatch.h"
@@ -322,11 +323,10 @@ ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
 
 void ReductionInfo::split(const Reduction *Rdx, unsigned Parts,
                           SmallVectorImpl<Reduction *> &SubRdxs) {
-  unsigned N = Rdx->Elements.size();
+  unsigned N = Rdx->size();
   assert(isPowerOf2_32(Parts));
   assert(isPowerOf2_32(N));
   assert(N % Parts == 0);
-  unsigned Stride = N / Parts;
   for (unsigned i = 0; i < Parts; i++) {
     // FIXME: copy more efficiently
     auto *SubRdx = copyReduction(Rdx);
@@ -335,4 +335,21 @@ void ReductionInfo::split(const Reduction *Rdx, unsigned Parts,
       SubRdx->Elements.push_back(Rdx->Elements[j]);
     SubRdxs.push_back(SubRdx);
   }
+}
+
+Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx) {
+  if (Rdx->size() < 2)
+    return nullptr;
+
+  // Left's elements is the first n-1 elements of Rdx's elements
+  auto *Left = copyReduction(Rdx);
+  Left->Elements.clear();
+  Left->Elements.insert(Left->Elements.begin(), Rdx->Elements.begin(),
+                        Rdx->Elements.end() - 1);
+
+  // Right's elements is the last element of Rdx's elements
+  auto *Right = copyReduction(Rdx);
+  Right->Elements = {Rdx->Elements.back()};
+
+  return Reducer::Create(Rdx, {Left, Right});
 }

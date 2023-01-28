@@ -10,6 +10,7 @@
 namespace llvm {
 class Value;
 class raw_ostream;
+class Reducer;
 } // namespace llvm
 
 class VLoop;
@@ -65,7 +66,19 @@ struct Reduction : public llvm::Instruction {
   static bool classof(const Value *V) {
     return llvm::isa<Instruction>(V) && classof(llvm::cast<Instruction>(V));
   }
+
+  // Number of elements in the reduction
+  unsigned size() const { return Elements.size(); }
+
+  // Detect the case of a trivial, singleton reduction
+  llvm::Value *getSingleElement() const {
+    if (size() == 1 && Elements.front().Loops.empty())
+      return Elements.front().Val;
+    return nullptr;
+  }
 };
+
+class Pack;
 
 class ReductionInfo {
   llvm::DenseMap<llvm::Value *, Reduction *> ValueToReductionMap;
@@ -97,6 +110,9 @@ public:
   //    (+ a b c d) by 2 -> (+ a c), (+ b d)
   void split(const Reduction *Rdx, unsigned Parts,
              llvm::SmallVectorImpl<Reduction *> &SubRdxs);
+
+  // Decompose a reduction into sub redutions with a binary reducer
+  llvm::Reducer *decomposeWithBinary(Reduction *Rdx);
 };
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Reduction &);

@@ -35,7 +35,8 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
 
   auto *I = Insts.front();
   if (!isa<BinaryOperator>(I) && !isa<CmpInst>(I) && !isa<SelectInst>(I) &&
-      !isa<CastInst>(I) && !isa<FreezeInst>(I) && !isa<UnaryOperator>(I))
+      !isa<CastInst>(I) && !isa<FreezeInst>(I) && !isa<UnaryOperator>(I) &&
+      !isa<Reducer>(I))
     return nullptr;
 
   auto Rest = drop_begin(Insts);
@@ -78,10 +79,10 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
   if (auto *R0 = dyn_cast<Reducer>(Insts.front())) {
     if (R0->getNumOperands() != 2)
       return nullptr;
-    if (any_of(Rest, [R0](Instruction *I) {
+    if (!all_of(Rest, [R0](Instruction *I) {
           auto *R = dyn_cast<Reducer>(I);
-          return !R || R->getKind() != R0->getKind() ||
-                 R->getNumOperands() != 2;
+          return R && R->getKind() == R0->getKind() &&
+                 R->getNumOperands() == 2;
         }))
       return nullptr;
   }
