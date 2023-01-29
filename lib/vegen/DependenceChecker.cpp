@@ -2,8 +2,8 @@
 #include "PackSet.h"
 #include "pssa/PSSA.h"
 #include "vegen/Pack.h"
-#include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 
 using namespace llvm;
@@ -73,7 +73,6 @@ static bool isExclusive(const ControlCondition *C1,
 
   return false;
 }
-
 
 static MemoryLocation getLocation(Instruction *I) {
   if (StoreInst *SI = dyn_cast<StoreInst>(I))
@@ -175,110 +174,109 @@ public:
 };
 } // namespace
 
+void DependencesFinder::visitValue(Value *V) {
+  if (auto *I = dyn_cast<Instruction>(V))
+    visit(I, true);
+}
+
+void DependencesFinder::visitCond(const ControlCondition *C) {
+  if (!C)
+    return;
+  if (!VisitedConds.insert(C).second)
+    return;
+
+  if (auto *And = dyn_cast<ConditionAnd>(C)) {
+    visitCond(And->Parent);
+    visitValue(And->Cond);
+    return;
+  }
+
+  auto *Or = cast<ConditionOr>(C);
+  for (auto *C2 : Or->Conds)
+    visitCond(C2);
+}
+
+void DependencesFinder::visit(Item It, bool AddDep) {
+  if (!Processing.insert(It).second) {
+    FoundCycle = true;
+    return;
+  }
+
+  EraseOnReturnGuard EraseOnReturn(Processing, It);
+
+  auto *ParentVL = PSSA->getLoopForItem(It);
+  if (!VL->contains(It))
+    return;
+
+  while (ParentVL != VL) {
+    It = ParentVL;
+    ParentVL = ParentVL->getParent();
+  }
+
+  // Don't consider things that comes before earliest
+  if (It != Earliest && (!VL->contains(It) || !VL->comesBefore(Earliest, It)))
+    return;
+
+  if (Visited.count(It))
+    return;
+
+  SmallVector<Item, 8> Coupled;
+  // Process (register) data and control dependences
+  if (auto *I = It.asInstruction()) {
+    Pack *P = Packs ? Packs->getPackForValue(I) : nullptr;
+    // If I is packed with other instructions,
+    // we also need to check their dependences
+    ArrayRef<Instruction *> Insts = P ? P->values() : I;
+    for (auto *I : Insts) {
+      for (auto *V : I->operand_values())
+        visitValue(V);
+      visitCond(VL->getInstCond(I));
+      if (auto *PN = dyn_cast<PHINode>(I); PN && VL->isGatedPhi(PN)) {
+        for (auto *C : VL->getPhiConditions(PN))
+          visitCond(C);
+      }
+      Coupled.emplace_back(I);
+    }
+  } else {
+    Coupled = {It};
+    auto *SubVL = It.asLoop();
+    for (auto *V : DepChecker.getLiveIns(SubVL))
+      visitValue(V);
+    visitCond(SubVL->getLoopCond());
+  }
+
+  // Scan the memory dependences between Earliest and It
+  if (mayReadOrWriteMemory(It)) {
+    for (auto I = VL->toIterator(Earliest), E = VL->toIterator(It); I != E;
+         ++I) {
+      if (!mayReadOrWriteMemory(*I))
+        continue;
+      for (auto &It2 : Coupled)
+        if (VL->comesBefore(*I, It2) && DepChecker.depends(*I, It2)) {
+          visit(*I, true);
+        }
+    }
+  }
+
+  if (AddDep) {
+    Visited.insert(It);
+    Deps.push_back(It);
+  }
+}
+
 bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
                        VLoop *VL, PredicatedSSA &PSSA,
                        DependenceChecker &DepChecker, const PackSet *Packs) {
+  assert(all_of(Items,
+                [&](const Item &It) { return PSSA.getLoopForItem(It) == VL; }));
   auto ComesBefore = [VL](const Item &It1, const Item &It2) {
     return VL->comesBefore(It1, It2);
   };
-
-  assert(all_of(Items,
-                [&](const Item &It) { return PSSA.getLoopForItem(It) == VL; }));
   Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
 
-  DenseSet<Item, ItemHashInfo> Visited, Processing;
-  DenseSet<const ControlCondition *> VisitedConds;
-  // Do DFS on a given item
-  std::function<void(Item, bool)> Visit;
-  auto VisitValue = [&Visit](Value *V) {
-    if (auto *I = dyn_cast<Instruction>(V))
-      Visit(I, true);
-  };
+  DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker, Packs);
   bool FoundCycle = false;
-  std::function<void(const ControlCondition *)> VisitCond =
-      [&](const ControlCondition *C) {
-        if (!C)
-          return;
-        if (!VisitedConds.insert(C).second)
-          return;
-
-        if (auto *And = dyn_cast<ConditionAnd>(C)) {
-          VisitCond(And->Parent);
-          VisitValue(And->Cond);
-          return;
-        }
-
-        auto *Or = cast<ConditionOr>(C);
-        for_each(Or->Conds, VisitCond);
-      };
-
-  Visit = [&](Item It, bool AddDep) {
-    if (!Processing.insert(It).second) {
-      FoundCycle = true;
-      return;
-    }
-
-    EraseOnReturnGuard EraseOnReturn(Processing, It);
-
-    auto *ParentVL = PSSA.getLoopForItem(It);
-    if (!VL->contains(It))
-      return;
-
-    while (ParentVL != VL) {
-      It = ParentVL;
-      ParentVL = ParentVL->getParent();
-    }
-
-    // Don't consider things that comes before earliest
-    if (It != Earliest && (!VL->contains(It) || !VL->comesBefore(Earliest, It)))
-      return;
-
-    if (Visited.count(It))
-      return;
-
-    SmallVector<Item, 8> Coupled;
-    // Process (register) data and control dependences
-    if (auto *I = It.asInstruction()) {
-      Pack *P = Packs ? Packs->getPackForValue(I) : nullptr;
-      // If I is packed with other instructions,
-      // we also need to check their dependences
-      ArrayRef<Instruction *> Insts = P ? P->values() : I;
-      for (auto *I : Insts) {
-        for_each(I->operand_values(), VisitValue);
-        VisitCond(VL->getInstCond(I));
-        if (auto *PN = dyn_cast<PHINode>(I); PN && VL->isGatedPhi(PN))
-          for_each(VL->getPhiConditions(PN), VisitCond);
-        Coupled.emplace_back(I);
-      }
-    } else {
-      Coupled = {It};
-      auto *SubVL = It.asLoop();
-      for_each(DepChecker.getLiveIns(SubVL), VisitValue);
-      VisitCond(SubVL->getLoopCond());
-    }
-
-    // Scan the memory dependences between Earliest and It
-    if (mayReadOrWriteMemory(It)) {
-      for (auto I = VL->toIterator(Earliest), E = VL->toIterator(It); I != E;
-           ++I) {
-        if (!mayReadOrWriteMemory(*I))
-          continue;
-        for (auto &It2 : Coupled)
-          if (ComesBefore(*I, It2) && DepChecker.depends(*I, It2)) {
-            Visit(*I, true);
-          }
-      }
-    }
-
-    if (AddDep) {
-      Visited.insert(It);
-      Deps.push_back(It);
-    }
-  };
-
-  // Do DFS to find out dependences of the Items that appear after Earliest
   for (auto It : Items)
-    Visit(It, /*AddDep=*/false);
-
+    FoundCycle |= DepFinder.findDep(It);
   return FoundCycle;
 }

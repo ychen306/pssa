@@ -1,6 +1,7 @@
 #ifndef VEGEN_DEPENDENCECHECKER_H
 #define VEGEN_DEPENDENCECHECKER_H
 
+#include "pssa/PSSA.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include <map>
@@ -12,9 +13,6 @@ class AAResults;
 class LoopInfo;
 } // namespace llvm
 
-class PredicatedSSA;
-class VLoop;
-class Item;
 class PackSet;
 
 bool mayReadOrWriteMemory(llvm::Instruction *I);
@@ -50,6 +48,37 @@ public:
   bool depends(const Item &It1, const Item &It2);
 
   llvm::ArrayRef<llvm::Instruction *> getLiveIns(VLoop *VL);
+};
+
+class DependencesFinder {
+  llvm::SmallVectorImpl<Item> &Deps;
+  bool FoundCycle;
+  Item Earliest;
+  VLoop *VL;
+  PredicatedSSA *PSSA;
+  DependenceChecker &DepChecker;
+  const PackSet *Packs;
+  llvm::DenseSet<Item, ItemHashInfo> Visited, Processing;
+  llvm::DenseSet<const ControlCondition *> VisitedConds;
+  void visit(Item, bool AddDep);
+  void visitCond(const ControlCondition *);
+  void visitValue(llvm::Value *V);
+
+public:
+  // Pass in a pack set `Packs` if you want
+  // the deps of some instructions' to be checked together
+  DependencesFinder(llvm::SmallVectorImpl<Item> &Deps, Item Earliest, VLoop *VL,
+                    DependenceChecker &DepChecker,
+                    const PackSet *Packs = nullptr)
+      : Deps(Deps), FoundCycle(false), Earliest(Earliest), VL(VL),
+        PSSA(VL->getPSSA()), DepChecker(DepChecker), Packs(Packs) {}
+
+  // Find all dependencies of `It` that occurs *after* `Earliest`.
+  // Return if there are dependence cycles
+  bool findDep(Item It) {
+    visit(It, false /*don't mark the item itself as a dep*/);
+    return FoundCycle;
+  }
 };
 
 // Find the dependences of Items but scan no further than the earliest Items
