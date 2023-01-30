@@ -1,4 +1,5 @@
 #include "DependenceChecker.h"
+#include "ItemMover.h"
 #include "PackSet.h"
 #include "TripCount.h"
 #include "pssa/Inserter.h"
@@ -290,40 +291,13 @@ static bool merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
     if (ItemSet.count(It))
       return false;
 
-  ////// Utilities to erase items in batch and re-insert them later //////
-  SmallVector<Item> Removed;
-  SmallVector<const ControlCondition *> ItemConds;
-  auto RemoveItem = [&Removed, &ItemConds, VL](const auto &It) {
-    // Remember the items we removed so we can insert them later
-    Removed.push_back(It);
-    // Remember the conditions of the removed item
-    if (auto *I = It.asInstruction()) {
-      ItemConds.push_back(VL->getInstCond(I));
-    } else {
-      // Loops keep track of their own conditions so we don't care here
-      ItemConds.push_back(nullptr);
-    }
-    VL->erase(It);
-  };
-  // Re-insert the removed items at InsertPoint
-  auto ReinsertItems = [&Removed, &ItemConds,
-                        VL](VLoop::ItemIterator InsertPt) {
-    for (const auto [It, C] : llvm::zip(Removed, ItemConds)) {
-      if (auto *I = It.asInstruction())
-        VL->insert(I, C, InsertPt);
-      else
-        VL->insert(It.asLoop(), InsertPt);
-    };
-
-    Removed.clear();
-    ItemConds.clear();
-  };
-  //////////////////////////////////////////////////////////////////////
+  ItemMover Mover(VL);
 
   // Remove the depended values,
   // and after which the items will look like
   // [before earliest][earliest][items and non deps between earliest and latest]
-  for_each(Deps, RemoveItem);
+  for (auto Dep : Deps)
+    Mover.remove(Dep);
 
   // Insert the removed items before the earliest so we have
   // [before earliest][depended][items and non deps]
@@ -332,16 +306,16 @@ static bool merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
                                       return VL->comesBefore(It1, It2);
                                     });
   auto InsertPt = VL->toIterator(Earliest);
-  ReinsertItems(InsertPt);
+  Mover.reinsert(InsertPt);
 
   // Separate the items from the rest so we have
   // [before earliest][depended][earliest][ non deps]
   for (const auto &It : Items) {
     if (It != Earliest)
-      RemoveItem(It);
+      Mover.remove(It);
   }
 
-  ReinsertItems(InsertPt);
+  Mover.reinsert(InsertPt);
   return true;
 }
 
