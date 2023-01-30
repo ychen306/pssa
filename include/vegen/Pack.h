@@ -249,10 +249,10 @@ struct Reduction;
 class ReductionPack : public Pack {
   llvm::RecurKind RdxKind;
   llvm::SmallVector<llvm::Value *, 8> Elts;
+public:
   // `Root` is the result of combinging `Elts`
   ReductionPack(llvm::RecurKind RdxKind, llvm::Instruction *Root, llvm::ArrayRef<llvm::Value *> Elts)
       : Pack({Root}, PK_Reduction), RdxKind(RdxKind), Elts(Elts.begin(), Elts.end()) {}
-public:
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   void print(llvm::raw_ostream &OS) const override;

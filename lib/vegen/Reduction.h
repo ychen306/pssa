@@ -38,6 +38,7 @@ struct ReductionElement {
 static constexpr unsigned ReductionValID = 120;
 static constexpr unsigned ReducerValID = 121;
 
+// FIXME: don't make everything public
 struct Reduction : public llvm::Instruction {
   // True if this value represents the previous iteration
   // of a recurrent reduction
@@ -76,9 +77,17 @@ struct Reduction : public llvm::Instruction {
       return Elements.front().Val;
     return nullptr;
   }
+
+  VLoop *getParentLoop() const {
+    return ParentLoop;
+  }
+  const ControlCondition *getParentCond() const {
+    return ParentCond;
+  }
 };
 
 class Pack;
+class LooseInstructionTable;
 
 class ReductionInfo {
   llvm::DenseMap<llvm::Value *, Reduction *> ValueToReductionMap;
@@ -112,7 +121,7 @@ public:
              llvm::SmallVectorImpl<Reduction *> &SubRdxs);
 
   // Decompose a reduction into sub redutions with a binary reducer
-  llvm::Reducer *decomposeWithBinary(Reduction *Rdx);
+  llvm::Reducer *decomposeWithBinary(Reduction *Rdx, LooseInstructionTable &LIT);
 };
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Reduction &);

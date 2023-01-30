@@ -1,5 +1,6 @@
 #include "Reduction.h"
 #include "Reducer.h"
+#include "LooseInstructionTable.h"
 #include "pssa/PSSA.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/PatternMatch.h"
@@ -337,7 +338,8 @@ void ReductionInfo::split(const Reduction *Rdx, unsigned Parts,
   }
 }
 
-Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx) {
+Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
+                                            LooseInstructionTable &LIT) {
   if (Rdx->size() < 2)
     return nullptr;
 
@@ -351,5 +353,7 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx) {
   auto *Right = copyReduction(Rdx);
   Right->Elements = {Rdx->Elements.back()};
 
-  return Reducer::Create(Rdx, {Left, Right});
+  auto *R = Reducer::Create(Rdx, {Left, Right});
+  LIT.addLoose(R);
+  return R;
 }

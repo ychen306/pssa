@@ -1,9 +1,11 @@
-#include "vegen/Reducer.h"
 #include "pssa/Lower.h"
 #include "pssa/PSSA.h"
+#include "vegen/DependenceChecker.h"
 #include "vegen/GlobalSLP.h"
+#include "vegen/LooseInstructionTable.h"
 #include "vegen/Lower.h"
 #include "vegen/Pack.h"
+#include "vegen/Reducer.h"
 #include "vegen/Reduction.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
@@ -74,14 +76,15 @@ PreservedAnalyses PSSAEntry::run(Function &F, FunctionAnalysisManager &AM) {
 }
 
 // Decompose a list of reductions with binary reducers and pack those reducers
-template<typename InstType>
-static Pack *decomposeAndPack(ReductionInfo &RI, ArrayRef<InstType *> Insts) {
+template <typename InstType>
+static Pack *decomposeAndPack(ReductionInfo &RI, LooseInstructionTable &LIT,
+                              ArrayRef<InstType *> Insts) {
   SmallVector<Instruction *, 4> Reducers;
   for (auto *I : Insts) {
     auto *Rdx = dyn_cast<Reduction>(I);
     if (!Rdx)
       return nullptr;
-    auto *R = RI.decomposeWithBinary(Rdx);
+    auto *R = RI.decomposeWithBinary(Rdx, LIT);
     if (!R)
       return nullptr;
     Reducers.push_back(R);
@@ -89,28 +92,33 @@ static Pack *decomposeAndPack(ReductionInfo &RI, ArrayRef<InstType *> Insts) {
   return SIMDPack::tryPack(Reducers);
 }
 
-static Optional<SmallVector<Reduction *>> asReductions(ArrayRef<Value *> Vals) {
-  SmallVector<Reduction *> Rdxs;
-  for (auto *V : Vals) {
-    auto *Rdx = dyn_cast<Reduction>(V);
-    if (!Rdx)
+// FIXME: move this into util
+template <typename SourceTy, typename DestTy>
+static Optional<SmallVector<DestTy *>> cast_many(ArrayRef<SourceTy *> Xs) {
+  SmallVector<DestTy *> Ys;
+  for (auto *X : Xs) {
+    auto *Y = dyn_cast<DestTy>(X);
+    if (!Y)
       return None;
-    Rdxs.push_back(Rdx);
+    Ys.push_back(Y);
   }
-  return Rdxs;
+  return Ys;
 }
 
 // Light-weight bottom-up heuristic for packing reductions
-static void packReductions(ArrayRef<Reduction *> Rdxs, SmallVectorImpl<Pack *> &Packs, ReductionInfo &RI) {
-  std::function<void (ArrayRef<Reduction *>)> PackRec = [&](ArrayRef<Reduction *> Rdxs) {
-    auto *P = decomposeAndPack(RI, Rdxs);
-    if (!P)
-      return;
-    Packs.push_back(P);
-    for (auto O : P->getOperands())
-      if (auto SubRdxs = asReductions(O))
-        PackRec(*SubRdxs);
-  };
+static void packReductions(ArrayRef<Reduction *> Rdxs,
+                           SmallVectorImpl<Pack *> &Packs, ReductionInfo &RI,
+                           LooseInstructionTable &LIT) {
+  std::function<void(ArrayRef<Reduction *>)> PackRec =
+      [&](ArrayRef<Reduction *> Rdxs) {
+        auto *P = decomposeAndPack(RI, LIT, Rdxs);
+        if (!P)
+          return;
+        Packs.push_back(P);
+        for (auto O : P->getOperands())
+          if (auto SubRdxs = cast_many<Value, Reduction>(O))
+            PackRec(*SubRdxs);
+      };
   PackRec(Rdxs);
 }
 
@@ -186,12 +194,24 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   if (Rdx) {
     errs() << "Packing reduction " << *Rdx << '\n';
     SmallVector<Reduction *, 4> SubRdxs;
+    LooseInstructionTable LIT;
     RI.split(Rdx, std::min<unsigned>(ReductionWidth, Rdx->Elements.size()),
              SubRdxs);
     // Produce the decomposed reductions as a vector
-    errs() << "??? num packs before packing reductions: " << Packs.size() << '\n';
-    packReductions(SubRdxs, Packs, RI);
-    errs() << "!!! num packs after packing reductions: " << Packs.size() << '\n';
+    packReductions(SubRdxs, Packs, RI, LIT);
+    // Pack the final horizontal reduction
+    Packs.push_back(new ReductionPack(
+        Rdx->Kind, NameToInstMap.lookup(ReductionToPack), *cast_many<Reduction, Value>(SubRdxs)));
+    std::vector<Instruction *> LooseInsts;
+    for (auto *P : Packs) {
+      for (auto *I : P->values())
+        if (LIT.isLoose(I))
+          LooseInsts.push_back(I);
+    }
+    DependenceChecker DepChecker(PSSA, DI, AA, LI);
+    bool Ok = LIT.insertInto(LooseInsts, PSSA, DepChecker);
+    if (!Ok)
+      return PreservedAnalyses::none();
     abort();
   }
 
