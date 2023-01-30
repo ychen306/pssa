@@ -208,6 +208,7 @@ void DependencesFinder::visit(Item It, bool AddDep) {
   if (!VL->contains(It))
     return;
 
+  // Find out the outermost loop of `It` that's contained by `VL`.
   while (ParentVL != VL) {
     It = ParentVL;
     ParentVL = ParentVL->getParent();
