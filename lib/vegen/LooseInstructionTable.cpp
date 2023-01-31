@@ -37,12 +37,9 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
     Rdx->replaceAllUsesWith(R);
   }
 
-  errs() << "Num loose instructions " << Insts.size() << '\n';
-
   // Step 2: insert the loose instructions (and their loose operands)
   std::function<bool(Value *)> InsertIfLoose = [&](Value *V) -> bool {
     auto *I = dyn_cast<Instruction>(V);
-    errs() << "???? trying to insert " << *V << '\n';
     if (!I || !isLoose(I))
       return true;
 
@@ -56,20 +53,12 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
     auto Loc = LooseInsts[I];
     auto *VL = Loc.VL;
 
-    errs() << "Inserting " << *I << "\n";
-
     // Find the earliest user of `I` inside `VL`,
     // this is where we will *try* to insert the instruction
     Optional<Item> Earliest;
     for (auto *U : I->users()) {
-      errs() << "???? " << *U << '\n';
       if (isLoose(U))
         continue;
-      auto *R = dyn_cast<Reducer>(U);
-      if (R)
-        errs() << "!!!! used by reducer " << *R << '\n';
-      else
-        errs() << "!!! used by inst " << *U << '\n';
 
       auto *UI = cast<Instruction>(U);
       auto *UserVL = PSSA.getLoopForInst(UI);
@@ -98,9 +87,6 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
       bool FoundCycle = DepFinder.findDep(I);
       if (FoundCycle)
         return false;
-
-      errs() << "~~~ earliest = " << *Earliest->asInstruction() << '\n';
-      errs() << "Moving " << Deps.size() << " deps\n";
 
       auto InsertPt = VL->toIterator(*Earliest);
 
