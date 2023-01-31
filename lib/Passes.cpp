@@ -197,9 +197,10 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     LooseInstructionTable LIT;
     RI.split(Rdx, std::min<unsigned>(ReductionWidth, Rdx->Elements.size()),
              SubRdxs);
+    for (auto *Rdx : SubRdxs)
+      errs() << "\t " << *Rdx << '\n';
     // Produce the decomposed reductions as a vector
     packReductions(SubRdxs, Packs, RI, LIT);
-    auto *OrigI = NameToInstMap.lookup(ReductionToPack);
     auto *RootR = Reducer::Create(Rdx, *cast_many<Reduction, Value>(SubRdxs));
     LIT.addLoose(RootR);
     // Pack the final horizontal reduction
@@ -214,7 +215,6 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     bool Ok = LIT.insertInto(LooseInsts, PSSA, DepChecker, RI);
     if (!Ok)
       return PreservedAnalyses::none();
-    //abort();
   }
 
   lower(Packs, PSSA, DI, AA, LI);
