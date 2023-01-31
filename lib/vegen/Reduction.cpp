@@ -1,6 +1,6 @@
 #include "Reduction.h"
-#include "Reducer.h"
 #include "LooseInstructionTable.h"
+#include "Reducer.h"
 #include "pssa/PSSA.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/PatternMatch.h"
@@ -71,6 +71,43 @@ raw_ostream &operator<<(raw_ostream &OS, const Reduction &Rdx) {
   }
   OS << ')';
   return OS;
+}
+
+static Value *getIdentity(RecurKind Kind, Type *Ty) {
+  switch (Kind) {
+  case RecurKind::Xor:
+  case RecurKind::Add:
+  case RecurKind::Or:
+    return ConstantInt::get(Ty, 0);
+  case RecurKind::Mul:
+    return ConstantInt::get(Ty, 1);
+  case RecurKind::And:
+    return ConstantInt::get(Ty, -1, true);
+  case RecurKind::FMul:
+    return ConstantFP::get(Ty, 1.0L);
+  case RecurKind::FAdd:
+    return ConstantFP::get(Ty, 0.0L);
+  case RecurKind::UMin:
+    return ConstantInt::get(Ty, -1);
+  case RecurKind::UMax:
+    return ConstantInt::get(Ty, 0);
+  case RecurKind::SMin:
+    return ConstantInt::get(Ty,
+                            APInt::getSignedMaxValue(Ty->getIntegerBitWidth()));
+  case RecurKind::SMax:
+    return ConstantInt::get(Ty,
+                            APInt::getSignedMinValue(Ty->getIntegerBitWidth()));
+  case RecurKind::FMin:
+    return ConstantFP::getInfinity(Ty, false /*Negative*/);
+  case RecurKind::FMax:
+    return ConstantFP::getInfinity(Ty, true /*Negative*/);
+  default:
+    llvm_unreachable("Unknown recurrence kind");
+  }
+}
+
+static bool isIdentity(RecurKind Kind, Value *V) {
+  return getIdentity(Kind, V->getType()) == V;
 }
 
 struct SimpleReduction {
@@ -187,11 +224,12 @@ void ReductionInfo::processLoop(VLoop *VL) {
         continue;
       }
       // Strengthen the reduction condition based on the phi
-      // but skip if the condition happens to be the condition of the outermost loop
-      // that we are reducing over (in which case it's redundant)
+      // but skip if the condition happens to be the condition of the outermost
+      // loop that we are reducing over (in which case it's redundant)
       if (Elt.Loops.empty() || Elt.Loops.back()->getLoopCond() != C) {
         // FIXME: it's possible that this creates cyclic control dependences
-        // maybe only do this transformation if one of C and Elt.C implies the other
+        // maybe only do this transformation if one of C and Elt.C implies the
+        // other
         Elt.C = getAnd(VL->getPSSA(), C, Elt.C);
       }
     }
@@ -305,21 +343,28 @@ void ReductionInfo::processLoop(VLoop *VL) {
     }
     Rdx->ParentLoop = VL->getParent();
     Rdx->ParentCond = VL->getLoopCond();
-    // If we use `Rec` outside of `VL`, we are actually using the reduction `Rdx`
+    // If we use `Rec` outside of `VL`, we are actually using the reduction
+    // `Rdx`
     LiveOutRdxs[Rec] = {Rdx, VL};
   }
 }
 
 ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
   processLoop(&PSSA.getTopLevel());
-#ifndef NDEBUG
-  // Check that we recorded the context of reduction properly
+  // Remove any identity elements
   for (auto [V, Rdx] : ValueToReductionMap) {
     auto *I = cast<Instruction>(V);
     assert(PSSA.getInstCond(I) == Rdx->ParentCond);
     assert(PSSA.getLoopForInst(I) == Rdx->ParentLoop);
+    (void)I;
+
+    decltype(Rdx->Elements) NewElements;
+    for (auto &Elt : Rdx->Elements) {
+      if (!isIdentity(Rdx->Kind, Elt.Val))
+        NewElements.push_back(Elt);
+    }
+    Rdx->Elements = NewElements;
   }
-#endif
 }
 
 void ReductionInfo::split(const Reduction *Rdx, unsigned Parts,
@@ -340,6 +385,21 @@ void ReductionInfo::split(const Reduction *Rdx, unsigned Parts,
 
 Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
                                             LooseInstructionTable &LIT) {
+  if (Rdx->IsPrev)
+    return nullptr;
+
+  // Decompose a recurrent reduction
+  if (Rdx->size() == 1 && !Rdx->Elements.front().Loops.empty()) {
+    // decompose (+ a^L) -> (+ a^L'), (+ a)
+    auto *Prev = copyReduction(Rdx);
+    Prev->IsPrev = true;
+    auto *Cur = copyReduction(Rdx);
+    Cur->Elements.front().Loops.pop_back();
+    auto *R = Reducer::Create(Rdx, {Prev, Cur});
+    LIT.addLoose(R);
+    return R;
+  }
+
   if (Rdx->size() < 2)
     return nullptr;
 
@@ -357,4 +417,9 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
   R->setName("binary-reducer");
   LIT.addLoose(R);
   return R;
+}
+
+void ReductionInfo::setReductionFor(Value *V, Reduction *Rdx) {
+  ValueToReductionMap[V] = Rdx;
+  ReductionToValuesMap[Rdx].push_back(V);
 }

@@ -111,10 +111,16 @@ static void packReductions(ArrayRef<Reduction *> Rdxs,
                            LooseInstructionTable &LIT) {
   std::function<void(ArrayRef<Reduction *>)> PackRec =
       [&](ArrayRef<Reduction *> Rdxs) {
+        // don't try to deal with "prev" reduction
+        for (auto *Rdx : Rdxs)
+          if (Rdx->IsPrev)
+            return;
+
         auto *P = decomposeAndPack(RI, LIT, Rdxs);
         if (!P)
           return;
         Packs.push_back(P);
+
         for (auto O : P->getOperands())
           if (auto SubRdxs = cast_many<Value, Reduction>(O))
             PackRec(*SubRdxs);

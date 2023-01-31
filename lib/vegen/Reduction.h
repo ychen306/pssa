@@ -53,6 +53,7 @@ struct Reduction : public llvm::Instruction {
     Kind = Rdx->Kind;
     Elements = Rdx->Elements;
     ParentLoop = Rdx->ParentLoop;
+    ParentCond = Rdx->ParentCond;
     IsPrev = Rdx->IsPrev;
   }
 
@@ -108,10 +109,7 @@ class ReductionInfo {
     return Rdx;
   }
   void processLoop(VLoop *);
-  void setReductionFor(llvm::Value *V, Reduction *Rdx) {
-    ValueToReductionMap[V] = Rdx;
-    ReductionToValuesMap[Rdx].push_back(V);
-  }
+  void setReductionFor(llvm::Value *V, Reduction *Rdx);
 
 public:
   ReductionInfo(PredicatedSSA &);
