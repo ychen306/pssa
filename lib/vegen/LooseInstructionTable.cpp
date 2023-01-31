@@ -1,7 +1,7 @@
 #include "LooseInstructionTable.h"
-#include "Reducer.h"
 #include "DependenceChecker.h"
 #include "ItemMover.h"
+#include "Reducer.h"
 #include "pssa/PSSA.h"
 
 using namespace llvm;
@@ -14,22 +14,33 @@ void LooseInstructionTable::addLoose(Reducer *R) {
 }
 
 bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
-                                       PredicatedSSA &PSSA, DependenceChecker &DepChecker) {
+                                       PredicatedSSA &PSSA,
+                                       DependenceChecker &DepChecker,
+                                       ReductionInfo &RI) {
+  // Collect all of the reductions being produced
+  std::vector<std::pair<Reduction *, Reducer *>> Reductions;
+  std::function<void(Value *)> CollectRdxs = [&](Value *V) {
+    auto *R = dyn_cast<Reducer>(V);
+    if (!R)
+      return;
+    Reductions.emplace_back(R->getResult(), R);
+    llvm::for_each(R->operand_values(), CollectRdxs);
+  };
+
+  llvm::for_each(Insts, CollectRdxs);
+
   // Step 1:
   // rewire the loose instructions to use `Reducers` instead of `Reductions`
-  for (auto *I : Insts) {
-    assert(isLoose(I) && "can only insert loose instruction");
-    auto *R = dyn_cast<Reducer>(I);
-    if (!R)
-      continue;
-    auto *Rdx = R->getResult();
-    Rdx->replaceAllUsesWith(I);
+  for (auto [Rdx, R] : Reductions) {
+    for (auto *V : RI.getValuesForReduction(Rdx))
+      V->replaceAllUsesWith(R);
+    Rdx->replaceAllUsesWith(R);
   }
 
   errs() << "Num loose instructions " << Insts.size() << '\n';
 
   // Step 2: insert the loose instructions (and their loose operands)
-  std::function<bool (Value *)> InsertIfLoose = [&](Value *V) -> bool {
+  std::function<bool(Value *)> InsertIfLoose = [&](Value *V) -> bool {
     auto *I = dyn_cast<Instruction>(V);
     errs() << "???? trying to insert " << *V << '\n';
     if (!I || !isLoose(I))
@@ -76,7 +87,8 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
         Earliest = UserIt;
     }
 
-    // Insert VL at the end of VL, we may have to move it again if it has some users
+    // Insert VL at the end of VL, we may have to move it again if it has some
+    // users
     VL->insert(I, Loc.C, VL->item_end());
     if (Earliest) {
       // Find all dependences of `I` that occurs *after* `Earliest`.

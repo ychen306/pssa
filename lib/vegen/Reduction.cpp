@@ -207,19 +207,19 @@ void ReductionInfo::processLoop(VLoop *VL) {
           // detect identity phis created by LCSSA
           auto *Val = PN->getIncomingValue(0);
           if (auto *Rdx = ValueToReductionMap.lookup(Val)) {
-            ValueToReductionMap[PN] = Rdx;
+            setReductionFor(PN, Rdx);
             if (LiveOutRdxs.count(Val)) {
               auto [LiveOutRdx, ProducerVL] = LiveOutRdxs[Val];
               // Ensure that this is indeed a LCSSA Phi
               if (!ProducerVL->contains(PN))
-                ValueToReductionMap[PN] = LiveOutRdx;
+                setReductionFor(PN, LiveOutRdx);
             }
           }
         } else if (PN->getNumOperands() == 2) {
           if (auto *Rdx = MatchPhiReduction(PN, 0, 1))
-            ValueToReductionMap[PN] = Rdx;
+            setReductionFor(PN, Rdx);
           else if (auto *Rdx = MatchPhiReduction(PN, 1, 0))
-            ValueToReductionMap[PN] = Rdx;
+            setReductionFor(PN, Rdx);
         }
       }
 
@@ -251,7 +251,7 @@ void ReductionInfo::processLoop(VLoop *VL) {
       }
       Merged->ParentLoop = VL;
       Merged->ParentCond = C;
-      ValueToReductionMap[I] = Merged;
+      setReductionFor(I, Merged);
       continue;
     }
     assert(It.asLoop());

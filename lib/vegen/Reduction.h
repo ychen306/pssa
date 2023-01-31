@@ -91,6 +91,7 @@ class LooseInstructionTable;
 
 class ReductionInfo {
   llvm::DenseMap<llvm::Value *, Reduction *> ValueToReductionMap;
+  llvm::DenseMap<Reduction *, std::vector<llvm::Value *>> ReductionToValuesMap;
   // Mapping value to the its corresponding recurrent reduction.
   // For example, consider `for (int i ... ) s += x[i];`.
   // Inside the loop, the add may have the reduction `(+ phi x[i])`
@@ -107,6 +108,10 @@ class ReductionInfo {
     return Rdx;
   }
   void processLoop(VLoop *);
+  void setReductionFor(llvm::Value *V, Reduction *Rdx) {
+    ValueToReductionMap[V] = Rdx;
+    ReductionToValuesMap[Rdx].push_back(V);
+  }
 
 public:
   ReductionInfo(PredicatedSSA &);
@@ -122,6 +127,14 @@ public:
 
   // Decompose a reduction into sub redutions with a binary reducer
   llvm::Reducer *decomposeWithBinary(Reduction *Rdx, LooseInstructionTable &LIT);
+
+  // Get the original IR values that computes a given reduction
+  llvm::ArrayRef<llvm::Value *> getValuesForReduction(Reduction *Rdx) const {
+    auto It = ReductionToValuesMap.find(Rdx);
+    if (It == ReductionToValuesMap.end())
+      return {};
+    return It->second;
+  }
 };
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Reduction &);

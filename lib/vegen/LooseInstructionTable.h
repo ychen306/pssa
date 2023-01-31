@@ -14,6 +14,7 @@ class VLoop;
 class ControlCondition;
 class PredicatedSSA;
 class DependenceChecker;
+class ReductionInfo;
 
 // Utility to keep track of instructions
 // created from scratch to change the order of reductions.
@@ -44,7 +45,8 @@ public:
   // We fail if somehow we accidentally introduced
   // a dependence cycle while decomposing the reductions.
   bool insertInto(llvm::ArrayRef<llvm::Instruction *> Insts,
-                  PredicatedSSA &PSSA, DependenceChecker &DepChecker);
+                  PredicatedSSA &PSSA, DependenceChecker &DepChecker,
+                  ReductionInfo &RI);
 };
 
 #endif // END VEGEN_LOOSEINSTRUCTIONTABLE_H

@@ -202,8 +202,6 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     auto *OrigI = NameToInstMap.lookup(ReductionToPack);
     auto *RootR = Reducer::Create(Rdx, *cast_many<Reduction, Value>(SubRdxs));
     LIT.addLoose(RootR);
-    // FIXME: get rid of this RAUW hack
-    OrigI->replaceAllUsesWith(RootR);
     // Pack the final horizontal reduction
     Packs.push_back(new ReductionPack(RootR));
     std::vector<Instruction *> LooseInsts;
@@ -213,7 +211,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
           LooseInsts.push_back(I);
     }
     DependenceChecker DepChecker(PSSA, DI, AA, LI);
-    bool Ok = LIT.insertInto(LooseInsts, PSSA, DepChecker);
+    bool Ok = LIT.insertInto(LooseInsts, PSSA, DepChecker, RI);
     if (!Ok)
       return PreservedAnalyses::none();
     //abort();
