@@ -197,8 +197,6 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     LooseInstructionTable LIT;
     RI.split(Rdx, std::min<unsigned>(ReductionWidth, Rdx->Elements.size()),
              SubRdxs);
-    for (auto *Rdx : SubRdxs)
-      errs() << "\t " << *Rdx << '\n';
     // Produce the decomposed reductions as a vector
     packReductions(SubRdxs, Packs, RI, LIT);
     auto *RootR = Reducer::Create(Rdx, *cast_many<Reduction, Value>(SubRdxs));
