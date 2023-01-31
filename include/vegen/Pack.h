@@ -13,6 +13,7 @@ class raw_ostream;
 class DataLayout;
 class ScalarEvolution;
 class LoopInfo;
+class Reducer;
 } // namespace llvm
 
 class PredicatedSSA;
@@ -246,16 +247,16 @@ public:
 };
 
 struct Reduction;
+
 class ReductionPack : public Pack {
-  llvm::RecurKind RdxKind;
-  llvm::SmallVector<llvm::Value *, 8> Elts;
+  // We will implement this reducer by horizontally adding up all of its operands
+  llvm::Reducer *Root;
 public:
-  // `Root` is the result of combinging `Elts`
-  ReductionPack(llvm::RecurKind RdxKind, llvm::Instruction *Root, llvm::ArrayRef<llvm::Value *> Elts)
-      : Pack({Root}, PK_Reduction), RdxKind(RdxKind), Elts(Elts.begin(), Elts.end()) {}
+  ReductionPack(llvm::Reducer *Root);
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   void print(llvm::raw_ostream &OS) const override;
+  static bool classof(const Pack *P) { return P->getKind() == PK_Reduction; }
   Pack *clone() const override;
 };
 

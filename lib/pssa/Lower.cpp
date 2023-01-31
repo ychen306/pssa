@@ -135,6 +135,7 @@ void PSSALowering::demotePhi(PredicatedSSA *PSSA, PHINode *PN) {
 }
 
 static void fixDefUseDominance(Function *F, DominatorTree &DT) {
+  F->dump();
   // Find instructions not dominating their uses.
   // This happens when we move things across branches.
   DenseMap<Instruction *, SmallVector<Instruction *, 4>> BrokenUseDefs;

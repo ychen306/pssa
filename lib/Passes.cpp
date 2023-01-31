@@ -199,9 +199,13 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
              SubRdxs);
     // Produce the decomposed reductions as a vector
     packReductions(SubRdxs, Packs, RI, LIT);
+    auto *OrigI = NameToInstMap.lookup(ReductionToPack);
+    auto *RootR = Reducer::Create(Rdx, *cast_many<Reduction, Value>(SubRdxs));
+    LIT.addLoose(RootR);
+    // FIXME: get rid of this RAUW hack
+    OrigI->replaceAllUsesWith(RootR);
     // Pack the final horizontal reduction
-    Packs.push_back(new ReductionPack(
-        Rdx->Kind, NameToInstMap.lookup(ReductionToPack), *cast_many<Reduction, Value>(SubRdxs)));
+    Packs.push_back(new ReductionPack(RootR));
     std::vector<Instruction *> LooseInsts;
     for (auto *P : Packs) {
       for (auto *I : P->values())
@@ -212,7 +216,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     bool Ok = LIT.insertInto(LooseInsts, PSSA, DepChecker);
     if (!Ok)
       return PreservedAnalyses::none();
-    abort();
+    //abort();
   }
 
   lower(Packs, PSSA, DI, AA, LI);

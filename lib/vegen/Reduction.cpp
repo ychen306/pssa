@@ -354,6 +354,7 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
   Right->Elements = {Rdx->Elements.back()};
 
   auto *R = Reducer::Create(Rdx, {Left, Right});
+  R->setName("binary-reducer");
   LIT.addLoose(R);
   return R;
 }

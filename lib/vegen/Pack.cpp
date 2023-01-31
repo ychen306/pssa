@@ -636,15 +636,18 @@ Value *AndPack::emit(ArrayRef<Value *> ReifiedMasks, ArrayRef<Value *> Operands,
   return Insert.CreateBinOp(BinaryOperator::And, ReifiedMasks.front(), Operand);
 }
 
+
+ReductionPack::ReductionPack(Reducer *Root) : Pack({Root}, PK_Reduction), Root(Root) {}
+
 SmallVector<OperandPack, 2> ReductionPack::getOperands() const {
-  return {OperandPack(Elts.begin(), Elts.end())};
+  return {OperandPack(Root->value_op_begin(), Root->value_op_end())};
 }
 
 Value *ReductionPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   assert(Operands.size() == 1 &&
          "reduction pack expects exactly one vector argument");
   Value *Src = Operands.front();
-  switch (RdxKind) {
+  switch (Root->getKind()) {
   case RecurKind::Add:
     return Insert.createAddReduce(Src);
   case RecurKind::Mul:
@@ -678,15 +681,15 @@ Value *ReductionPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
 
 void ReductionPack::print(raw_ostream &OS) const {
   OS << "reduce { ";
-  for (Value *Elt : Elts)
-    OS << *Elt << ", ";
+  for (Value *V : Root->operand_values())
+    OS << *V << ", ";
   OS << "}";
 }
 
 Pack *ReductionPack::clone() const {
   assert(Insts.size() == 1 &&
          "reduction pack should produce exactly one value");
-  return new ReductionPack(RdxKind, Insts.front(), Elts);
+  return new ReductionPack(Root);
 }
 
 raw_ostream &operator<<(raw_ostream &OS, Pack &P) {

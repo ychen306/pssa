@@ -74,6 +74,10 @@ class ExtractMaterializer : public ValueMaterializer {
                 VLoop::ItemIterator InsertBefore)
         : Vec(Vec), Idx(Idx), Val(nullptr), VL(VL), C(C),
           InsertBefore(InsertBefore) {}
+    ExtractInfo(Value *Vec, unsigned Idx, Value *Val, VLoop *VL,
+                const ControlCondition *C, VLoop::ItemIterator InsertBefore)
+        : Vec(Vec), Idx(Idx), Val(Val), VL(VL), C(C),
+          InsertBefore(InsertBefore) {}
   };
   // mapping scalar value -> the vector (and index) that contains it
   DenseMap<Value *, ExtractInfo> Infos;
@@ -82,6 +86,14 @@ public:
   // Remember a materialized vector
   void remember(Pack *P, Value *Vec, VLoop *VL, const ControlCondition *C,
                 VLoop::ItemIterator InsertBefore) {
+    // Don't need to extract from a ReductionPack,
+    // which readily produces a scalar value
+    if (isa<ReductionPack>(P)) {
+      assert(P->values().size() == 1);
+      Infos.try_emplace(P->values().front(), Vec, 0, Vec, VL, C, InsertBefore);
+      return;
+    }
+
     for (auto X : enumerate(P->values())) {
       if (!X.value())
         continue;
