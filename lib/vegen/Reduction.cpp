@@ -397,17 +397,6 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
     // because we only need to the accumulation in the innermost loop
 
     // decompose (+ a^L) -> (+ a^L'), (+ a)
-
-#if 0
-    auto *Prev = copyReduction(Rdx);
-    Prev->PrevOf = Rdx;
-    Prev->setName("prev-rdx");
-    errs() << "????? created prev rdx = " << (Value *)Prev << '\n';
-    auto *VL = Prev->Elements.front().Loops.back();
-    Prev->ParentLoop = VL;
-    Prev->ParentCond = nullptr;
-#endif
-
     auto *Cur = copyReduction(Rdx);
     auto &Elt = Cur->Elements.front();
     auto *VL = Elt.Loops.pop_back_val();
