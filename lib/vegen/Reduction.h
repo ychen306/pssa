@@ -22,7 +22,7 @@ struct ReductionElement {
 
   // Condition under which we will accumulate `Val`
   const ControlCondition *C;
-  std::vector<VLoop *> Loops;
+  llvm::SmallVector<VLoop *, 2> Loops;
 
   ReductionElement(llvm::Value *V, const ControlCondition *C) : Val(V), C(C) {}
   bool operator==(const ReductionElement &Other) const {
@@ -40,9 +40,10 @@ static constexpr unsigned ReducerValID = 121;
 
 // FIXME: don't make everything public
 struct Reduction : public llvm::Instruction {
-  // True if this value represents the previous iteration
+  // Non-null this value represents the previous iteration
   // of a recurrent reduction
-  bool IsPrev;
+  Reduction *PrevOf;
+
   llvm::RecurKind Kind;
   std::vector<ReductionElement> Elements;
   VLoop *ParentLoop;                  // where this value is available
@@ -54,11 +55,11 @@ struct Reduction : public llvm::Instruction {
     Elements = Rdx->Elements;
     ParentLoop = Rdx->ParentLoop;
     ParentCond = Rdx->ParentCond;
-    IsPrev = Rdx->IsPrev;
+    PrevOf = Rdx->PrevOf;
   }
 
   Reduction(llvm::Type *Ty)
-      : Instruction(Ty, ReductionValID, nullptr, 0), IsPrev(false) {}
+      : Instruction(Ty, ReductionValID, nullptr, 0), PrevOf(nullptr) {}
   void *operator new(size_t S) { return User::operator new(S, 0); }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
@@ -74,7 +75,7 @@ struct Reduction : public llvm::Instruction {
 
   // Detect the case of a trivial, singleton reduction
   llvm::Value *getSingleElement() const {
-    if (size() == 1 && Elements.front().Loops.empty())
+    if (size() == 1 && Elements.front().Loops.empty() && !Elements.front().C)
       return Elements.front().Val;
     return nullptr;
   }
@@ -85,6 +86,8 @@ struct Reduction : public llvm::Instruction {
   const ControlCondition *getParentCond() const {
     return ParentCond;
   }
+
+  Value *identity() const;
 };
 
 class Pack;
@@ -113,6 +116,7 @@ class ReductionInfo {
 
 public:
   ReductionInfo(PredicatedSSA &);
+  ~ReductionInfo();
   Reduction *getReductionFor(llvm::Value *V) const {
     return ValueToReductionMap.lookup(V);
   }

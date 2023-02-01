@@ -111,19 +111,20 @@ static void packReductions(ArrayRef<Reduction *> Rdxs,
                            LooseInstructionTable &LIT) {
   std::function<void(ArrayRef<Reduction *>)> PackRec =
       [&](ArrayRef<Reduction *> Rdxs) {
-        // don't try to deal with "prev" reduction
-        for (auto *Rdx : Rdxs)
-          if (Rdx->IsPrev)
-            return;
-
         auto *P = decomposeAndPack(RI, LIT, Rdxs);
         if (!P)
           return;
         Packs.push_back(P);
 
-        for (auto O : P->getOperands())
+        for (auto O : P->getOperands()) {
+          if (all_of(O, [&](auto *V) { return LIT.isLooseMu(V); })) {
+            Packs.push_back(MuPack::create(*cast_many<Value, Instruction>(O)));
+            continue;
+          }
+
           if (auto SubRdxs = cast_many<Value, Reduction>(O))
             PackRec(*SubRdxs);
+        }
       };
   PackRec(Rdxs);
 }
@@ -205,8 +206,10 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
              SubRdxs);
     // Produce the decomposed reductions as a vector
     packReductions(SubRdxs, Packs, RI, LIT);
+    errs() << "!!! num packs " << Packs.size() << '\n';
     auto *RootR = Reducer::Create(Rdx, *cast_many<Reduction, Value>(SubRdxs));
     LIT.addLoose(RootR);
+
     // Pack the final horizontal reduction
     Packs.push_back(new ReductionPack(RootR));
     std::vector<Instruction *> LooseInsts;

@@ -385,18 +385,44 @@ void ReductionInfo::split(const Reduction *Rdx, unsigned Parts,
 
 Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
                                             LooseInstructionTable &LIT) {
-  if (Rdx->IsPrev)
+  assert(Rdx->size() > 0);
+
+  if (Rdx->PrevOf)
     return nullptr;
 
+  // FIXME: this is getting messy. Refactor the decomposition code into utility
   // Decompose a recurrent reduction
   if (Rdx->size() == 1 && !Rdx->Elements.front().Loops.empty()) {
+    // FIXME: this decomposition *only correct* if there's only one loop.
+    // because we only need to the accumulation in the innermost loop
+
     // decompose (+ a^L) -> (+ a^L'), (+ a)
+
+#if 0
     auto *Prev = copyReduction(Rdx);
-    Prev->IsPrev = true;
+    Prev->PrevOf = Rdx;
+    Prev->setName("prev-rdx");
+    errs() << "????? created prev rdx = " << (Value *)Prev << '\n';
+    auto *VL = Prev->Elements.front().Loops.back();
+    Prev->ParentLoop = VL;
+    Prev->ParentCond = nullptr;
+#endif
+
     auto *Cur = copyReduction(Rdx);
-    Cur->Elements.front().Loops.pop_back();
+    auto &Elt = Cur->Elements.front();
+    auto *VL = Elt.Loops.pop_back_val();
+    Cur->ParentLoop = VL;
+    if (!Elt.Loops.empty())
+      Cur->ParentCond = Elt.Loops.back()->getLoopCond();
+    else
+      Cur->ParentCond = Elt.C;
+
+    auto *Prev = LIT.createLooseMu(VL, Rdx->identity());
+
     auto *R = Reducer::Create(Rdx, {Prev, Cur});
-    LIT.addLoose(R);
+    Prev->setIncomingValue(1, R);
+    R->setName("rec-rdx");
+    LIT.addLoose(R, VL, nullptr/*the recurrent reduction happens unconditionally*/);
     return R;
   }
 
@@ -422,4 +448,13 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
 void ReductionInfo::setReductionFor(Value *V, Reduction *Rdx) {
   ValueToReductionMap[V] = Rdx;
   ReductionToValuesMap[Rdx].push_back(V);
+}
+
+ReductionInfo::~ReductionInfo() {
+  for (auto &Rdx : Reductions)
+    Rdx->replaceAllUsesWith(UndefValue::get(Rdx->getType()));
+}
+
+Value *Reduction::identity() const {
+  return getIdentity(Kind, getType());
 }

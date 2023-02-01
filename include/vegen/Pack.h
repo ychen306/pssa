@@ -203,6 +203,10 @@ class MuPack : public Pack {
   MuPack(llvm::ArrayRef<llvm::Instruction *> Insts) : Pack(Insts, PK_Mu) {}
 
 public:
+  // Only use this if you are sure the instructions are indeed mus
+  static MuPack *create(llvm::ArrayRef<llvm::Instruction *> Mus) {
+    return new MuPack(Mus);
+  }
   static MuPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                          PredicatedSSA &PSSA);
   // No generic ::emit for MuPack

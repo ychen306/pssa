@@ -13,25 +13,34 @@ void LooseInstructionTable::addLoose(Reducer *R) {
                          Location{Rdx->getParentLoop(), Rdx->getParentCond()});
 }
 
+void LooseInstructionTable::addLoose(Reducer *R, VLoop *VL, const ControlCondition *C) {
+  assert(!LooseInsts.count(R) && "attempting to insert loose reducer twice");
+  LooseInsts.try_emplace(R, Location{VL, C});
+}
+
 bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
                                        PredicatedSSA &PSSA,
                                        DependenceChecker &DepChecker,
                                        ReductionInfo &RI) {
   // Collect all of the reductions being produced
-  std::vector<std::pair<Reduction *, Reducer *>> Reductions;
+  DenseMap<Reduction *, Reducer *> ReductionToReducerMap;
+  DenseSet<Value *> Visited;
   std::function<void(Value *)> CollectRdxs = [&](Value *V) {
+    if (!Visited.insert(V).second)
+      return;
+
     auto *R = dyn_cast<Reducer>(V);
     if (!R)
       return;
-    Reductions.emplace_back(R->getResult(), R);
+    ReductionToReducerMap.try_emplace(R->getResult(), R);
     llvm::for_each(R->operand_values(), CollectRdxs);
   };
 
   llvm::for_each(Insts, CollectRdxs);
 
   // Step 1:
-  // rewire the loose instructions to use `Reducers` instead of `Reductions`
-  for (auto [Rdx, R] : Reductions) {
+  // rewire the loose instructions to use `Reducers` instead of `ReductionToReducerMap`
+  for (auto [Rdx, R] : ReductionToReducerMap) {
     for (auto *V : RI.getValuesForReduction(Rdx))
       V->replaceAllUsesWith(R);
     Rdx->replaceAllUsesWith(R);
@@ -42,6 +51,12 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
     auto *I = dyn_cast<Instruction>(V);
     if (!I || !isLoose(I))
       return true;
+
+    if (auto *PN = dyn_cast<PHINode>(V); PN && LooseMus.count(PN)) {
+      auto *VL = LooseMus.lookup(PN);
+      VL->addMu(PN);
+      return true;
+    }
 
     for (auto *O : I->operand_values()) {
       bool Ok = InsertIfLoose(O);
@@ -111,5 +126,23 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
     if (!Ok)
       return false;
   }
+
   return true;
+}
+
+PHINode *LooseInstructionTable::createLooseMu(VLoop *VL, Value *InitVal) {
+  auto *Mu = PHINode::Create(InitVal->getType(), 2);
+  Mu->setNumHungOffUseOperands(2);
+  Mu->setIncomingValue(0, InitVal);
+  LooseMus.try_emplace(Mu, VL);
+  return Mu;
+}
+
+LooseInstructionTable::~LooseInstructionTable() {
+  // The table owns all of the loose instructions
+  // that are still left in the table
+  for (Instruction *I : make_first_range(LooseInsts))
+    I->dropAllReferences();
+  for (PHINode *Mu : make_first_range(LooseMus))
+    Mu->dropAllReferences();
 }

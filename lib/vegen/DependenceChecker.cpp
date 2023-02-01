@@ -224,6 +224,7 @@ void DependencesFinder::visit(Item It, bool AddDep) {
   SmallVector<Item, 8> Coupled;
   // Process (register) data and control dependences
   if (auto *I = It.asInstruction()) {
+    assert(!isa<PHINode>(I) || !VL->isMu(cast<PHINode>(I)));
     Pack *P = Packs ? Packs->getPackForValue(I) : nullptr;
     // If I is packed with other instructions,
     // we also need to check their dependences

@@ -8,6 +8,7 @@
 
 namespace llvm {
 class Reducer;
+class PHINode;
 } // namespace llvm
 
 class VLoop;
@@ -27,14 +28,28 @@ class LooseInstructionTable {
     const ControlCondition *C;
   };
   llvm::DenseMap<llvm::Instruction *, Location> LooseInsts;
+  // Treate mu nodes separately
+  llvm::DenseMap<llvm::PHINode *, VLoop *> LooseMus;
 
 public:
+  ~LooseInstructionTable();
+  // Track a loose instruction
   void addLoose(llvm::Reducer *);
-  bool isLoose(llvm::Instruction *I) const { return LooseInsts.count(I); }
+  // Track a instruction with customized location (usually for recurrent reduction)
+  void addLoose(llvm::Reducer *, VLoop *, const ControlCondition *);
+  llvm::PHINode *createLooseMu(VLoop *VL, llvm::Value *Init);
+  bool isLoose(llvm::Instruction *I) const {
+    return LooseInsts.count(I) || isLooseMu(I);
+  }
   bool isLoose(llvm::Value *V) const {
     using namespace llvm;
     auto *I = dyn_cast<Instruction>(V);
     return I && isLoose(I);
+  }
+  bool isLooseMu(llvm::Value *V) const {
+    using namespace llvm;
+    auto *PN = dyn_cast<PHINode>(V); 
+    return PN && LooseMus.count(PN);
   }
   // Insert a subset of the loose instructions into the IR.
   // Note that Insts are only the "root" instructions that we want to insert;
