@@ -3,8 +3,8 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/InstructionCost.h"
 #include "llvm/Analysis/IVDescriptors.h"
+#include "llvm/Support/InstructionCost.h"
 
 namespace llvm {
 class Instruction;
@@ -192,6 +192,12 @@ class BlendPack : public Pack {
 public:
   static BlendPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                             PredicatedSSA &PSSA);
+  // Only use this if you are sue that
+  // the instructions are gated-phis and packable
+  static BlendPack *create(llvm::ArrayRef<llvm::Instruction *> Insts,
+                           bool IsOneHot, PredicatedSSA &PSSA) {
+    return new BlendPack(Insts, IsOneHot, PSSA);
+  }
   llvm::SmallVector<VectorMask, 2> masks() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_Blend; }
@@ -253,8 +259,10 @@ public:
 struct Reduction;
 
 class ReductionPack : public Pack {
-  // We will implement this reducer by horizontally adding up all of its operands
+  // We will implement this reducer by horizontally adding up all of its
+  // operands
   llvm::Reducer *Root;
+
 public:
   ReductionPack(llvm::Reducer *Root);
   llvm::SmallVector<OperandPack, 2> getOperands() const override;

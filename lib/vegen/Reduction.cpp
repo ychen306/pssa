@@ -48,6 +48,8 @@ static StringRef getName(VLoop *VL) {
   return PSSA->getOrigLoop(VL)->getHeader()->getName();
 }
 
+void Reduction::dump() const { errs() << *this << '\n'; }
+
 raw_ostream &operator<<(raw_ostream &OS, const Reduction &Rdx) {
   OS << "(" << getReductionName(Rdx.Kind);
   for (auto &Elt : Rdx.Elements) {
@@ -406,12 +408,13 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
     else
       Cur->ParentCond = Elt.C;
 
-    auto *Prev = LIT.createLooseMu(VL, Rdx->identity());
+    auto *Prev = LIT.createMu(VL, Rdx->identity());
 
     auto *R = Reducer::Create(Rdx, {Prev, Cur});
     Prev->setIncomingValue(1, R);
     R->setName("rec-rdx");
-    LIT.addLoose(R, VL, nullptr/*the recurrent reduction happens unconditionally*/);
+    LIT.addLoose(R, VL,
+                 nullptr /*the recurrent reduction happens unconditionally*/);
     return R;
   }
 
@@ -444,6 +447,21 @@ ReductionInfo::~ReductionInfo() {
     Rdx->replaceAllUsesWith(UndefValue::get(Rdx->getType()));
 }
 
-Value *Reduction::identity() const {
-  return getIdentity(Kind, getType());
+Value *Reduction::identity() const { return getIdentity(Kind, getType()); }
+
+// (+ a@c) -> phi (c : a, _: 0)
+PHINode *ReductionInfo::unwrapCondition(Reduction *Rdx,
+                                        LooseInstructionTable &LIT) {
+  if (Rdx->Elements.size() != 1)
+    return nullptr;
+
+  auto &X = Rdx->Elements.front();
+  if (!X.Loops.empty() || !X.C)
+    return nullptr;
+
+  auto *PN =
+      LIT.createOneHotPhi(Rdx->getParentLoop(), X.C, X.Val /*if true*/,
+                          Rdx->identity() /*if false*/, Rdx->getParentCond(),
+                          Rdx /*the reduction the PN produces*/);
+  return PN;
 }

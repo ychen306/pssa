@@ -16,6 +16,7 @@ class ControlCondition;
 class PredicatedSSA;
 class DependenceChecker;
 class ReductionInfo;
+struct Reduction;
 
 // Utility to keep track of instructions
 // created from scratch to change the order of reductions.
@@ -28,16 +29,27 @@ class LooseInstructionTable {
     const ControlCondition *C;
   };
   llvm::DenseMap<llvm::Instruction *, Location> LooseInsts;
-  // Treate mu nodes separately
+  // Treate mu
   llvm::DenseMap<llvm::PHINode *, VLoop *> LooseMus;
+  // Also need to keep track of the gating conditions of one-hot phi 
+  // (we only support one-hot phis for now)
+  llvm::DenseMap<llvm::PHINode *, const ControlCondition *> OneHotConds;
+
+  // Some instructions may implement reductions, record that mapping
+  llvm::DenseMap<llvm::Instruction *, Reduction *> InstToReductionMap;
 
 public:
   ~LooseInstructionTable();
   // Track a loose instruction
   void addLoose(llvm::Reducer *);
-  // Track a instruction with customized location (usually for recurrent reduction)
+  // Track a instruction with customized location (usually for recurrent
+  // reduction)
   void addLoose(llvm::Reducer *, VLoop *, const ControlCondition *);
-  llvm::PHINode *createLooseMu(VLoop *VL, llvm::Value *Init);
+  llvm::PHINode *createMu(VLoop *VL, llvm::Value *Init);
+  // Create a one-hot phi that implements a given conditional reduction
+  llvm::PHINode *createOneHotPhi(VLoop *VL, const ControlCondition *GateC,
+                                 llvm::Value *IfTrue, llvm::Value *IfFalse,
+                                 const ControlCondition *C, Reduction *Rdx);
   bool isLoose(llvm::Instruction *I) const {
     return LooseInsts.count(I) || isLooseMu(I);
   }
@@ -48,14 +60,19 @@ public:
   }
   bool isLooseMu(llvm::Value *V) const {
     using namespace llvm;
-    auto *PN = dyn_cast<PHINode>(V); 
+    auto *PN = dyn_cast<PHINode>(V);
     return PN && LooseMus.count(PN);
+  }
+  bool isLooseOneHotPhi(llvm::Value *V) const {
+    using namespace llvm;
+    auto *PN = dyn_cast<PHINode>(V);
+    return PN && OneHotConds.count(PN);
   }
   // Insert a subset of the loose instructions into the IR.
   // Note that Insts are only the "root" instructions that we want to insert;
   // these instructions may use other loose instructions, which we will also
   // insert.
-  // 
+  //
   // Return true if successful.
   // We fail if somehow we accidentally introduced
   // a dependence cycle while decomposing the reductions.

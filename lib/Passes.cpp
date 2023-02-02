@@ -75,10 +75,31 @@ PreservedAnalyses PSSAEntry::run(Function &F, FunctionAnalysisManager &AM) {
   return PreservedAnalyses::none();
 }
 
-// Decompose a list of reductions with binary reducers and pack those reducers
+// Decompose a list of reductions with "real" instructions and pack those
+// instructions
 template <typename InstType>
-static Pack *decomposeAndPack(ReductionInfo &RI, LooseInstructionTable &LIT,
+static Pack *decomposeAndPack(PredicatedSSA &PSSA, ReductionInfo &RI,
+                              LooseInstructionTable &LIT,
                               ArrayRef<InstType *> Insts) {
+  auto *Rdx0 = dyn_cast<Reduction>(Insts.front());
+  if (!Rdx0)
+    return nullptr;
+
+  auto *PN0 = RI.unwrapCondition(Rdx0, LIT);
+  // See if we can unwrap the whole pack of instructions
+  SmallVector<Instruction *, 4> PNs = {PN0};
+  for (auto *I : drop_begin(Insts)) {
+    auto *Rdx = dyn_cast<Reduction>(I);
+    if (!Rdx)
+      return nullptr;
+    auto *PN = RI.unwrapCondition(Rdx, LIT);
+    if (!PN)
+      continue;
+    PNs.push_back(PN);
+  }
+  if (PNs.size() == Insts.size())
+    return BlendPack::create(PNs, true /*is one-hot*/, PSSA);
+
   SmallVector<Instruction *, 4> Reducers;
   for (auto *I : Insts) {
     auto *Rdx = dyn_cast<Reduction>(I);
@@ -107,11 +128,11 @@ static Optional<SmallVector<DestTy *>> cast_many(ArrayRef<SourceTy *> Xs) {
 
 // Light-weight bottom-up heuristic for packing reductions
 static void packReductions(ArrayRef<Reduction *> Rdxs,
-                           SmallVectorImpl<Pack *> &Packs, ReductionInfo &RI,
-                           LooseInstructionTable &LIT) {
+                           SmallVectorImpl<Pack *> &Packs, PredicatedSSA &PSSA,
+                           ReductionInfo &RI, LooseInstructionTable &LIT) {
   std::function<void(ArrayRef<Reduction *>)> PackRec =
       [&](ArrayRef<Reduction *> Rdxs) {
-        auto *P = decomposeAndPack(RI, LIT, Rdxs);
+        auto *P = decomposeAndPack(PSSA, RI, LIT, Rdxs);
         if (!P)
           return;
         Packs.push_back(P);
@@ -205,7 +226,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     RI.split(Rdx, std::min<unsigned>(ReductionWidth, Rdx->Elements.size()),
              SubRdxs);
     // Produce the decomposed reductions as a vector
-    packReductions(SubRdxs, Packs, RI, LIT);
+    packReductions(SubRdxs, Packs, PSSA, RI, LIT);
     errs() << "!!! num packs " << Packs.size() << '\n';
     auto *RootR = Reducer::Create(Rdx, *cast_many<Reduction, Value>(SubRdxs));
     LIT.addLoose(RootR);

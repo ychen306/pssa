@@ -88,6 +88,7 @@ struct Reduction : public llvm::Instruction {
   }
 
   Value *identity() const;
+  void dump() const;
 };
 
 class Pack;
@@ -129,6 +130,9 @@ public:
 
   // Decompose a reduction into sub redutions with a binary reducer
   llvm::Reducer *decomposeWithBinary(Reduction *Rdx, LooseInstructionTable &LIT);
+
+  // (+ a@c) -> phi (c : a, _: 0)
+  llvm::PHINode *unwrapCondition(Reduction *Rdx, LooseInstructionTable &LIT);
 
   // Get the original IR values that computes a given reduction
   llvm::ArrayRef<llvm::Value *> getValuesForReduction(Reduction *Rdx) const {
