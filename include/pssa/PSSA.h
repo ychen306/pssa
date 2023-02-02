@@ -143,6 +143,11 @@ public:
   void setLoopCond(const ControlCondition *C) { LoopCond = C; }
   bool isLoop() const { return !IsTopLevel; }
   bool isMu(llvm::PHINode *PN) const { return PN && Mus.count(PN); }
+  bool isMu(llvm::Value *V) const {
+    using namespace llvm;
+    auto *PN = dyn_cast<PHINode>(V);
+    return PN && isMu(PN);
+  }
 
   // Add a phi node as mu.
   // Assume the first value is the init. val and second rec.

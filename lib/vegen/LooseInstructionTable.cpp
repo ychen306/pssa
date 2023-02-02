@@ -55,6 +55,7 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
     if (auto *PN = dyn_cast<PHINode>(V); PN && LooseMus.count(PN)) {
       auto *VL = LooseMus.lookup(PN);
       VL->addMu(PN);
+      LooseMus.erase(PN);
       return true;
     }
 
@@ -72,7 +73,7 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
     // this is where we will *try* to insert the instruction
     Optional<Item> Earliest;
     for (auto *U : I->users()) {
-      if (isLoose(U))
+      if (isLoose(U) || VL->isMu(U))
         continue;
 
       auto *UI = cast<Instruction>(U);
