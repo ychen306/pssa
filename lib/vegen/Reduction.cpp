@@ -463,10 +463,10 @@ PHINode *ReductionInfo::unwrapCondition(Reduction *Rdx,
     if (!isImplied(VL->getLoopCond(), Rdx->getParentCond())) {
       auto *Rdx2 = copyReduction(Rdx);
       Rdx2->ParentCond = VL->getLoopCond();
-      auto *PN =
-        LIT.createOneHotPhi(Rdx->getParentLoop(), VL->getLoopCond(), Rdx2 /*if true*/,
-            Rdx->identity() /*if false*/, Rdx->getParentCond(),
-            Rdx /*the reduction the PN produces*/);
+      auto *PN = LIT.createOneHotPhi(
+          Rdx->getParentLoop(), VL->getLoopCond(), Rdx2 /*if true*/,
+          Rdx->identity() /*if false*/, Rdx->getParentCond(),
+          Rdx /*the reduction the PN produces*/);
       return PN;
     }
     return nullptr;
