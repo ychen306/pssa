@@ -394,19 +394,19 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
 
   // FIXME: this is getting messy. Refactor the decomposition code into utility
   // Decompose a recurrent reduction
-  if (Rdx->size() == 1 && !Rdx->Elements.front().Loops.empty()) {
-    // FIXME: this decomposition *only correct* if there's only one loop.
-    // because we only need to the accumulation in the innermost loop
-
+  if (Rdx->size() == 1 && Rdx->Elements.front().Loops.size() == 1) {
     // decompose (+ a^L) -> (+ a^L'), (+ a)
     auto *Cur = copyReduction(Rdx);
     auto &Elt = Cur->Elements.front();
     auto *VL = Elt.Loops.pop_back_val();
     Cur->ParentLoop = VL;
-    if (!Elt.Loops.empty())
-      Cur->ParentCond = Elt.Loops.back()->getLoopCond();
-    else
-      Cur->ParentCond = Elt.C;
+    // The accumulation must happen unconditionally every iteraiton
+    Cur->ParentCond = nullptr;
+
+    // If the loop's execution is not implied by the parent condition
+    // then we need to unwrap the condition first.
+    if (!isImplied(VL->getLoopCond(), Rdx->getParentCond()))
+      return nullptr;
 
     auto *Prev = LIT.createMu(VL, Rdx->identity());
 

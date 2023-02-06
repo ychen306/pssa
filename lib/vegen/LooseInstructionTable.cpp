@@ -14,7 +14,8 @@ void LooseInstructionTable::addLoose(Reducer *R) {
   InstToReductionMap.try_emplace(R, R->getResult());
 }
 
-void LooseInstructionTable::addLoose(Reducer *R, VLoop *VL, const ControlCondition *C) {
+void LooseInstructionTable::addLoose(Reducer *R, VLoop *VL,
+                                     const ControlCondition *C) {
   assert(!LooseInsts.count(R) && "attempting to insert loose reducer twice");
   LooseInsts.try_emplace(R, Location{VL, C});
   InstToReductionMap.try_emplace(R, R->getResult());
@@ -41,7 +42,8 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
   llvm::for_each(Insts, CollectRdxs);
 
   // Step 1:
-  // rewire the loose instructions to use `Reducers` instead of `ReductionToReducerMap`
+  // rewire the loose instructions to use `Reducers` instead of
+  // `ReductionToReducerMap`
   for (auto [Rdx, R] : ReductionToInstMap) {
     for (auto *V : RI.getValuesForReduction(Rdx))
       V->replaceAllUsesWith(R);
@@ -102,7 +104,7 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
     } else {
       // Insert one-hot phi as a special case
       assert(OneHotConds.count(PN) && "unexpected loose phi-node");
-      // We assume all loose phi conds are 
+      // We assume all loose phi conds are
       auto *GateC = OneHotConds.lookup(PN);
       assert(GateC);
       assert(LooseInsts.count(I));
@@ -159,7 +161,8 @@ PHINode *LooseInstructionTable::createMu(VLoop *VL, Value *InitVal) {
 PHINode *LooseInstructionTable::createOneHotPhi(VLoop *VL,
                                                 const ControlCondition *GateC,
                                                 Value *IfTrue, Value *IfFalse,
-                                                const ControlCondition *C, Reduction *Rdx) { 
+                                                const ControlCondition *C,
+                                                Reduction *Rdx) {
   assert(IfTrue->getType() == IfFalse->getType());
   auto *PN = PHINode::Create(IfTrue->getType(), 2);
   PN->setNumHungOffUseOperands(2);
