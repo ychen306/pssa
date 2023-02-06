@@ -456,6 +456,22 @@ PHINode *ReductionInfo::unwrapCondition(Reduction *Rdx,
     return nullptr;
 
   auto &X = Rdx->Elements.front();
+  if (!X.Loops.empty()) {
+    auto *VL = X.Loops.back();
+    // Unwrap the looping condition if the loop's execution
+    // is not guaranteed by the reduction condition
+    if (!isImplied(VL->getLoopCond(), Rdx->getParentCond())) {
+      auto *Rdx2 = copyReduction(Rdx);
+      Rdx2->ParentCond = VL->getLoopCond();
+      auto *PN =
+        LIT.createOneHotPhi(Rdx->getParentLoop(), VL->getLoopCond(), Rdx2 /*if true*/,
+            Rdx->identity() /*if false*/, Rdx->getParentCond(),
+            Rdx /*the reduction the PN produces*/);
+      return PN;
+    }
+    return nullptr;
+  }
+
   if (!X.Loops.empty() || !X.C)
     return nullptr;
 
