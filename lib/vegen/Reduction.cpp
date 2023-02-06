@@ -452,6 +452,8 @@ Value *Reduction::identity() const { return getIdentity(Kind, getType()); }
 // (+ a@c) -> phi (c : a, _: 0)
 PHINode *ReductionInfo::unwrapCondition(Reduction *Rdx,
                                         LooseInstructionTable &LIT) {
+  // FIXME: we can also unwrap if there are multiple elements but they all share
+  // the same condition
   if (Rdx->Elements.size() != 1)
     return nullptr;
 
