@@ -21,6 +21,26 @@ void LooseInstructionTable::addLoose(Reducer *R, VLoop *VL,
   InstToReductionMap.try_emplace(R, R->getResult());
 }
 
+Reducer *LooseInstructionTable::getOrCreateReducer(Reduction *Rdx,
+                                                   ArrayRef<Value *> Elts,
+                                                   const llvm::Twine &Name) {
+  auto *R = Reducer::Create(Rdx, Elts);
+  R->setName(Name);
+  addLoose(R);
+  return R;
+}
+
+Reducer *LooseInstructionTable::getOrCreateReducer(Reduction *Rdx,
+                                                   ArrayRef<Value *> Elts,
+                                                   VLoop *VL,
+                                                   const ControlCondition *C,
+                                                   const llvm::Twine &Name) {
+  auto *R = Reducer::Create(Rdx, Elts);
+  R->setName(Name);
+  addLoose(R, VL, C);
+  return R;
+}
+
 bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
                                        PredicatedSSA &PSSA,
                                        DependenceChecker &DepChecker,

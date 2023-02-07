@@ -228,8 +228,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     // Produce the decomposed reductions as a vector
     packReductions(SubRdxs, Packs, PSSA, RI, LIT);
     errs() << "!!! num packs " << Packs.size() << '\n';
-    auto *RootR = Reducer::Create(Rdx, *cast_many<Reduction, Value>(SubRdxs));
-    LIT.addLoose(RootR);
+    auto *RootR = LIT.getOrCreateReducer(Rdx, *cast_many<Reduction, Value>(SubRdxs));
 
     // Pack the final horizontal reduction
     Packs.push_back(new ReductionPack(RootR));

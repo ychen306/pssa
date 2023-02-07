@@ -412,11 +412,11 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
 
     auto *Prev = LIT.createMu(VL, Rdx->identity());
 
-    auto *R = Reducer::Create(Rdx, {Prev, dedup(Cur)});
+    auto *R = LIT.getOrCreateReducer(
+        Rdx, {Prev, dedup(Cur)}, VL,
+        nullptr /*the recurrent reduction happens unconditionally*/,
+        "rec-rdx" /*name*/);
     Prev->setIncomingValue(1, R);
-    R->setName("rec-rdx");
-    LIT.addLoose(R, VL,
-                 nullptr /*the recurrent reduction happens unconditionally*/);
     return R;
   }
 
@@ -433,10 +433,8 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
   auto *Right = copyReduction(Rdx);
   Right->Elements = {Rdx->Elements.back()};
 
-  auto *R = Reducer::Create(Rdx, {dedup(Left), dedup(Right)});
-  R->setName("binary-reducer");
-  LIT.addLoose(R);
-  return R;
+  return LIT.getOrCreateReducer(Rdx, {dedup(Left), dedup(Right)},
+                                "binary-reducer" /*name*/);
 }
 
 void ReductionInfo::setReductionFor(Value *V, Reduction *Rdx) {
@@ -486,7 +484,8 @@ PHINode *ReductionInfo::unwrapCondition(Reduction *Rdx,
   return PN;
 }
 
-static void profileReductionElement(const ReductionElement &Elt, FoldingSetNodeID &ID) {
+static void profileReductionElement(const ReductionElement &Elt,
+                                    FoldingSetNodeID &ID) {
   // Elt = v : l1 ^ l2 ^ ... @ c
   ID.AddPointer(Elt.Val);
   for (auto *VL : Elt.Loops)
@@ -495,7 +494,7 @@ static void profileReductionElement(const ReductionElement &Elt, FoldingSetNodeI
 }
 
 void profileReduction(const Reduction *Rdx, FoldingSetNodeID &ID) {
-  ID.AddInteger((unsigned) Rdx->Kind);
+  ID.AddInteger((unsigned)Rdx->Kind);
   ID.AddPointer(Rdx->ParentLoop);
   ID.AddPointer(Rdx->ParentCond);
   for (auto &Elt : Rdx->Elements) {

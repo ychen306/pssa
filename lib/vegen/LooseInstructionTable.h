@@ -3,7 +3,9 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/Optional.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/IR/Instruction.h"
 
 namespace llvm {
@@ -31,20 +33,34 @@ class LooseInstructionTable {
   llvm::DenseMap<llvm::Instruction *, Location> LooseInsts;
   // Treate mu
   llvm::DenseMap<llvm::PHINode *, VLoop *> LooseMus;
-  // Also need to keep track of the gating conditions of one-hot phi 
+  // Also need to keep track of the gating conditions of one-hot phi
   // (we only support one-hot phis for now)
   llvm::DenseMap<llvm::PHINode *, const ControlCondition *> OneHotConds;
 
   // Some instructions may implement reductions, record that mapping
   llvm::DenseMap<llvm::Instruction *, Reduction *> InstToReductionMap;
 
-public:
-  ~LooseInstructionTable();
   // Track a loose instruction
   void addLoose(llvm::Reducer *);
+
   // Track a instruction with customized location (usually for recurrent
   // reduction)
   void addLoose(llvm::Reducer *, VLoop *, const ControlCondition *);
+
+public:
+  ~LooseInstructionTable();
+
+  llvm::Reducer *getOrCreateReducer(Reduction *,
+                                    llvm::ArrayRef<llvm::Value *> Elts,
+                                    const llvm::Twine &Name = "");
+
+  // Create (or reuse an existing) reducer with a customized context 
+  // (most likely for recurrent reduction)
+  llvm::Reducer *getOrCreateReducer(Reduction *,
+                                    llvm::ArrayRef<llvm::Value *> Elts,
+                                    VLoop *VL, const ControlCondition *C,
+                                    const llvm::Twine &Name = "");
+
   llvm::PHINode *createMu(VLoop *VL, llvm::Value *Init);
   // Create a one-hot phi that implements a given conditional reduction
   llvm::PHINode *createOneHotPhi(VLoop *VL, const ControlCondition *GateC,
