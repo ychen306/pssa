@@ -354,7 +354,7 @@ void ReductionInfo::processLoop(VLoop *VL) {
 ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
   processLoop(&PSSA.getTopLevel());
   // Remove any identity elements
-  for (auto [V, Rdx] : ValueToReductionMap) {
+  for (auto &[V, Rdx] : ValueToReductionMap) {
     auto *I = cast<Instruction>(V);
     assert(PSSA.getInstCond(I) == Rdx->ParentCond);
     assert(PSSA.getLoopForInst(I) == Rdx->ParentLoop);
@@ -366,6 +366,8 @@ ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
         NewElements.push_back(Elt);
     }
     Rdx->Elements = NewElements;
+    Rdx = dedup(Rdx);
+    assert(ValueToReductionMap.lookup(V) == dedup(Rdx));
   }
 }
 
@@ -381,7 +383,7 @@ void ReductionInfo::split(const Reduction *Rdx, unsigned Parts,
     SubRdx->Elements.clear();
     for (unsigned j = i; j < N; j += Parts)
       SubRdx->Elements.push_back(Rdx->Elements[j]);
-    SubRdxs.push_back(SubRdx);
+    SubRdxs.push_back(dedup(SubRdx));
   }
 }
 
@@ -410,7 +412,7 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
 
     auto *Prev = LIT.createMu(VL, Rdx->identity());
 
-    auto *R = Reducer::Create(Rdx, {Prev, Cur});
+    auto *R = Reducer::Create(Rdx, {Prev, dedup(Cur)});
     Prev->setIncomingValue(1, R);
     R->setName("rec-rdx");
     LIT.addLoose(R, VL,
@@ -431,7 +433,7 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
   auto *Right = copyReduction(Rdx);
   Right->Elements = {Rdx->Elements.back()};
 
-  auto *R = Reducer::Create(Rdx, {Left, Right});
+  auto *R = Reducer::Create(Rdx, {dedup(Left), dedup(Right)});
   R->setName("binary-reducer");
   LIT.addLoose(R);
   return R;
@@ -466,7 +468,7 @@ PHINode *ReductionInfo::unwrapCondition(Reduction *Rdx,
       auto *Rdx2 = copyReduction(Rdx);
       Rdx2->ParentCond = VL->getLoopCond();
       auto *PN = LIT.createOneHotPhi(
-          Rdx->getParentLoop(), VL->getLoopCond(), Rdx2 /*if true*/,
+          Rdx->getParentLoop(), VL->getLoopCond(), dedup(Rdx2) /*if true*/,
           Rdx->identity() /*if false*/, Rdx->getParentCond(),
           Rdx /*the reduction the PN produces*/);
       return PN;
@@ -482,4 +484,29 @@ PHINode *ReductionInfo::unwrapCondition(Reduction *Rdx,
                           Rdx->identity() /*if false*/, Rdx->getParentCond(),
                           Rdx /*the reduction the PN produces*/);
   return PN;
+}
+
+static void profileReductionElement(const ReductionElement &Elt, FoldingSetNodeID &ID) {
+  // Elt = v : l1 ^ l2 ^ ... @ c
+  ID.AddPointer(Elt.Val);
+  for (auto *VL : Elt.Loops)
+    ID.AddPointer(VL);
+  ID.AddPointer(Elt.C);
+}
+
+void profileReduction(const Reduction *Rdx, FoldingSetNodeID &ID) {
+  ID.AddInteger((unsigned) Rdx->Kind);
+  ID.AddPointer(Rdx->ParentLoop);
+  ID.AddPointer(Rdx->ParentCond);
+  for (auto &Elt : Rdx->Elements) {
+    FoldingSetNodeID EltID;
+    profileReductionElement(Elt, EltID);
+    ID.AddNodeID(EltID);
+  }
+}
+
+Reduction *ReductionInfo::dedup(Reduction *Rdx) {
+  auto *UniqRdx = new (UniqueRdxAllocator) UniqueReduction(Rdx);
+  // FIXME: free the origin Rdx if it's not inserted?
+  return UniqueRdxs.GetOrInsertNode(UniqRdx)->Rdx;
 }

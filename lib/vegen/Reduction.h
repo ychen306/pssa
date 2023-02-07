@@ -5,6 +5,8 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/IVDescriptors.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/ADT/FoldingSet.h"
+#include "llvm/Support/Allocator.h"
 #include <vector>
 
 namespace llvm {
@@ -94,6 +96,17 @@ struct Reduction : public llvm::Instruction {
 class Pack;
 class LooseInstructionTable;
 
+void profileReduction(const Reduction *, llvm::FoldingSetNodeID &);
+
+// Hash cons Reduction so we can check equality by pointer comparison
+struct UniqueReduction : public llvm::FoldingSetNode {
+  Reduction *Rdx;
+  UniqueReduction(Reduction *Rdx) : Rdx(Rdx) {}
+  void Profile(llvm::FoldingSetNodeID &ID) {
+    profileReduction(Rdx, ID);
+  }
+};
+
 class ReductionInfo {
   llvm::DenseMap<llvm::Value *, Reduction *> ValueToReductionMap;
   llvm::DenseMap<Reduction *, std::vector<llvm::Value *>> ReductionToValuesMap;
@@ -114,6 +127,10 @@ class ReductionInfo {
   }
   void processLoop(VLoop *);
   void setReductionFor(llvm::Value *V, Reduction *Rdx);
+
+  // For hash-consing reductions
+  llvm::BumpPtrAllocator UniqueRdxAllocator;
+  llvm::FoldingSet<UniqueReduction> UniqueRdxs;
 
 public:
   ReductionInfo(PredicatedSSA &);
@@ -141,6 +158,8 @@ public:
       return {};
     return It->second;
   }
+
+  Reduction *dedup(Reduction *);
 };
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Reduction &);
