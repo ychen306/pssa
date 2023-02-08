@@ -20,6 +20,44 @@ class DependenceChecker;
 class ReductionInfo;
 struct Reduction;
 
+// Utility to hash-cons Reducer
+struct UniqueReducer : llvm::FoldingSetNode {
+  Reduction *Rdx;
+  llvm::SmallVector<llvm::Value *> Elts;
+  VLoop *VL;
+  const ControlCondition *C;
+
+  // The unique reducer
+  llvm::Reducer *R;
+
+  UniqueReducer(Reduction *Rdx, llvm::ArrayRef<llvm::Value *> Elts, VLoop *VL,
+                const ControlCondition *C)
+      : Rdx(Rdx), Elts(Elts.begin(), Elts.end()), VL(VL), C(C), R(nullptr) {}
+  void Profile(llvm::FoldingSetNodeID &ID) const;
+};
+
+// Utility to hash-cons One-hot PHI
+struct UniqueOneHotPhi : llvm::FoldingSetNode {
+  VLoop *VL;
+  const ControlCondition *GateC;
+  llvm::Value *IfTrue;
+  llvm::Value *IfFalse;
+  const ControlCondition *C;
+  // The reduction that the one-hot phi computes
+  Reduction *Rdx;
+
+  // the unique phi node
+  llvm::PHINode *PN;
+
+  UniqueOneHotPhi(VLoop *VL, const ControlCondition *GateC, llvm::Value *IfTrue,
+                  llvm::Value *IfFalse, const ControlCondition *C,
+                  Reduction *Rdx)
+      : VL(VL), GateC(GateC), IfTrue(IfTrue), IfFalse(IfFalse), C(C), Rdx(Rdx),
+        PN(nullptr) {}
+
+  void Profile(llvm::FoldingSetNodeID &ID) const;
+};
+
 // Utility to keep track of instructions
 // created from scratch to change the order of reductions.
 // These instructions are not present in the original program,
@@ -40,12 +78,20 @@ class LooseInstructionTable {
   // Some instructions may implement reductions, record that mapping
   llvm::DenseMap<llvm::Instruction *, Reduction *> InstToReductionMap;
 
+  llvm::BumpPtrAllocator UniqueReducerAllocator, UniqueOneHotPhiAllocator;
+  llvm::FoldingSet<UniqueReducer> UniqueReducers;
+  llvm::FoldingSet<UniqueOneHotPhi> UniqueOneHotPhis;
+
   // Track a loose instruction
   void addLoose(llvm::Reducer *);
 
   // Track a instruction with customized location (usually for recurrent
   // reduction)
   void addLoose(llvm::Reducer *, VLoop *, const ControlCondition *);
+
+  llvm::Reducer *findOrCreateReducer(Reduction *,
+                                     llvm::ArrayRef<llvm::Value *> Elts,
+                                     VLoop *VL, const ControlCondition *C);
 
 public:
   ~LooseInstructionTable();
@@ -54,7 +100,7 @@ public:
                                     llvm::ArrayRef<llvm::Value *> Elts,
                                     const llvm::Twine &Name = "");
 
-  // Create (or reuse an existing) reducer with a customized context 
+  // Create (or reuse an existing) reducer with a customized context
   // (most likely for recurrent reduction)
   llvm::Reducer *getOrCreateReducer(Reduction *,
                                     llvm::ArrayRef<llvm::Value *> Elts,

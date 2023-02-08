@@ -21,10 +21,30 @@ void LooseInstructionTable::addLoose(Reducer *R, VLoop *VL,
   InstToReductionMap.try_emplace(R, R->getResult());
 }
 
+void UniqueReducer::Profile(FoldingSetNodeID &ID) const {
+  ID.AddPointer(Rdx);
+  ID.AddPointer(VL);
+  ID.AddPointer(C);
+  for (auto *V : Elts)
+    ID.AddPointer(V);
+}
+
+Reducer *LooseInstructionTable::findOrCreateReducer(Reduction *Rdx,
+                                                    ArrayRef<Value *> Elts,
+                                                    VLoop *VL,
+                                                    const ControlCondition *C) {
+  auto *UR = new (UniqueReducerAllocator) UniqueReducer(Rdx, Elts, VL, C);
+  UR = UniqueReducers.GetOrInsertNode(UR);
+  if (!UR->R)
+    UR->R = Reducer::Create(Rdx, Elts);
+  return UR->R;
+}
+
 Reducer *LooseInstructionTable::getOrCreateReducer(Reduction *Rdx,
                                                    ArrayRef<Value *> Elts,
                                                    const llvm::Twine &Name) {
-  auto *R = Reducer::Create(Rdx, Elts);
+  auto *R = findOrCreateReducer(Rdx, Elts, Rdx->getParentLoop(),
+                                Rdx->getParentCond());
   R->setName(Name);
   addLoose(R);
   return R;
@@ -35,7 +55,7 @@ Reducer *LooseInstructionTable::getOrCreateReducer(Reduction *Rdx,
                                                    VLoop *VL,
                                                    const ControlCondition *C,
                                                    const llvm::Twine &Name) {
-  auto *R = Reducer::Create(Rdx, Elts);
+  auto *R = findOrCreateReducer(Rdx, Elts, VL, C);
   R->setName(Name);
   addLoose(R, VL, C);
   return R;
@@ -178,12 +198,27 @@ PHINode *LooseInstructionTable::createMu(VLoop *VL, Value *InitVal) {
   return Mu;
 }
 
+void UniqueOneHotPhi::Profile(FoldingSetNodeID &ID) const {
+  ID.AddPointer(VL);
+  ID.AddPointer(GateC);
+  ID.AddPointer(IfTrue);
+  ID.AddPointer(IfFalse);
+  ID.AddPointer(C);
+  ID.AddPointer(Rdx);
+}
+
 PHINode *LooseInstructionTable::createOneHotPhi(VLoop *VL,
                                                 const ControlCondition *GateC,
                                                 Value *IfTrue, Value *IfFalse,
                                                 const ControlCondition *C,
                                                 Reduction *Rdx) {
   assert(IfTrue->getType() == IfFalse->getType());
+  auto *UniquePN = new (UniqueOneHotPhiAllocator)
+      UniqueOneHotPhi(VL, GateC, IfTrue, IfFalse, C, Rdx);
+  UniquePN = UniqueOneHotPhis.GetOrInsertNode(UniquePN);
+  if (UniquePN->PN)
+    return UniquePN->PN;
+
   auto *PN = PHINode::Create(IfTrue->getType(), 2);
   PN->setNumHungOffUseOperands(2);
   // By default, set the true value/condition last.
@@ -192,7 +227,7 @@ PHINode *LooseInstructionTable::createOneHotPhi(VLoop *VL,
   LooseInsts.try_emplace(PN, Location{VL, C});
   OneHotConds.try_emplace(PN, GateC);
   InstToReductionMap[PN] = Rdx;
-  return PN;
+  return UniquePN->PN = PN;
 }
 
 LooseInstructionTable::~LooseInstructionTable() {

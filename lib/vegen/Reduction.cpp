@@ -353,7 +353,8 @@ void ReductionInfo::processLoop(VLoop *VL) {
 
 ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
   processLoop(&PSSA.getTopLevel());
-  // Remove any identity elements
+
+  // Remove any identity elements and hash cons the reductions
   for (auto &[V, Rdx] : ValueToReductionMap) {
     auto *I = cast<Instruction>(V);
     assert(PSSA.getInstCond(I) == Rdx->ParentCond);
@@ -378,7 +379,6 @@ void ReductionInfo::split(const Reduction *Rdx, unsigned Parts,
   assert(isPowerOf2_32(N));
   assert(N % Parts == 0);
   for (unsigned i = 0; i < Parts; i++) {
-    // FIXME: copy more efficiently
     auto *SubRdx = copyReduction(Rdx);
     SubRdx->Elements.clear();
     for (unsigned j = i; j < N; j += Parts)
