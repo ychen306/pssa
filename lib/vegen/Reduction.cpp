@@ -367,7 +367,7 @@ ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
     }
     Rdx->Elements = NewElements;
     Rdx = dedup(Rdx);
-    assert(ValueToReductionMap.lookup(V) == dedup(Rdx));
+    assert(ValueToReductionMap.lookup(V) == dedup(copyReduction(Rdx)));
   }
 }
 
