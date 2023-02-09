@@ -1,8 +1,9 @@
 #include "Reduction.h"
 #include "LooseInstructionTable.h"
 #include "Reducer.h"
-#include "pssa/PSSA.h"
 #include "pssa/Inserter.h"
+#include "pssa/PSSA.h"
+#include "pssa/Visitor.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/raw_ostream.h"
@@ -544,5 +545,69 @@ Value *emitBinaryReduction(RecurKind Kind, Value *A, Value *B,
     return Insert.createIntrinsicCall(Intrinsic::minnum, {Ty}, {A, B});
   default:
     llvm_unreachable("unexpected reduction kind");
+  }
+}
+
+namespace {
+
+// Utility to find all reduction used in a given function
+class ReductionFinder : public PSSAVisitor<ReductionFinder> {
+  DenseSet<Reduction *> &Rdxs;
+
+public:
+  ReductionFinder(DenseSet<Reduction *> &Rdxs) : Rdxs(Rdxs) {}
+  void visitInstruction(Instruction *I) {
+    for (Value *V : I->operand_values())
+      if (auto *Rdx = dyn_cast<Reduction>(V))
+        Rdxs.insert(Rdx);
+  }
+};
+
+} // namespace
+
+void lowerReductions(ReductionInfo &RI, PredicatedSSA &PSSA,
+                     LooseInstructionTable &LIT,
+                     DependenceChecker &DepChecker) {
+  // Find out all reduction we haven't lowered yet
+  DenseSet<Reduction *> Rdxs;
+  visitWith<ReductionFinder>(PSSA, Rdxs);
+
+  // Decompose those reductions into reducers and phis
+  SmallVector<Reduction *> Worklist(Rdxs.begin(), Rdxs.end());
+  DenseSet<Reduction *> Lowered;
+  SmallVector<Instruction *> LooseInsts;
+  while (!Worklist.empty()) {
+    auto *Rdx = Worklist.pop_back_val();
+    if (!Lowered.insert(Rdx).second)
+      continue;
+    Instruction *NewInst = nullptr;
+    if (Reducer *R = RI.decomposeWithBinary(Rdx, LIT)) {
+      assert(R->getNumOperands() == 2);
+      NewInst = R;
+    } else if (auto *PN = RI.unwrapCondition(Rdx, LIT)) {
+      NewInst = PN;
+    }
+    assert(NewInst && "don't know how to decompose reduction");
+    for (Value *V : NewInst->operand_values())
+      if (auto *Rdx = dyn_cast<Reduction>(V))
+        Worklist.push_back(Rdx);
+    LooseInsts.push_back(NewInst);
+  }
+
+  // Insert the new instructions
+  LIT.insertInto(LooseInsts, PSSA, DepChecker, RI);
+
+  // Replace all of the reducers with actual llvm compute instructions
+  for (auto *I : LooseInsts) {
+    auto *R = dyn_cast<Reducer>(I);
+    if (!R)
+      continue;
+    auto *VL = PSSA.getLoopForInst(R);
+    assert(R->getNumOperands() == 2);
+    Inserter Insert(VL, VL->getInstCond(R), VL->toIterator(R));
+    R->replaceAllUsesWith(emitBinaryReduction(R->getKind(), R->getOperand(0),
+                                              R->getOperand(1), Insert));
+    VL->erase(R);
+    R->dropAllReferences();
   }
 }

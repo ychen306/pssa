@@ -1,5 +1,6 @@
 #include "DependenceChecker.h"
 #include "PackSet.h"
+#include "Reduction.h"
 #include "pssa/PSSA.h"
 #include "vegen/Pack.h"
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -175,6 +176,17 @@ public:
 } // namespace
 
 void DependencesFinder::visitValue(Value *V) {
+  // Special case for checking dependences of reductions 
+  // (which are also always loose and therefore not inserted in the IR)
+  if (auto *Rdx = dyn_cast<Reduction>(V)) {
+    for (auto &Elt : Rdx->Elements) {
+      visitValue(Elt.Val);
+      visitCond(Elt.C);
+    }
+    visitCond(Rdx->ParentCond);
+    return;
+  }
+
   if (auto *I = dyn_cast<Instruction>(V))
     visit(I, true);
 }

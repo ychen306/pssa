@@ -169,7 +169,9 @@ llvm::Value *emitBinaryReduction(llvm::RecurKind, llvm::Value *A,
 
 // Find all Reductions used in the program and
 // lower them into actual instructions
-void lowerReductions(ReductionInfo &, PredicatedSSA &, LooseInstructionTable &);
+class DependenceChecker;
+void lowerReductions(ReductionInfo &, PredicatedSSA &, LooseInstructionTable &,
+                     DependenceChecker &);
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Reduction &);
 llvm::StringRef getReductionName(llvm::RecurKind);

@@ -46,6 +46,12 @@ cl::opt<unsigned> ReductionWidth("rdx-width",
                                  cl::desc("<size of the horizontal reduction>"),
                                  cl::init(4));
 
+cl::opt<bool> DisableReductionPacking(
+    "disable-reduction-packing",
+    cl::desc(
+        "bother the operands of <rdx-to-pack> and produce them as scalar"),
+    cl::init(false));
+
 struct PSSAEntry : public PassInfoMixin<PSSAEntry> {
   PreservedAnalyses run(Function &, FunctionAnalysisManager &);
 };
@@ -226,7 +232,8 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     RI.split(Rdx, std::min<unsigned>(ReductionWidth, Rdx->Elements.size()),
              SubRdxs);
     // Produce the decomposed reductions as a vector
-    packReductions(SubRdxs, Packs, PSSA, RI, LIT);
+    if (!DisableReductionPacking)
+      packReductions(SubRdxs, Packs, PSSA, RI, LIT);
     errs() << "!!! num packs " << Packs.size() << '\n';
     auto *RootR = LIT.getOrCreateReducer(Rdx, *cast_many<Reduction, Value>(SubRdxs));
 
@@ -239,9 +246,13 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
           LooseInsts.push_back(I);
     }
     DependenceChecker DepChecker(PSSA, DI, AA, LI);
+    // Insert all of the loose instructions resulting from
+    // matching and packing the reductions
     bool Ok = LIT.insertInto(LooseInsts, PSSA, DepChecker, RI);
     if (!Ok)
       return PreservedAnalyses::none();
+    // Lower any un-decomposed reductions as scalars
+    lowerReductions(RI, PSSA, LIT, DepChecker);
   }
 
   lower(Packs, PSSA, DI, AA, LI);
