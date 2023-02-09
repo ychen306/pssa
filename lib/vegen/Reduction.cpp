@@ -2,6 +2,7 @@
 #include "LooseInstructionTable.h"
 #include "Reducer.h"
 #include "pssa/PSSA.h"
+#include "pssa/Inserter.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/raw_ostream.h"
@@ -508,4 +509,40 @@ Reduction *ReductionInfo::dedup(Reduction *Rdx) {
   auto *UniqRdx = new (UniqueRdxAllocator) UniqueReduction(Rdx);
   // FIXME: free the origin Rdx if it's not inserted?
   return UniqueRdxs.GetOrInsertNode(UniqRdx)->Rdx;
+}
+
+Value *emitBinaryReduction(RecurKind Kind, Value *A, Value *B,
+                           Inserter &Insert) {
+  assert(A->getType() == B->getType());
+  auto *Ty = A->getType();
+  switch (Kind) {
+  case RecurKind::Add:
+    return Insert.CreateBinOp(Instruction::BinaryOps::Add, A, B);
+  case RecurKind::Mul:
+    return Insert.CreateBinOp(Instruction::BinaryOps::Mul, A, B);
+  case RecurKind::And:
+    return Insert.CreateBinOp(Instruction::BinaryOps::And, A, B);
+  case RecurKind::Or:
+    return Insert.CreateBinOp(Instruction::BinaryOps::Or, A, B);
+  case RecurKind::Xor:
+    return Insert.CreateBinOp(Instruction::BinaryOps::Xor, A, B);
+  case RecurKind::FAdd:
+    return Insert.CreateBinOp(Instruction::BinaryOps::FAdd, A, B);
+  case RecurKind::FMul:
+    return Insert.CreateBinOp(Instruction::BinaryOps::FMul, A, B);
+  case RecurKind::SMax:
+    return Insert.createIntrinsicCall(Intrinsic::smax, {Ty}, {A, B});
+  case RecurKind::SMin:
+    return Insert.createIntrinsicCall(Intrinsic::smin, {Ty}, {A, B});
+  case RecurKind::UMax:
+    return Insert.createIntrinsicCall(Intrinsic::umax, {Ty}, {A, B});
+  case RecurKind::UMin:
+    return Insert.createIntrinsicCall(Intrinsic::umin, {Ty}, {A, B});
+  case RecurKind::FMax:
+    return Insert.createIntrinsicCall(Intrinsic::maxnum, {Ty}, {A, B});
+  case RecurKind::FMin:
+    return Insert.createIntrinsicCall(Intrinsic::minnum, {Ty}, {A, B});
+  default:
+    llvm_unreachable("unexpected reduction kind");
+  }
 }

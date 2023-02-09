@@ -162,6 +162,15 @@ public:
   Reduction *dedup(Reduction *);
 };
 
+class Inserter;
+// emit instructions to compute a single binary reduction
+llvm::Value *emitBinaryReduction(llvm::RecurKind, llvm::Value *A,
+                                 llvm::Value *B, Inserter &);
+
+// Find all Reductions used in the program and
+// lower them into actual instructions
+void lowerReductions(ReductionInfo &, PredicatedSSA &, LooseInstructionTable &);
+
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Reduction &);
 llvm::StringRef getReductionName(llvm::RecurKind);
 

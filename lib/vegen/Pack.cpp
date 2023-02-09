@@ -1,6 +1,6 @@
 #include "vegen/Pack.h"
-#include "Reducer.h"
 #include "AddrUtil.h"
+#include "Reducer.h"
 #include "pssa/Inserter.h"
 #include "pssa/PSSA.h"
 #include "llvm/IR/Constants.h"
@@ -81,8 +81,7 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
       return nullptr;
     if (!all_of(Rest, [R0](Instruction *I) {
           auto *R = dyn_cast<Reducer>(I);
-          return R && R->getKind() == R0->getKind() &&
-                 R->getNumOperands() == 2;
+          return R && R->getKind() == R0->getKind() && R->getNumOperands() == 2;
         }))
       return nullptr;
   }
@@ -96,44 +95,7 @@ Value *SIMDPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   if (auto *R = dyn_cast<Reducer>(Insts.front())) {
     assert(R->getNumOperands() == 2);
     assert(Operands.size() == 2);
-    auto *VecTy = FixedVectorType::get(R->getType(), Insts.size());
-    switch (R->getKind()) {
-    case RecurKind::Add:
-      return Insert.CreateBinOp(Instruction::BinaryOps::Add, Operands[0],
-                                Operands[1]);
-    case RecurKind::Mul:
-      return Insert.CreateBinOp(Instruction::BinaryOps::Mul, Operands[0],
-                                Operands[1]);
-    case RecurKind::And:
-      return Insert.CreateBinOp(Instruction::BinaryOps::And, Operands[0],
-                                Operands[1]);
-    case RecurKind::Or:
-      return Insert.CreateBinOp(Instruction::BinaryOps::Or, Operands[0],
-                                Operands[1]);
-    case RecurKind::Xor:
-      return Insert.CreateBinOp(Instruction::BinaryOps::Xor, Operands[0],
-                                Operands[1]);
-    case RecurKind::FAdd:
-      return Insert.CreateBinOp(Instruction::BinaryOps::FAdd, Operands[0],
-                                Operands[1]);
-    case RecurKind::FMul:
-      return Insert.CreateBinOp(Instruction::BinaryOps::FMul, Operands[0],
-                                Operands[1]);
-    case RecurKind::SMax:
-      return Insert.createIntrinsicCall(Intrinsic::smax, {VecTy}, Operands);
-    case RecurKind::SMin:
-      return Insert.createIntrinsicCall(Intrinsic::smin, {VecTy}, Operands);
-    case RecurKind::UMax:
-      return Insert.createIntrinsicCall(Intrinsic::umax, {VecTy}, Operands);
-    case RecurKind::UMin:
-      return Insert.createIntrinsicCall(Intrinsic::umin, {VecTy}, Operands);
-    case RecurKind::FMax:
-      return Insert.createIntrinsicCall(Intrinsic::maxnum, {VecTy}, Operands);
-    case RecurKind::FMin:
-      return Insert.createIntrinsicCall(Intrinsic::minnum, {VecTy}, Operands);
-    default:
-      llvm_unreachable("unexpected reduction kind");
-    }
+    return emitBinaryReduction(R->getKind(), Operands[0], Operands[1], Insert);
   }
 
   if (auto *BO = dyn_cast<BinaryOperator>(I)) {
@@ -235,7 +197,7 @@ void Pack::print(raw_ostream &OS) const {
   for (auto *I : values()) {
     if (!I)
       OS << "dont_care";
-    else if (auto *R = dyn_cast<Reducer>(I)) 
+    else if (auto *R = dyn_cast<Reducer>(I))
       R->dump(OS);
     else if (I->hasName())
       OS << I->getName();
@@ -636,8 +598,8 @@ Value *AndPack::emit(ArrayRef<Value *> ReifiedMasks, ArrayRef<Value *> Operands,
   return Insert.CreateBinOp(BinaryOperator::And, ReifiedMasks.front(), Operand);
 }
 
-
-ReductionPack::ReductionPack(Reducer *Root) : Pack({Root}, PK_Reduction), Root(Root) {}
+ReductionPack::ReductionPack(Reducer *Root)
+    : Pack({Root}, PK_Reduction), Root(Root) {}
 
 SmallVector<OperandPack, 2> ReductionPack::getOperands() const {
   return {OperandPack(Root->value_op_begin(), Root->value_op_end())};
