@@ -412,14 +412,7 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
     if (!isImplied(VL->getLoopCond(), Rdx->getParentCond()))
       return nullptr;
 
-    auto *Prev = LIT.createMu(VL, Rdx->identity());
-
-    auto *R = LIT.getOrCreateReducer(
-        Rdx, {Prev, dedup(Cur)}, VL,
-        nullptr /*the recurrent reduction happens unconditionally*/,
-        "rec-rdx" /*name*/);
-    Prev->setIncomingValue(1, R);
-    return R;
+    return LIT.getOrCreateRecurrentReducer(Rdx, {dedup(Cur)}, VL);
   }
 
   if (Rdx->size() < 2)

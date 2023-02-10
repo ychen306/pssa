@@ -61,6 +61,31 @@ Reducer *LooseInstructionTable::getOrCreateReducer(Reduction *Rdx,
   return R;
 }
 
+void UniqueRecurrentReducer::Profile(FoldingSetNodeID &ID) const {
+  ID.AddPointer(VL);
+  ID.AddPointer(Rdx);
+  for (auto *LoopRdx : LoopRdxs)
+    ID.AddPointer(LoopRdx);
+}
+
+Reducer *LooseInstructionTable::getOrCreateRecurrentReducer(
+    Reduction *Rdx, ArrayRef<Reduction *> LoopRdxs, VLoop *VL) {
+  auto *UniqueRecRdx = UniqueRecReducers.GetOrInsertNode(new (
+      UniqueRecReducerAllocator) UniqueRecurrentReducer(Rdx, LoopRdxs, VL));
+  if (!UniqueRecRdx->R) {
+    auto *Prev = createMu(VL, Rdx->identity());
+    SmallVector<Value *, 8> Elts = {Prev};
+    Elts.append(LoopRdxs.begin(), LoopRdxs.end());
+    auto *R = getOrCreateReducer(
+        Rdx, Elts, VL,
+        nullptr /*the recurrent reduction happens unconditionally*/,
+        "rec-rdx" /*name*/);
+    Prev->setIncomingValue(1, R);
+    UniqueRecRdx->R = R;
+  }
+  return UniqueRecRdx->R;
+}
+
 bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
                                        PredicatedSSA &PSSA,
                                        DependenceChecker &DepChecker,

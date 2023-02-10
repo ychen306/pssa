@@ -58,6 +58,25 @@ struct UniqueOneHotPhi : llvm::FoldingSetNode {
   void Profile(llvm::FoldingSetNodeID &ID) const;
 };
 
+// Utility to hash-cons recurrent reducer.
+// Note that recurrent reducer is not really a concept that
+// the code generator cares about. We are only introducing this
+// concept for hash-consing the reducer which has a cycle in its use-def chain
+struct UniqueRecurrentReducer : llvm::FoldingSetNode {
+  // Rdx => (+ loop-rdx1^L loop-rdx2^L ...)
+  Reduction *Rdx;
+  llvm::SmallVector<Reduction *, 4> LoopRdxs;
+  VLoop *VL;
+
+  llvm::Reducer *R;
+
+  UniqueRecurrentReducer(Reduction *Rdx, llvm::ArrayRef<Reduction *> LoopRdxs,
+                         VLoop *VL)
+      : Rdx(Rdx), LoopRdxs(LoopRdxs.begin(), LoopRdxs.end()), VL(VL),
+        R(nullptr) {}
+  void Profile(llvm::FoldingSetNodeID &ID) const;
+};
+
 // Utility to keep track of instructions
 // created from scratch to change the order of reductions.
 // These instructions are not present in the original program,
@@ -78,9 +97,12 @@ class LooseInstructionTable {
   // Some instructions may implement reductions, record that mapping
   llvm::DenseMap<llvm::Instruction *, Reduction *> InstToReductionMap;
 
-  llvm::BumpPtrAllocator UniqueReducerAllocator, UniqueOneHotPhiAllocator;
+  llvm::BumpPtrAllocator UniqueReducerAllocator;
+  llvm::BumpPtrAllocator UniqueOneHotPhiAllocator;
+  llvm::BumpPtrAllocator UniqueRecReducerAllocator;
   llvm::FoldingSet<UniqueReducer> UniqueReducers;
   llvm::FoldingSet<UniqueOneHotPhi> UniqueOneHotPhis;
+  llvm::FoldingSet<UniqueRecurrentReducer> UniqueRecReducers;
 
   // Track a loose instruction
   void addLoose(llvm::Reducer *);
@@ -106,6 +128,13 @@ public:
                                     llvm::ArrayRef<llvm::Value *> Elts,
                                     VLoop *VL, const ControlCondition *C,
                                     const llvm::Twine &Name = "");
+
+  // Compute Rdx => (+ loop-rdx1^L loop-rdx2^L ...).
+  // A special case here because it's otherwise impossible
+  // to hash-cons the mu node due to cycles
+  llvm::Reducer *
+  getOrCreateRecurrentReducer(Reduction *Rdx,
+                              llvm::ArrayRef<Reduction *> LoopRdxs, VLoop *VL);
 
   llvm::PHINode *createMu(VLoop *VL, llvm::Value *Init);
   // Create a one-hot phi that implements a given conditional reduction
