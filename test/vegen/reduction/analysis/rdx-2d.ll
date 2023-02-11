@@ -1,7 +1,8 @@
 ; RUN: %opt -passes=print-reductions %s -o /dev/null | FileCheck %s
 
-; CHECK: Reduction for %add.epil = add nsw i32 %i4, %s.118.epil is (add i4 s.118.epil)
+; CHECK-NOT: Reduction for %add.epil
 ; CHECK: Reduction for %add.epil.lcssa = phi i32 [ %add.epil, %for.body4.epil ] is (add i4:for.body4.epil i6:for.body4.1,for.cond1.preheader i7:for.body4,for.cond1.preheader)
+; CHECK-NOT: Reduction for %add.epil
 
 target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"

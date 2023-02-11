@@ -353,15 +353,37 @@ void ReductionInfo::processLoop(VLoop *VL) {
   }
 }
 
+// A reduction is simple if we can produce it directly with a binary reducer
+static bool isSimpleReduction(Reduction *Rdx) {
+  if (Rdx->size() != 2)
+    return false;
+
+  auto &A = Rdx->Elements[0];
+  auto &B = Rdx->Elements[1];
+  if (!A.Loops.empty() || !B.Loops.empty())
+    return false;
+
+  return A.C == Rdx->ParentCond && B.C == Rdx->ParentCond;
+}
+
 ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
   processLoop(&PSSA.getTopLevel());
 
-  // Remove any identity elements and hash cons the reductions
+  std::vector<Instruction *> SimpleRdxInsts;
+
+  // Post processing:
+  // 1) Remove any simple reductions
+  //    (e.g., we want `add a, b` instead of `(+ a b)`)
+  // 2) Remove any identity elements and hash cons the reductions
   for (auto &[V, Rdx] : ValueToReductionMap) {
     auto *I = cast<Instruction>(V);
     assert(PSSA.getInstCond(I) == Rdx->ParentCond);
     assert(PSSA.getLoopForInst(I) == Rdx->ParentLoop);
-    (void)I;
+
+    if (isSimpleReduction(Rdx)) {
+      SimpleRdxInsts.push_back(I);
+      continue;
+    }
 
     decltype(Rdx->Elements) NewElements;
     for (auto &Elt : Rdx->Elements) {
@@ -372,6 +394,9 @@ ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
     Rdx = dedup(Rdx);
     assert(ValueToReductionMap.lookup(V) == dedup(copyReduction(Rdx)));
   }
+
+  for (auto *I : SimpleRdxInsts)
+    ValueToReductionMap.erase(I);
 }
 
 void ReductionInfo::split(const Reduction *Rdx, unsigned Parts,
@@ -603,4 +628,76 @@ void lowerReductions(ReductionInfo &RI, PredicatedSSA &PSSA,
     VL->erase(R);
     R->dropAllReferences();
   }
+}
+
+// Mark instructions that are always presumed to be live:
+//   * those used by control conditions
+//   * those may have side effects
+//   * return instruction
+static std::vector<Instruction *> findRootLiveInsts(PredicatedSSA &PSSA) {
+  std::vector<Instruction *> Roots;
+
+  DenseSet<const ControlCondition *> VisitedConds;
+  auto ProcessCond = [&VisitedConds, &Roots](const ControlCondition *C) {
+    SmallVector<const ControlCondition *> Worklist{C};
+    while (!Worklist.empty()) {
+      auto *C = Worklist.pop_back_val();
+      if (!C || !VisitedConds.insert(C).second)
+        continue;
+
+      if (auto *And = dyn_cast<ConditionAnd>(C)) {
+        if (auto *I = dyn_cast<Instruction>(And->Cond))
+          Roots.push_back(I);
+        Worklist.push_back(And->Parent);
+      } else {
+        Worklist.append(cast<ConditionOr>(C)->Conds);
+      }
+    }
+  };
+
+  SmallVector<Item> Worklist{&PSSA.getTopLevel()};
+  while (!Worklist.empty()) {
+    auto It = Worklist.pop_back_val();
+    if (auto *VL = It.asLoop()) {
+      Worklist.append(VL->item_begin(), VL->item_end());
+      ProcessCond(VL->getLoopCond());
+      ProcessCond(VL->getBackEdgeCond());
+      continue;
+    }
+
+    auto *I = It.asInstruction();
+    assert(I);
+    ProcessCond(PSSA.getInstCond(I));
+    if (isa<ReturnInst>(I) || I->mayHaveSideEffects())
+      Roots.push_back(I);
+  }
+  return Roots;
+}
+
+void markLiveInsts(ReductionInfo &RI, PredicatedSSA &PSSA) {
+  // We will use an algorithm similar to LLVM's ADCE. That is,
+  // we start with a set of initial instructions that are known
+  // to be live. More generally, an instruction is live if it's
+  // from the root set or used by other live instructions.
+  std::vector<Instruction *> Worklist = findRootLiveInsts(PSSA);
+  DenseSet<Instruction *> Visited;
+  std::vector<Instruction *> LiveInsts;
+  while (!Worklist.empty()) {
+    Instruction *I = Worklist.back();
+    Worklist.pop_back();
+    if (!Visited.insert(I).second)
+      continue;
+    if (auto *Rdx = RI.getReductionFor(I)) {
+      for (auto &Elt : Rdx->Elements)
+        if (auto *I2 = dyn_cast<Instruction>(Elt.Val))
+          Worklist.push_back(I2);
+    } else {
+      LiveInsts.push_back(I);
+      for (auto *V : I->operand_values())
+        if (auto *I2 = dyn_cast<Instruction>(V))
+          Worklist.push_back(I2);
+    }
+  }
+  for (auto *I : LiveInsts)
+    errs() << "!!! found live instruction: " << *I << '\n';
 }

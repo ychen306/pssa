@@ -173,6 +173,13 @@ class DependenceChecker;
 void lowerReductions(ReductionInfo &, PredicatedSSA &, LooseInstructionTable &,
                      DependenceChecker &);
 
+// Mark all the live instructions that are left in the program
+// if we were to do the following:
+//   For each instruction I that computes a reduction R, 
+//   eplace its uses with R. This kills I, obviously,
+//   but can also transitively kill some of I's operands.
+void markLiveInsts(ReductionInfo &, PredicatedSSA &);
+
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Reduction &);
 llvm::StringRef getReductionName(llvm::RecurKind);
 

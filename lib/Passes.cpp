@@ -226,6 +226,8 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   }
 
   if (Rdx) {
+    markLiveInsts(RI, PSSA);
+
     errs() << "Packing reduction " << *Rdx << '\n';
     SmallVector<Reduction *, 4> SubRdxs;
     LooseInstructionTable LIT;

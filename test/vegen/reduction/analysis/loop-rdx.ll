@@ -1,7 +1,8 @@
 ; RUN: %opt -passes=print-reductions %s -o /dev/null | FileCheck %s
 
-; CHECK-DAG: Reduction for %add = add nsw i32 %x, %s.05 is (add x s.05)
-; CHECK-DAG: Reduction for %s.0.lcssa = phi i32 [ 0, %entry ], [ %add.lcssa, %for.cond.cleanup.loopexit ] is (add x:for.body)
+; CHECK-NOT: Reduction for %add = add nsw i32 %x, %s.05
+; CHECK: Reduction for %s.0.lcssa = phi i32 [ 0, %entry ], [ %add.lcssa, %for.cond.cleanup.loopexit ] is (add x:for.body)
+; CHECK-NOT: Reduction for %add = add nsw i32 %x, %s.05
 
 target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"
