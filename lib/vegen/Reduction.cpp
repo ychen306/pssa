@@ -270,10 +270,8 @@ void ReductionInfo::processLoop(VLoop *VL) {
         continue;
       Reduction *RdxA = ValueToReductionMap.lookup(Rdx->A);
       Reduction *RdxB = ValueToReductionMap.lookup(Rdx->B);
-      bool CanMergeA =
-          RdxA && RdxA->Kind == Rdx->Kind /* && Rdx->A->hasOneUse()*/;
-      bool CanMergeB =
-          RdxB && RdxB->Kind == Rdx->Kind /* && Rdx->B->hasOneUse()*/;
+      bool CanMergeA = RdxA && RdxA->Kind == Rdx->Kind;
+      bool CanMergeB = RdxB && RdxB->Kind == Rdx->Kind;
       auto *C = VL->getInstCond(I);
       Reduction *Merged = newReduction(I->getType());
       if (CanMergeA) {
@@ -303,9 +301,6 @@ void ReductionInfo::processLoop(VLoop *VL) {
   // Inspect the Mu nodes and see if we can
   // generalize some of the "straightline" reductions into loop reductions
   for (auto *Mu : VL->mus()) {
-    // if (!Mu->hasOneUse())
-    //   continue;
-
     // Generalize instances of `rec = (+ mu(init, rec) x0 x1 ...)`
     // into `rec = (+ init x0^L x1^L ...)`
     auto *Init = Mu->getIncomingValue(0);
@@ -338,7 +333,7 @@ void ReductionInfo::processLoop(VLoop *VL) {
 
     auto *InitRdx = ValueToReductionMap.lookup(Init);
     // Merge init's reduction group if it has one
-    if (InitRdx && InitRdx->Kind == Rdx->Kind /* && Init->hasOneUse()*/) {
+    if (InitRdx && InitRdx->Kind == Rdx->Kind) {
       // FIXME: need to strengthen the condition of these elements with the loop
       // cond of VL
       llvm::append_range(Rdx->Elements, InitRdx->Elements);
