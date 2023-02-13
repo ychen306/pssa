@@ -63,6 +63,10 @@ struct TestVectorGen : public PassInfoMixin<TestVectorGen> {
 struct ReductionPrinter : public PassInfoMixin<ReductionPrinter> {
   PreservedAnalyses run(Function &, FunctionAnalysisManager &);
 };
+
+struct LiveInstsPrinter : public PassInfoMixin<LiveInstsPrinter> {
+  PreservedAnalyses run(Function &, FunctionAnalysisManager &);
+};
 } // namespace
 
 PreservedAnalyses PSSAEntry::run(Function &F, FunctionAnalysisManager &AM) {
@@ -295,6 +299,39 @@ PreservedAnalyses ReductionPrinter::run(Function &F,
   return PreservedAnalyses::all();
 }
 
+PreservedAnalyses LiveInstsPrinter::run(Function &F, FunctionAnalysisManager &AM) {
+  auto &LI = AM.getResult<LoopAnalysis>(F);
+  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
+
+  if (!isConvertibleToPSSA(F, LI, DT))
+    return PreservedAnalyses::all();
+
+  PredicatedSSA PSSA(&F, LI, DT, PDT);
+  ReductionInfo RI(PSSA);
+  auto DeadInsts = findDeadInsts(RI, PSSA);
+
+  auto PrintIfLive = [&DeadInsts](Instruction *I) {
+    if (!DeadInsts.count(I))
+      outs() << "Live: " << *I << '\n';
+  };
+
+  std::function<void(VLoop *)> Print = [&](VLoop *VL) {
+    for (auto &It : VL->items()) {
+      if (auto *SubVL = It.asLoop()) {
+        llvm::for_each(SubVL->mus(), PrintIfLive);
+        Print(SubVL);
+        continue;
+      }
+      PrintIfLive(It.asInstruction());
+    }
+  };
+
+  Print(&PSSA.getTopLevel());
+
+  return PreservedAnalyses::all();
+}
+
 static void addPreprocessingPasses(FunctionPassManager &FPM) {
   FPM.addPass(UnifyFunctionExitNodesPass());
   FPM.addPass(LoopSimplifyPass());
@@ -331,6 +368,11 @@ static void buildPasses(PassBuilder &PB) {
 
         if (Name == "print-reductions") {
           FPM.addPass(ReductionPrinter());
+          return true;
+        }
+
+        if (Name == "print-live-insts") {
+          FPM.addPass(LiveInstsPrinter());
           return true;
         }
 

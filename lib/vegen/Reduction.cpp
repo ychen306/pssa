@@ -694,9 +694,6 @@ DenseSet<Instruction *> findDeadInsts(ReductionInfo &RI, PredicatedSSA &PSSA) {
     }
   }
 
-  for (auto *I : LiveInsts)
-    errs() << "!!! live: " << *I << '\n';
-
   DenseSet<Instruction *> DeadInsts;
   std::function<void(Item)> MarkDead = [&](Item It) {
     if (auto *VL = It.asLoop()) {
@@ -711,6 +708,7 @@ DenseSet<Instruction *> findDeadInsts(ReductionInfo &RI, PredicatedSSA &PSSA) {
         DeadInsts.insert(I);
     }
   };
+  MarkDead(&PSSA.getTopLevel());
 
   return DeadInsts;
 }
