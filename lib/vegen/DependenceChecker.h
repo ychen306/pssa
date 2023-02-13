@@ -28,10 +28,11 @@ class DependenceChecker {
   llvm::AAResults &AA;
   llvm::LoopInfo &LI;
 
-  const llvm::DenseSet<llvm::Instruction *> *LiveInsts;
+  const llvm::DenseSet<llvm::Instruction *> *DeadInsts;
 
   bool isLive(llvm::Instruction *I) const {
-    return !LiveInsts || LiveInsts->count(I);
+    bool IsDead = DeadInsts && DeadInsts->count(I);
+    return !IsDead;
   }
 
   // use std::map to avoid reacllocation
@@ -43,11 +44,11 @@ class DependenceChecker {
   bool hasDependency(llvm::Instruction *, llvm::Instruction *);
 
 public:
-  // LiveInsts is nonnull if not all instructions in the IR are live
+  // DeadInsts is an optional set of instructions known to be dead
   DependenceChecker(PredicatedSSA &PSSA, llvm::DependenceInfo &DI,
                     llvm::AAResults &AA, llvm::LoopInfo &LI,
-                    llvm::DenseSet<llvm::Instruction *> *LiveInsts = nullptr)
-      : PSSA(PSSA), DI(DI), AA(AA), LI(LI), LiveInsts(LiveInsts) {}
+                    llvm::DenseSet<llvm::Instruction *> *DeadInsts = nullptr)
+      : PSSA(PSSA), DI(DI), AA(AA), LI(LI), DeadInsts(DeadInsts) {}
 
   void invalidate(VLoop *VL) { Summaries.erase(VL); }
 

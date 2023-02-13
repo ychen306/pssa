@@ -669,14 +669,14 @@ static std::vector<Instruction *> findRootLiveInsts(PredicatedSSA &PSSA) {
   return Roots;
 }
 
-void markLiveInsts(ReductionInfo &RI, PredicatedSSA &PSSA) {
+DenseSet<Instruction *> findDeadInsts(ReductionInfo &RI, PredicatedSSA &PSSA) {
   // We will use an algorithm similar to LLVM's ADCE. That is,
   // we start with a set of initial instructions that are known
   // to be live. More generally, an instruction is live if it's
   // from the root set or used by other live instructions.
   std::vector<Instruction *> Worklist = findRootLiveInsts(PSSA);
   DenseSet<Instruction *> Visited;
-  std::vector<Instruction *> LiveInsts;
+  DenseSet<Instruction *> LiveInsts;
   while (!Worklist.empty()) {
     Instruction *I = Worklist.back();
     Worklist.pop_back();
@@ -687,12 +687,30 @@ void markLiveInsts(ReductionInfo &RI, PredicatedSSA &PSSA) {
         if (auto *I2 = dyn_cast<Instruction>(Elt.Val))
           Worklist.push_back(I2);
     } else {
-      LiveInsts.push_back(I);
+      LiveInsts.insert(I);
       for (auto *V : I->operand_values())
         if (auto *I2 = dyn_cast<Instruction>(V))
           Worklist.push_back(I2);
     }
   }
+
   for (auto *I : LiveInsts)
-    errs() << "!!! found live instruction: " << *I << '\n';
+    errs() << "!!! live: " << *I << '\n';
+
+  DenseSet<Instruction *> DeadInsts;
+  std::function<void(Item)> MarkDead = [&](Item It) {
+    if (auto *VL = It.asLoop()) {
+      llvm::for_each(VL->items(), MarkDead);
+      for (auto *PN : VL->mus())
+        if (!LiveInsts.count(PN))
+          DeadInsts.insert(PN);
+    } else {
+      auto *I = It.asInstruction();
+      assert(I);
+      if (!LiveInsts.count(I))
+        DeadInsts.insert(I);
+    }
+  };
+
+  return DeadInsts;
 }

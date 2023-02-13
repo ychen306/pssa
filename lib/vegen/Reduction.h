@@ -178,7 +178,8 @@ void lowerReductions(ReductionInfo &, PredicatedSSA &, LooseInstructionTable &,
 //   For each instruction I that computes a reduction R, 
 //   eplace its uses with R. This kills I, obviously,
 //   but can also transitively kill some of I's operands.
-void markLiveInsts(ReductionInfo &, PredicatedSSA &);
+llvm::DenseSet<llvm::Instruction *> findDeadInsts(ReductionInfo &,
+                                                  PredicatedSSA &);
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Reduction &);
 llvm::StringRef getReductionName(llvm::RecurKind);

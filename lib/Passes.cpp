@@ -226,7 +226,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   }
 
   if (Rdx) {
-    markLiveInsts(RI, PSSA);
+    auto DeadInsts = findDeadInsts(RI, PSSA);
 
     errs() << "Packing reduction " << *Rdx << '\n';
     SmallVector<Reduction *, 4> SubRdxs;
@@ -247,7 +247,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
         if (LIT.isLoose(I))
           LooseInsts.push_back(I);
     }
-    DependenceChecker DepChecker(PSSA, DI, AA, LI);
+    DependenceChecker DepChecker(PSSA, DI, AA, LI, &DeadInsts);
     // Insert all of the loose instructions resulting from
     // matching and packing the reductions
     bool Ok = LIT.insertInto(LooseInsts, PSSA, DepChecker, RI);
