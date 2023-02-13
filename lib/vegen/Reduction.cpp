@@ -416,9 +416,9 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
   if (Rdx->PrevOf)
     return nullptr;
 
-  // FIXME: this is getting messy. Refactor the decomposition code into utility
   // Decompose a recurrent reduction
-  if (Rdx->size() == 1 && Rdx->Elements.front().Loops.size() == 1) {
+  // FIXME: this is getting messy. Refactor the decomposition code into utility
+  if (Rdx->size() == 1 && !Rdx->Elements.front().Loops.empty()) {
     // decompose (+ a^L) -> (+ a^L'), (+ a)
     auto *Cur = copyReduction(Rdx);
     auto &Elt = Cur->Elements.front();
