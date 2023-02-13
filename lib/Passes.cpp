@@ -46,10 +46,14 @@ cl::opt<unsigned> ReductionWidth("rdx-width",
                                  cl::desc("<size of the horizontal reduction>"),
                                  cl::init(4));
 
+cl::opt<bool> RemoveDeadInsts(
+    "remove-dead-insts",
+    cl::desc("remove instructions killed by reductions before lowering"),
+    cl::init(false));
+
 cl::opt<bool> DisableReductionPacking(
     "disable-reduction-packing",
-    cl::desc(
-        "bother the operands of <rdx-to-pack> and produce them as scalar"),
+    cl::desc("bother the operands of <rdx-to-pack> and produce them as scalar"),
     cl::init(false));
 
 struct PSSAEntry : public PassInfoMixin<PSSAEntry> {
@@ -160,6 +164,33 @@ static void packReductions(ArrayRef<Reduction *> Rdxs,
   PackRec(Rdxs);
 }
 
+// FIXME: move this to another file; this file is for testing
+static void removeDeadInsts(VLoop *VL,
+                               const DenseSet<Instruction *> &DeadInsts) {
+  SmallVector<PHINode *> DeadMus;
+  for (auto *Mu : VL->mus())
+    if (DeadInsts.count(Mu))
+      DeadMus.push_back(Mu);
+  for (auto *Mu : DeadMus) {
+    VL->eraseMu(Mu);
+    Mu->replaceAllUsesWith(UndefValue::get(Mu->getType()));
+    Mu->dropAllReferences();
+  }
+  for (auto &It : VL->items()) {
+    if (auto *SubVL = It.asLoop()) {
+      removeDeadInsts(SubVL, DeadInsts);
+    } else {
+      auto *I = It.asInstruction();
+      assert(I);
+      if (DeadInsts.count(I)) {
+        I->replaceAllUsesWith(UndefValue::get(I->getType()));
+        VL->erase(I);
+        I->dropAllReferences();
+      }
+    }
+  }
+}
+
 PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
   auto &DL = F.getParent()->getDataLayout();
@@ -241,7 +272,8 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     if (!DisableReductionPacking)
       packReductions(SubRdxs, Packs, PSSA, RI, LIT);
     errs() << "!!! num packs " << Packs.size() << '\n';
-    auto *RootR = LIT.getOrCreateReducer(Rdx, *cast_many<Reduction, Value>(SubRdxs));
+    auto *RootR =
+        LIT.getOrCreateReducer(Rdx, *cast_many<Reduction, Value>(SubRdxs));
 
     // Pack the final horizontal reduction
     Packs.push_back(new ReductionPack(RootR));
@@ -259,9 +291,13 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       return PreservedAnalyses::none();
     // Lower any un-decomposed reductions as scalars
     lowerReductions(RI, PSSA, LIT, DepChecker);
+    if (RemoveDeadInsts) {
+      removeDeadInsts(&PSSA.getTopLevel(), DeadInsts);
+    }
   }
 
-  lower(Packs, PSSA, DI, AA, LI);
+  bool Ok = lower(Packs, PSSA, DI, AA, LI);
+  assert(Ok && "can't lower due to circular dep");
   lowerPSSAToLLVM(&F, PSSA);
 
   for (auto *P : Packs)
@@ -299,7 +335,8 @@ PreservedAnalyses ReductionPrinter::run(Function &F,
   return PreservedAnalyses::all();
 }
 
-PreservedAnalyses LiveInstsPrinter::run(Function &F, FunctionAnalysisManager &AM) {
+PreservedAnalyses LiveInstsPrinter::run(Function &F,
+                                        FunctionAnalysisManager &AM) {
   auto &LI = AM.getResult<LoopAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
