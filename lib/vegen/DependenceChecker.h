@@ -28,6 +28,12 @@ class DependenceChecker {
   llvm::AAResults &AA;
   llvm::LoopInfo &LI;
 
+  const llvm::DenseSet<llvm::Instruction *> *LiveInsts;
+
+  bool isLive(llvm::Instruction *I) const {
+    return !LiveInsts || LiveInsts->count(I);
+  }
+
   // use std::map to avoid reacllocation
   std::map<VLoop *, LoopSummary> Summaries;
 
@@ -37,9 +43,11 @@ class DependenceChecker {
   bool hasDependency(llvm::Instruction *, llvm::Instruction *);
 
 public:
+  // LiveInsts is nonnull if not all instructions in the IR are live
   DependenceChecker(PredicatedSSA &PSSA, llvm::DependenceInfo &DI,
-                    llvm::AAResults &AA, llvm::LoopInfo &LI)
-      : PSSA(PSSA), DI(DI), AA(AA), LI(LI) {}
+                    llvm::AAResults &AA, llvm::LoopInfo &LI,
+                    llvm::DenseSet<llvm::Instruction *> *LiveInsts = nullptr)
+      : PSSA(PSSA), DI(DI), AA(AA), LI(LI), LiveInsts(LiveInsts) {}
 
   void invalidate(VLoop *VL) { Summaries.erase(VL); }
 

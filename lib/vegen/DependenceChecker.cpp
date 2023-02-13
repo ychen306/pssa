@@ -36,6 +36,8 @@ void DependenceChecker::processLoop(VLoop *VL) {
     } else {
       assert(It.asInstruction());
       auto *I = It.asInstruction();
+      if (!isLive(I))
+        continue;
       if (I->mayReadOrWriteMemory())
         Summary.MemoryInsts.push_back(I);
       for (Value *O : I->operand_values()) {
@@ -45,9 +47,12 @@ void DependenceChecker::processLoop(VLoop *VL) {
       }
     }
 
-    for (auto *Mu : VL->mus())
+    for (auto *Mu : VL->mus()) {
+      if (!isLive(Mu))
+        continue;
       if (auto *I = dyn_cast<Instruction>(Mu->getIncomingValue(0)))
         Summary.LiveIns.push_back(I);
+    }
   }
 }
 
@@ -176,7 +181,7 @@ public:
 } // namespace
 
 void DependencesFinder::visitValue(Value *V) {
-  // Special case for checking dependences of reductions 
+  // Special case for checking dependences of reductions
   // (which are also always loose and therefore not inserted in the IR)
   if (auto *Rdx = dyn_cast<Reduction>(V)) {
     for (auto &Elt : Rdx->Elements) {
