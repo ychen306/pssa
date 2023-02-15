@@ -197,6 +197,10 @@ const ControlCondition *getAnd(PredicatedSSA *PSSA, const ControlCondition *C1,
   return PSSA->concat(C1, C2);
 }
 
+void ReductionInfo::trackValue(llvm::Value *V) {
+  ValueOrdering.try_emplace(V, ValueOrdering.size());
+}
+
 void ReductionInfo::processLoop(VLoop *VL) {
   auto MatchPhiReduction = [&](PHINode *PN, unsigned A,
                                unsigned B) -> Reduction * {
@@ -274,6 +278,8 @@ void ReductionInfo::processLoop(VLoop *VL) {
       bool CanMergeB = RdxB && RdxB->Kind == Rdx->Kind;
       auto *C = VL->getInstCond(I);
       Reduction *Merged = newReduction(I->getType());
+      trackValue(Rdx->A);
+      trackValue(Rdx->B);
       if (CanMergeA) {
         Merged->copyFrom(RdxA);
         if (CanMergeB) {
@@ -385,6 +391,12 @@ ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
       if (!isIdentity(Rdx->Kind, Elt.Val))
         NewElements.push_back(Elt);
     }
+
+    // Order the elements by the order in which their values are discovered
+    llvm::sort(NewElements, [&](auto &Elt1, auto &Elt2) {
+      return ValueOrdering.lookup(Elt1.Val) < ValueOrdering.lookup(Elt2.Val);
+    });
+
     Rdx->Elements = NewElements;
     Rdx = dedup(Rdx);
     assert(ValueToReductionMap.lookup(V) == dedup(copyReduction(Rdx)));

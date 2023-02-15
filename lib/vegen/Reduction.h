@@ -108,6 +108,10 @@ struct UniqueReduction : public llvm::FoldingSetNode {
 };
 
 class ReductionInfo {
+  // Remember the order in which we discover values,
+  // we prefer to order reduction elements by the order
+  // in which their values are first encountered.
+  llvm::DenseMap<llvm::Value *, unsigned> ValueOrdering;
   llvm::DenseMap<llvm::Value *, Reduction *> ValueToReductionMap;
   llvm::DenseMap<Reduction *, std::vector<llvm::Value *>> ReductionToValuesMap;
   // Mapping value to the its corresponding recurrent reduction.
@@ -131,6 +135,9 @@ class ReductionInfo {
   // For hash-consing reductions
   llvm::BumpPtrAllocator UniqueRdxAllocator;
   llvm::FoldingSet<UniqueReduction> UniqueRdxs;
+
+  // Give V an order number if we haven't seen it already
+  void trackValue(llvm::Value *V);
 
 public:
   ReductionInfo(PredicatedSSA &);

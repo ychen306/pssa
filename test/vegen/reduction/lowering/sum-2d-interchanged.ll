@@ -22,8 +22,7 @@ target triple = "x86_64-apple-macosx10.15.0"
 ; CHECK-NEXT:    [[I_VEC:%.*]] = load <4 x i32>, ptr [[ARRAYIDX6]], align 4
 ; CHECK-NEXT:    [[INDVARS_IV_NEXT]] = add nuw nsw i64 [[INDVARS_IV]], 1
 ; CHECK-NEXT:    [[EXITCOND_NOT:%.*]] = icmp eq i64 [[INDVARS_IV_NEXT]], 256
-; CHECK-NEXT:    [[TMP1:%.*]] = shufflevector <4 x i32> [[I_VEC]], <4 x i32> undef, <4 x i32> <i32 3, i32 2, i32 1, i32 0>
-; CHECK-NEXT:    [[REC_RDX_VEC]] = add <4 x i32> [[DOTMU_VEC5]], [[TMP1]]
+; CHECK-NEXT:    [[REC_RDX_VEC]] = add <4 x i32> [[DOTMU_VEC5]], [[I_VEC]]
 ; CHECK-NEXT:    [[DOT:%.*]] = select i1 [[EXITCOND_NOT]], i1 false, i1 true
 ; CHECK-NEXT:    br i1 [[DOT]], label %[[HEADER1]], label %[[EXIT3]]
 ; CHECK:       [[EXIT3]]:

@@ -598,6 +598,9 @@ static bool mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
     for (VLoop *Leader : Leaders) {
       SmallVector<VLoop *> Loops(LoopsToFuse.findLeader(Leader),
                                  LoopsToFuse.member_end());
+      llvm::sort(Loops, [&](auto *VL1, auto *VL2) {
+        return VL->comesBefore(VL1, VL2);
+      });
       // Move the loops together first
       if (!merge(PSSA, toItems(Loops), DepChecker))
         return false;
