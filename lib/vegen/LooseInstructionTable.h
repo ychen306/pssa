@@ -97,6 +97,9 @@ class LooseInstructionTable {
   // Some instructions may implement reductions, record that mapping
   llvm::DenseMap<llvm::Instruction *, Reduction *> InstToReductionMap;
 
+  // Mapping an reduction to the *inserted* the instruction that produces it
+  llvm::DenseMap<Reduction *, llvm::Instruction *> ReductionToInstMap;
+
   llvm::BumpPtrAllocator UniqueReducerAllocator;
   llvm::BumpPtrAllocator UniqueOneHotPhiAllocator;
   llvm::BumpPtrAllocator UniqueRecReducerAllocator;
@@ -121,6 +124,13 @@ public:
   llvm::Reducer *getOrCreateReducer(Reduction *,
                                     llvm::ArrayRef<llvm::Value *> Elts,
                                     const llvm::Twine &Name = "");
+
+  // Return the instruction that produces Rdx or null
+  llvm::Instruction *getProducer(Reduction *Rdx) const;
+
+  Reduction *getReductionFor(llvm::Instruction *I) const {
+    return InstToReductionMap.lookup(I);
+  }
 
   // Create (or reuse an existing) reducer with a customized context
   // (most likely for recurrent reduction)

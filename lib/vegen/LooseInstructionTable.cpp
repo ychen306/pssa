@@ -21,6 +21,49 @@ void LooseInstructionTable::addLoose(Reducer *R, VLoop *VL,
   InstToReductionMap.try_emplace(R, R->getResult());
 }
 
+Instruction *LooseInstructionTable::getProducer(Reduction *Rdx) const {
+  if (auto *I = ReductionToInstMap.lookup(Rdx))
+    return I;
+
+  // Sometimes we have a reduction that's produced at a stronger condition
+  // but is still reusable.
+  // Consider the reduction `(+ a @ c) : c2`.
+  // Suppose c2 is a necessary condition for c and the reduction is produced by
+  // I. Now, suppose we want `(+ a @ c) : c3`, if we can just produce the
+  // reduction with
+  //    phi [c2 : I], [_: 0].
+  // This works because c2 is a necessary condition for `a` to be accumulated,
+  // which means that if `c2` is not true than nothing would be accumulated (the
+  // _:0 part).
+  //
+  // FIXME: do this more efficiently
+  for (auto [Rdx2, I] : ReductionToInstMap) {
+    if (Rdx2->size() != Rdx->size())
+      continue;
+    if (Rdx2->getParentLoop() != Rdx->getParentLoop())
+      continue;
+    bool Usable = true;
+    auto *C = Rdx2->getParentCond();
+    for (auto [E2, E] : llvm::zip(Rdx2->Elements, Rdx->Elements)) {
+      if (E2 != E) {
+        Usable = false;
+        break;
+      }
+      // Check that C is a necessary condition to including E2
+      bool IsNecessary = (E2.reducedByLoop() &&
+                          isImplied(C, E2.Loops.back()->getLoopCond())) ||
+                         (!E2.reducedByLoop() && isImplied(C, E2.C));
+      if (!IsNecessary) {
+        Usable = false;
+        break;
+      }
+    }
+    if (Usable)
+      return I;
+  }
+  return nullptr;
+}
+
 void UniqueReducer::Profile(FoldingSetNodeID &ID) const {
   ID.AddPointer(Rdx);
   ID.AddPointer(VL);
@@ -90,8 +133,8 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
                                        PredicatedSSA &PSSA,
                                        DependenceChecker &DepChecker,
                                        ReductionInfo &RI) {
-  // Collect all of the reductions being produced
-  DenseMap<Reduction *, Instruction *> ReductionToInstMap;
+  // Step 1: Collect all of the reductions being produced
+  // If `I` produces an Reduction `Rdx`, rewire all uses of `Rdx` to `I`
   DenseSet<Value *> Visited;
   std::function<void(Value *)> CollectRdxs = [&](Value *V) {
     if (!Visited.insert(V).second)
@@ -99,21 +142,15 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
     auto *I = dyn_cast<Instruction>(V);
     if (!I)
       return;
-    if (auto *Rdx = InstToReductionMap.lookup(I))
+    // Rewrite use of reductions to instructions
+    if (auto *Rdx = InstToReductionMap.lookup(I)) {
+      replaceUsesOfReductionWith(Rdx, I, RI);
       ReductionToInstMap.try_emplace(Rdx, I);
+    }
     llvm::for_each(I->operand_values(), CollectRdxs);
   };
 
   llvm::for_each(Insts, CollectRdxs);
-
-  // Step 1:
-  // rewire the loose instructions to use `Reducers` instead of
-  // `ReductionToReducerMap`
-  for (auto [Rdx, R] : ReductionToInstMap) {
-    for (auto *V : RI.getValuesForReduction(Rdx))
-      V->replaceAllUsesWith(R);
-    Rdx->replaceAllUsesWith(R);
-  }
 
   // Step 2: insert the loose instructions (and their loose operands)
   std::function<bool(Value *)> InsertIfLoose = [&](Value *V) -> bool {

@@ -73,7 +73,7 @@ raw_ostream &operator<<(raw_ostream &OS, const Reduction &Rdx) {
     if (Elt.C)
       OS << "@" << *Elt.C;
   }
-  OS << ')';
+  OS << ") : " << *Rdx.ParentCond;
   return OS;
 }
 
@@ -586,33 +586,91 @@ namespace {
 // Utility to find all reduction used in a given function
 class ReductionFinder : public PSSAVisitor<ReductionFinder> {
   DenseSet<Reduction *> &Rdxs;
+  ReductionInfo &RI;
+  LooseInstructionTable &LIT;
+  bool ReplaceInsts;
+
+  bool addIfNotProduced(Reduction *Rdx) {
+    if (!LIT.getProducer(Rdx)) {
+      Rdxs.insert(Rdx);
+      return true;
+    }
+    return false;
+  }
+
+  bool addIfNotProduced(Value *V) {
+    if (!ReplaceInsts) {
+      if (auto *Rdx = dyn_cast<Reduction>(V))
+        return addIfNotProduced(Rdx);
+      return false;
+    }
+
+    if (auto *Rdx = RI.getReductionFor(V))
+      return addIfNotProduced(Rdx);
+    return false;
+  }
 
 public:
-  ReductionFinder(DenseSet<Reduction *> &Rdxs) : Rdxs(Rdxs) {}
+  ReductionFinder(DenseSet<Reduction *> &Rdxs, ReductionInfo &RI,
+                  LooseInstructionTable &LIT, bool ReplaceInsts)
+      : Rdxs(Rdxs), RI(RI), LIT(LIT), ReplaceInsts(ReplaceInsts) {}
   void visitInstruction(Instruction *I) {
-    for (Value *V : I->operand_values())
-      if (auto *Rdx = dyn_cast<Reduction>(V))
-        Rdxs.insert(Rdx);
+    if (addIfNotProduced(I))
+      return;
+    for (Value *V : I->operand_values()) {
+      addIfNotProduced(V);
+    }
   }
 };
 
 } // namespace
 
+void replaceUsesOfReductionWith(Reduction *Rdx, Instruction *I,
+                                ReductionInfo &RI) {
+  for (auto *V : RI.getValuesForReduction(Rdx))
+    V->replaceAllUsesWith(I);
+  Rdx->replaceAllUsesWith(I);
+}
+
 void lowerReductions(ReductionInfo &RI, PredicatedSSA &PSSA,
-                     LooseInstructionTable &LIT,
-                     DependenceChecker &DepChecker) {
+                     LooseInstructionTable &LIT, DependenceChecker &DepChecker,
+                     bool ReplaceInsts) {
   // Find out all reduction we haven't lowered yet
   DenseSet<Reduction *> Rdxs;
-  visitWith<ReductionFinder>(PSSA, Rdxs);
+  visitWith<ReductionFinder>(PSSA, Rdxs, RI, LIT, ReplaceInsts);
 
   // Decompose those reductions into reducers and phis
   SmallVector<Reduction *> Worklist(Rdxs.begin(), Rdxs.end());
   DenseSet<Reduction *> Lowered;
   SmallVector<Instruction *> LooseInsts;
+  // Some Reductions are already produced,
+  // remember them and rewire their uses later
+  DenseMap<Reduction *, Instruction *> RdxToPatch;
+
   while (!Worklist.empty()) {
     auto *Rdx = Worklist.pop_back_val();
     if (!Lowered.insert(Rdx).second)
       continue;
+
+    if (auto *I = LIT.getProducer(Rdx)) {
+      auto *Rdx2 = LIT.getReductionFor(I);
+      if (Rdx2 == Rdx) {
+        RdxToPatch[Rdx] = I;
+      } else {
+        // This must be a case of Rdx being produced at a stronger condition C
+        // but can be reused because C is a necessary condition for all the
+        // elements.
+        assert(Rdx->size() == Rdx2->size());
+        assert(Rdx->getParentLoop() == Rdx2->getParentLoop());
+        auto *NewInst = LIT.createOneHotPhi(
+            Rdx->getParentLoop(), Rdx2->getParentCond() /* gating condition*/,
+            I /*if true*/, Rdx->identity() /*if false*/, Rdx->getParentCond(),
+            Rdx);
+        LooseInsts.push_back(NewInst);
+      }
+      continue;
+    }
+
     Instruction *NewInst = nullptr;
     if (Reducer *R = RI.decomposeWithBinary(Rdx, LIT)) {
       assert(R->getNumOperands() == 2);
@@ -621,10 +679,18 @@ void lowerReductions(ReductionInfo &RI, PredicatedSSA &PSSA,
       NewInst = PN;
     }
     assert(NewInst && "don't know how to decompose reduction");
+    // FIXME: this doesn't work for recurrent decomposition, which emits a mu +
+    // a reducer
     for (Value *V : NewInst->operand_values())
       if (auto *Rdx = dyn_cast<Reduction>(V))
         Worklist.push_back(Rdx);
     LooseInsts.push_back(NewInst);
+  }
+
+  // Some of the intermediate reductions are produced by instructions inserted
+  // previously, rewire their uses.
+  for (auto [Rdx, I] : RdxToPatch) {
+    replaceUsesOfReductionWith(Rdx, I, RI);
   }
 
   // Insert the new instructions
@@ -638,8 +704,10 @@ void lowerReductions(ReductionInfo &RI, PredicatedSSA &PSSA,
     auto *VL = PSSA.getLoopForInst(R);
     assert(R->getNumOperands() == 2);
     Inserter Insert(VL, VL->getInstCond(R), VL->toIterator(R));
-    R->replaceAllUsesWith(emitBinaryReduction(R->getKind(), R->getOperand(0),
-                                              R->getOperand(1), Insert));
+    auto *I2 = emitBinaryReduction(R->getKind(), R->getOperand(0),
+                                   R->getOperand(1), Insert);
+    I2->setName(R->getName());
+    R->replaceAllUsesWith(I2);
     VL->erase(R);
     R->dropAllReferences();
   }
@@ -707,11 +775,11 @@ DenseSet<Instruction *> findDeadInsts(ReductionInfo &RI, PredicatedSSA &PSSA) {
         if (auto *I2 = dyn_cast<Instruction>(Elt.Val))
           Worklist.push_back(I2);
     } else {
-      LiveInsts.insert(I);
       for (auto *V : I->operand_values())
         if (auto *I2 = dyn_cast<Instruction>(V))
           Worklist.push_back(I2);
     }
+    LiveInsts.insert(I);
   }
 
   DenseSet<Instruction *> DeadInsts;

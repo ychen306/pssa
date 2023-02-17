@@ -2,10 +2,10 @@
 #define VEGEN_REDUCTION_H
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/IVDescriptors.h"
 #include "llvm/IR/Instruction.h"
-#include "llvm/ADT/FoldingSet.h"
 #include "llvm/Support/Allocator.h"
 #include <vector>
 
@@ -32,6 +32,9 @@ struct ReductionElement {
   }
   bool operator<(const ReductionElement &Other) const {
     return std::tie(Val, Loops) < std::tie(Other.Val, Other.Loops);
+  }
+  bool operator!=(const ReductionElement &Other) const {
+    return !(*this == Other);
   }
   bool reducedByLoop() const { return !Loops.empty(); }
 };
@@ -82,12 +85,8 @@ struct Reduction : public llvm::Instruction {
     return nullptr;
   }
 
-  VLoop *getParentLoop() const {
-    return ParentLoop;
-  }
-  const ControlCondition *getParentCond() const {
-    return ParentCond;
-  }
+  VLoop *getParentLoop() const { return ParentLoop; }
+  const ControlCondition *getParentCond() const { return ParentCond; }
 
   Value *identity() const;
   void dump() const;
@@ -102,9 +101,7 @@ void profileReduction(const Reduction *, llvm::FoldingSetNodeID &);
 struct UniqueReduction : public llvm::FoldingSetNode {
   Reduction *Rdx;
   UniqueReduction(Reduction *Rdx) : Rdx(Rdx) {}
-  void Profile(llvm::FoldingSetNodeID &ID) {
-    profileReduction(Rdx, ID);
-  }
+  void Profile(llvm::FoldingSetNodeID &ID) { profileReduction(Rdx, ID); }
 };
 
 class ReductionInfo {
@@ -153,7 +150,8 @@ public:
              llvm::SmallVectorImpl<Reduction *> &SubRdxs);
 
   // Decompose a reduction into sub redutions with a binary reducer
-  llvm::Reducer *decomposeWithBinary(Reduction *Rdx, LooseInstructionTable &LIT);
+  llvm::Reducer *decomposeWithBinary(Reduction *Rdx,
+                                     LooseInstructionTable &LIT);
 
   // (+ a@c) -> phi (c : a, _: 0)
   llvm::PHINode *unwrapCondition(Reduction *Rdx, LooseInstructionTable &LIT);
@@ -174,15 +172,21 @@ class Inserter;
 llvm::Value *emitBinaryReduction(llvm::RecurKind, llvm::Value *A,
                                  llvm::Value *B, Inserter &);
 
-// Find all Reductions used in the program and
-// lower them into actual instructions
+// Convenience wrapper around RAUW to replace uses of Rdx to I 
+// (assuming I produces Rdx)
+void replaceUsesOfReductionWith(Reduction *Rdx, llvm::Instruction *I,
+                                ReductionInfo &RI);
+
 class DependenceChecker;
+// Find all Reductions used in the program and
+// lower them into actual instructions.
+// Set ReplaceInsts to true if you want to "re-lower" reduction producing insts.
 void lowerReductions(ReductionInfo &, PredicatedSSA &, LooseInstructionTable &,
-                     DependenceChecker &);
+                     DependenceChecker &, bool ReplaceInsts = true);
 
 // Mark all the live instructions that are left in the program
 // if we were to do the following:
-//   For each instruction I that computes a reduction R, 
+//   For each instruction I that computes a reduction R,
 //   eplace its uses with R. This kills I, obviously,
 //   but can also transitively kill some of I's operands.
 llvm::DenseSet<llvm::Instruction *> findDeadInsts(ReductionInfo &,

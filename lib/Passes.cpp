@@ -51,6 +51,11 @@ cl::opt<bool> RemoveDeadInsts(
     cl::desc("remove instructions killed by reductions before lowering"),
     cl::init(false));
 
+cl::opt<bool> ReplaceInsts("replace-insts",
+                           cl::desc("replace reduction producing instructions "
+                                    "by re-lowering those reductions"),
+                           cl::init(false));
+
 cl::opt<bool> DisableReductionPacking(
     "disable-reduction-packing",
     cl::desc("bother the operands of <rdx-to-pack> and produce them as scalar"),
@@ -289,11 +294,10 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     bool Ok = LIT.insertInto(LooseInsts, PSSA, DepChecker, RI);
     if (!Ok)
       return PreservedAnalyses::none();
-    // Lower any un-decomposed reductions as scalars
-    lowerReductions(RI, PSSA, LIT, DepChecker);
-    if (RemoveDeadInsts) {
+    if (RemoveDeadInsts)
       removeDeadInsts(&PSSA.getTopLevel(), DeadInsts);
-    }
+    // Lower any un-decomposed reductions as scalars
+    lowerReductions(RI, PSSA, LIT, DepChecker, ReplaceInsts);
   }
 
   bool Ok = lower(Packs, PSSA, DI, AA, LI);
