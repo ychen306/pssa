@@ -372,6 +372,9 @@ ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
 
   std::vector<Instruction *> SimpleRdxInsts;
 
+  // Update the reduction to values mapping after we canonicalize the reductions
+  decltype(ReductionToValuesMap) NewRdxToValsMap;
+
   // Post processing:
   // 1) Remove any simple reductions
   //    (e.g., we want `add a, b` instead of `(+ a b)`)
@@ -397,13 +400,18 @@ ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
       return ValueOrdering.lookup(Elt1.Val) < ValueOrdering.lookup(Elt2.Val);
     });
 
+    auto OrigVals = ReductionToValuesMap[Rdx];
+
     Rdx->Elements = NewElements;
     Rdx = dedup(Rdx);
     assert(ValueToReductionMap.lookup(V) == dedup(copyReduction(Rdx)));
+    llvm::append_range(NewRdxToValsMap[Rdx], OrigVals);
   }
 
   for (auto *I : SimpleRdxInsts)
     ValueToReductionMap.erase(I);
+
+  ReductionToValuesMap = std::move(NewRdxToValsMap);
 }
 
 void ReductionInfo::split(const Reduction *Rdx, unsigned Parts,
