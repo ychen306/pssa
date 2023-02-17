@@ -176,7 +176,7 @@ Optional<std::set<ReductionElement>>
 getDifference(Value *Init, const ControlCondition *C, Reduction *Rdx) {
   ReductionElement Elt0(Init, C);
   std::set<ReductionElement> Elts(Rdx->Elements.begin(), Rdx->Elements.end());
-  if (!Elts.count(Elt0))
+  if (!isa<UndefValue>(Init) && !Elts.count(Elt0))
     return None;
   std::set<ReductionElement> Diff;
   for (auto &Elt : Elts) {
