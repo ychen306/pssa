@@ -751,6 +751,8 @@ static std::vector<Instruction *> findRootLiveInsts(PredicatedSSA &PSSA) {
     ProcessCond(PSSA.getInstCond(I));
     if (isa<ReturnInst>(I) || I->mayHaveSideEffects())
       Roots.push_back(I);
+    else if (auto *PN = dyn_cast<PHINode>(I))
+      llvm::for_each(PSSA.getLoopForInst(I)->getPhiConditions(PN), ProcessCond);
   }
   return Roots;
 }
