@@ -36,6 +36,10 @@ cl::opt<bool> TestCodeGen("test-pssa-lowering", cl::desc("Test PSSA Lowering"),
 cl::opt<bool> UseGlobalSLP("enable-global-slp", cl::desc("Enable global slp"),
                            cl::init(false));
 
+cl::opt<bool> TestReductionLowering("test-rdx-lowering",
+                                    cl::desc("Test scalar reduction lowering"),
+                                    cl::init(false));
+
 cl::list<std::string>
     InstsToPack("p", cl::desc("<comma-separted list of instructions to pack>"));
 
@@ -76,6 +80,11 @@ struct ReductionPrinter : public PassInfoMixin<ReductionPrinter> {
 struct LiveInstsPrinter : public PassInfoMixin<LiveInstsPrinter> {
   PreservedAnalyses run(Function &, FunctionAnalysisManager &);
 };
+
+struct ReductionLowering : public PassInfoMixin<ReductionLowering> {
+  PreservedAnalyses run(Function &, FunctionAnalysisManager &);
+};
+
 } // namespace
 
 PreservedAnalyses PSSAEntry::run(Function &F, FunctionAnalysisManager &AM) {
@@ -171,7 +180,7 @@ static void packReductions(ArrayRef<Reduction *> Rdxs,
 
 // FIXME: move this to another file; this file is for testing
 static void removeDeadInsts(VLoop *VL,
-                               const DenseSet<Instruction *> &DeadInsts) {
+                            const DenseSet<Instruction *> &DeadInsts) {
   SmallVector<PHINode *> DeadMus;
   for (auto *Mu : VL->mus())
     if (DeadInsts.count(Mu))
@@ -373,6 +382,32 @@ PreservedAnalyses LiveInstsPrinter::run(Function &F,
   return PreservedAnalyses::all();
 }
 
+// Util pass to stress test reduction lowering
+PreservedAnalyses ReductionLowering::run(Function &F,
+                                         FunctionAnalysisManager &AM) {
+  errs() << "!!! testing reduction lowering on " << F.getName() << '\n';
+  auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
+  auto &LI = AM.getResult<LoopAnalysis>(F);
+  auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
+  auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
+  auto &DI = AM.getResult<DependenceAnalysis>(F);
+  auto &AA = AM.getResult<AAManager>(F);
+
+  if (!isConvertibleToPSSA(F, LI, DT))
+    return PreservedAnalyses::all();
+
+  PredicatedSSA PSSA(&F, LI, DT, PDT, &SE);
+  ReductionInfo RI(PSSA);
+
+  auto DeadInsts = findDeadInsts(RI, PSSA);
+  DependenceChecker DepChecker(PSSA, DI, AA, LI, &DeadInsts);
+  removeDeadInsts(&PSSA.getTopLevel(), DeadInsts);
+  LooseInstructionTable LIT;
+  lowerReductions(RI, PSSA, LIT, DepChecker, ReplaceInsts);
+  lowerPSSAToLLVM(&F, PSSA);
+  return PreservedAnalyses::none();
+}
+
 static void addPreprocessingPasses(FunctionPassManager &FPM) {
   FPM.addPass(UnifyFunctionExitNodesPass());
   FPM.addPass(LoopSimplifyPass());
@@ -417,6 +452,11 @@ static void buildPasses(PassBuilder &PB) {
           return true;
         }
 
+        if (Name == "test-reduction-lowering") {
+          FPM.addPass(ReductionLowering());
+          return true;
+        }
+
         return false;
       });
 
@@ -434,6 +474,14 @@ static void buildPasses(PassBuilder &PB) {
           FPM.addPass(ScalarizerPass());
           addPreprocessingPasses(FPM);
           FPM.addPass(GlobalSLPPass());
+          addCleanupPasses(FPM);
+        });
+
+  if (TestReductionLowering)
+    PB.registerScalarOptimizerLateEPCallback(
+        [](FunctionPassManager &FPM, OptimizationLevel) {
+          addPreprocessingPasses(FPM);
+          FPM.addPass(ReductionLowering());
           addCleanupPasses(FPM);
         });
 }
