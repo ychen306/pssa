@@ -433,9 +433,6 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
                                             LooseInstructionTable &LIT) {
   assert(Rdx->size() > 0);
 
-  if (Rdx->PrevOf)
-    return nullptr;
-
   // Decompose a recurrent reduction
   // FIXME: this is getting messy. Refactor the decomposition code into utility
   if (Rdx->size() == 1 && !Rdx->Elements.front().Loops.empty()) {

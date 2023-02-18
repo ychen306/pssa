@@ -47,7 +47,6 @@ static constexpr unsigned ReducerValID = 121;
 struct Reduction : public llvm::Instruction {
   // Non-null this value represents the previous iteration
   // of a recurrent reduction
-  Reduction *PrevOf;
 
   llvm::RecurKind Kind;
   std::vector<ReductionElement> Elements;
@@ -60,11 +59,10 @@ struct Reduction : public llvm::Instruction {
     Elements = Rdx->Elements;
     ParentLoop = Rdx->ParentLoop;
     ParentCond = Rdx->ParentCond;
-    PrevOf = Rdx->PrevOf;
   }
 
   Reduction(llvm::Type *Ty)
-      : Instruction(Ty, ReductionValID, nullptr, 0), PrevOf(nullptr) {}
+      : Instruction(Ty, ReductionValID, nullptr, 0) {}
   void *operator new(size_t S) { return User::operator new(S, 0); }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
