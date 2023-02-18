@@ -24,7 +24,7 @@ def run_csmith(seed, outdir=default_outdir):
       return
   
     try:
-      subprocess.check_output(['pssa-clang', src_f.name, '-O3', '-o', pssa_exe.name, '-I/usr/local/include/csmith-2.3.0/'], stderr=subprocess.DEVNULL)
+      subprocess.check_output(['pssa-clang', src_f.name, '-O3', '-o', pssa_exe.name, '-I/usr/local/include/csmith-2.3.0/', '-mllvm', '-test-rdx-lowering'], stderr=subprocess.DEVNULL)
     except:
       save_bad_src(src, outdir+'/'+str(seed)+'.c')
       print('pssa failed at compile time, seed =', seed)

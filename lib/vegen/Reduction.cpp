@@ -250,10 +250,9 @@ void ReductionInfo::processLoop(VLoop *VL) {
     if (auto *I = It.asInstruction()) {
       if (auto *PN = dyn_cast<PHINode>(I)) {
         if (PN->getNumOperands() == 1) {
-          // detect identity phis created by LCSSA
+          // detect recurrent reduction
           auto *Val = PN->getIncomingValue(0);
           if (auto *Rdx = ValueToReductionMap.lookup(Val)) {
-            setReductionFor(PN, Rdx);
             if (LiveOutRdxs.count(Val)) {
               auto [LiveOutRdx, ProducerVL] = LiveOutRdxs[Val];
               // Ensure that this is indeed a LCSSA Phi
@@ -318,11 +317,7 @@ void ReductionInfo::processLoop(VLoop *VL) {
 
     auto *Rdx = copyReduction(OrigRdx);
 
-    // Make sure `Rec` is only used once inside `VL` (by `Mu`)
-    if (any_of(Rec->users(), [&](User *U) {
-          return U != Mu && VL->contains(cast<Instruction>(U));
-        }))
-      continue;
+    // Make sure OrigRdx contains Mu
     auto It = llvm::find_if(Rdx->Elements, [Mu](const ReductionElement &Elt) {
       return Elt.Val == Mu && !Elt.reducedByLoop();
     });
@@ -348,8 +343,7 @@ void ReductionInfo::processLoop(VLoop *VL) {
     }
     Rdx->ParentLoop = VL->getParent();
     Rdx->ParentCond = VL->getLoopCond();
-    // If we use `Rec` outside of `VL`, we are actually using the reduction
-    // `Rdx`
+    // If we use `Rec` outside of `VL`, we are actually using `Rdx`
     LiveOutRdxs[Rec] = {Rdx, VL};
   }
 }
@@ -381,6 +375,8 @@ ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
   // 2) Remove any identity elements and hash cons the reductions
   for (auto &[V, Rdx] : ValueToReductionMap) {
     auto *I = cast<Instruction>(V);
+    errs() << "!!! rdx = " << *Rdx << '\n';
+    errs() << "~~~~~~ " << *PSSA.getInstCond(I) << " .... " << *Rdx->ParentCond << '\n';
     assert(PSSA.getInstCond(I) == Rdx->ParentCond);
     assert(PSSA.getLoopForInst(I) == Rdx->ParentLoop);
 

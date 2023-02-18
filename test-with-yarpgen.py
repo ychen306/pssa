@@ -3,13 +3,16 @@ import subprocess
 import os
 import shutil
 
-gcc = 'g++-11'
+gcc = 'g++-12'
 clang = 'clang++'
 vegen = 'pssa-clang++'
 
 def compile_and_run(compiler):
   try:
-    subprocess.check_call([compiler, '-O3', 'func.cpp', 'driver.o'], stderr=subprocess.DEVNULL, timeout=1200)
+    extra_args = []
+    if compiler == vegen:
+        extra_args = ['-mllvm', '-test-rdx-lowering']
+    subprocess.check_call([compiler, '-O3', 'func.cpp', 'driver.o']+extra_args, stderr=subprocess.DEVNULL, timeout=1200)
     return subprocess.check_output(['./a.out'], timeout=300).decode()
   except:
     return None
