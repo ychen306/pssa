@@ -256,8 +256,11 @@ void ReductionInfo::processLoop(VLoop *VL) {
             if (LiveOutRdxs.count(Val)) {
               auto [LiveOutRdx, ProducerVL] = LiveOutRdxs[Val];
               // Ensure that this is indeed a LCSSA Phi
-              if (!ProducerVL->contains(PN))
-                setReductionFor(PN, LiveOutRdx);
+              if (!ProducerVL->contains(PN)) {
+                auto *Rdx = copyReduction(LiveOutRdx);
+                Rdx->ParentCond = VL->getInstCond(PN);
+                setReductionFor(PN, Rdx);
+              }
             }
           }
         } else if (PN->getNumOperands() == 2) {
@@ -375,8 +378,6 @@ ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
   // 2) Remove any identity elements and hash cons the reductions
   for (auto &[V, Rdx] : ValueToReductionMap) {
     auto *I = cast<Instruction>(V);
-    errs() << "!!! rdx = " << *Rdx << '\n';
-    errs() << "~~~~~~ " << *PSSA.getInstCond(I) << " .... " << *Rdx->ParentCond << '\n';
     assert(PSSA.getInstCond(I) == Rdx->ParentCond);
     assert(PSSA.getLoopForInst(I) == Rdx->ParentLoop);
 
