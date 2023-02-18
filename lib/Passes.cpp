@@ -403,7 +403,7 @@ PreservedAnalyses ReductionLowering::run(Function &F,
   DependenceChecker DepChecker(PSSA, DI, AA, LI, &DeadInsts);
   removeDeadInsts(&PSSA.getTopLevel(), DeadInsts);
   LooseInstructionTable LIT;
-  lowerReductions(RI, PSSA, LIT, DepChecker, ReplaceInsts);
+  lowerReductions(RI, PSSA, LIT, DepChecker, true/*ReplaceInsts*/);
   lowerPSSAToLLVM(&F, PSSA);
   return PreservedAnalyses::none();
 }

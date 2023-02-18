@@ -7,12 +7,15 @@ def save_bad_src(src, fname='bad.c'):
   with open(fname, 'wb') as outf:
     outf.write(src)
 
+extra_args = ['-mllvm', '-test-rdx-lowering', '-mllvm', '-replace-insts']
+
 default_outdir = 'buggy_c_files'
 def run_csmith(seed, outdir=default_outdir):
   print('testing seed', seed)
   src = subprocess.check_output(['csmith', '--seed', str(seed), '--no-volatiles', '--no-volatile-pointers'], stderr=subprocess.DEVNULL)
   with NamedTemporaryFile(suffix='.c') as src_f\
       , NamedTemporaryFile() as clang_exe\
+      , NamedTemporaryFile() as gcc_exe\
       , NamedTemporaryFile() as pssa_exe:
     src_f.write(src)
     src_f.flush()
@@ -22,9 +25,20 @@ def run_csmith(seed, outdir=default_outdir):
     except subprocess.TimeoutExpired:
       print('clang binary timed out, seed =', seed)
       return
+
+    subprocess.check_call(['gcc-12', src_f.name, '-O3', '-o', gcc_exe.name, '-I/usr/local/include/csmith-2.3.0/'], stderr=subprocess.DEVNULL)
+    try:
+      gcc_out = subprocess.check_output([gcc_exe.name], stderr=subprocess.DEVNULL, timeout=1)
+    except subprocess.TimeoutExpired:
+      print('gcc binary timed out, seed =', seed)
+      return
+
+    if gcc_out != clang_out:
+      print('gcc and clang disagree, seed =', seed)
+      return
   
     try:
-      subprocess.check_output(['pssa-clang', src_f.name, '-O3', '-o', pssa_exe.name, '-I/usr/local/include/csmith-2.3.0/', '-mllvm', '-test-rdx-lowering'], stderr=subprocess.DEVNULL)
+      subprocess.check_output(['pssa-clang', src_f.name, '-O3', '-o', pssa_exe.name, '-I/usr/local/include/csmith-2.3.0/'] + extra_args, stderr=subprocess.DEVNULL)
     except:
       save_bad_src(src, outdir+'/'+str(seed)+'.c')
       print('pssa failed at compile time, seed =', seed)
