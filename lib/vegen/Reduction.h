@@ -28,10 +28,10 @@ struct ReductionElement {
 
   ReductionElement(llvm::Value *V, const ControlCondition *C) : Val(V), C(C) {}
   bool operator==(const ReductionElement &Other) const {
-    return Val == Other.Val && Loops == Other.Loops;
+    return Val == Other.Val && Loops == Other.Loops && C == Other.C;
   }
   bool operator<(const ReductionElement &Other) const {
-    return std::tie(Val, Loops) < std::tie(Other.Val, Other.Loops);
+    return std::tie(Val, Loops, C) < std::tie(Other.Val, Other.Loops, Other.C);
   }
   bool operator!=(const ReductionElement &Other) const {
     return !(*this == Other);

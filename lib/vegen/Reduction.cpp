@@ -198,11 +198,12 @@ Optional<std::vector<ReductionElement>>
 getDifference(Value *Init, const ControlCondition *C, Reduction *Rdx) {
   ReductionElement Elt0(Init, C);
   std::set<ReductionElement> Elts(Rdx->Elements.begin(), Rdx->Elements.end());
-  if (!isa<UndefValue>(Init) && !Elts.count(Elt0))
+  auto *Identity = Rdx->identity();
+  if (!isa<UndefValue>(Init) && Init != Identity && !Elts.count(Elt0))
     return None;
   std::vector<ReductionElement> Diff;
   for (auto &Elt : Rdx->Elements) {
-    if (Elt == Elt0)
+    if (Elt.Val == Identity || Elt == Elt0)
       continue;
     Diff.push_back(Elt);
   }
@@ -240,6 +241,7 @@ void ReductionInfo::processLoop(VLoop *VL) {
     auto Diff = Rdx1 ? getDifference(Rdx1, Rdx2)
                      : getDifference(PN->getIncomingValue(A),
                                      VL->getPhiCondition(PN, B), Rdx2);
+
     if (!Diff)
       return nullptr;
     auto *Merged = copyReduction(Rdx2);
@@ -368,7 +370,7 @@ void ReductionInfo::processLoop(VLoop *VL) {
       // cond of VL
       llvm::append_range(Rdx->Elements, InitRdx->Elements);
     } else {
-      Rdx->Elements.emplace_back(Init, nullptr);
+      Rdx->Elements.emplace_back(Init, VL->getLoopCond());
     }
     Rdx->ParentLoop = VL->getParent();
     Rdx->ParentCond = VL->getLoopCond();
