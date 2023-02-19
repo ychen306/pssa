@@ -5,6 +5,7 @@ target triple = "x86_64-apple-macosx10.15.0"
 
 ; s.08 is kept alive the store in the loop
 ; CHECK: Live: %s.08
+; CHECK: Live: %i = load
 
 ; Function Attrs: argmemonly nofree norecurse nosync nounwind ssp uwtable
 define void @foo(i32 noundef %n, ptr nocapture noundef readonly %x, ptr nocapture noundef writeonly %y) local_unnamed_addr #0 {
