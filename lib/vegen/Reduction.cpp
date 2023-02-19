@@ -158,31 +158,53 @@ Optional<SimpleReduction> matchReduction(Instruction *I) {
 
 // Detect the case when the elements of `B` is a supper set of `A`.
 // Return the set difference
-Optional<std::set<ReductionElement>> getDifference(Reduction *A, Reduction *B) {
-  std::set<ReductionElement> AElts(A->Elements.begin(), A->Elements.end());
-  std::set<ReductionElement> BElts(B->Elements.begin(), B->Elements.end());
-  if (!all_of(AElts, [&](auto &Elt) { return BElts.count(Elt); }))
+Optional<std::vector<ReductionElement>> getDifference(Reduction *A,
+                                                      Reduction *B) {
+  if (A->Kind != B->Kind)
     return None;
-  std::set<ReductionElement> Diff;
-  for (auto &Elt : BElts)
+
+  auto *Identity = A->identity();
+
+  std::map<ReductionElement, unsigned> AElts, BElts;
+  for (auto &Elt : A->Elements) {
+    if (Elt.Val == Identity)
+      continue;
+    AElts[Elt]++;
+  }
+  for (auto &Elt : B->Elements) {
+    if (Elt.Val == Identity)
+      continue;
+    BElts[Elt]++;
+  }
+
+  // Check that B contains A
+  if (!all_of(AElts, [&](const auto &KV) {
+        auto [Elt, Count] = KV;
+        auto It = BElts.find(Elt);
+        return It != BElts.end() && It->second >= Count;
+      }))
+    return None;
+
+  std::vector<ReductionElement> Diff;
+  for (auto &Elt : B->Elements)
     if (!AElts.count(Elt))
-      Diff.insert(Elt);
+      Diff.push_back(Elt);
   return Diff;
 }
 
 // Detect the case where Init is one of Rdx's reduction element and return the
 // difference
-Optional<std::set<ReductionElement>>
+Optional<std::vector<ReductionElement>>
 getDifference(Value *Init, const ControlCondition *C, Reduction *Rdx) {
   ReductionElement Elt0(Init, C);
   std::set<ReductionElement> Elts(Rdx->Elements.begin(), Rdx->Elements.end());
   if (!isa<UndefValue>(Init) && !Elts.count(Elt0))
     return None;
-  std::set<ReductionElement> Diff;
-  for (auto &Elt : Elts) {
+  std::vector<ReductionElement> Diff;
+  for (auto &Elt : Rdx->Elements) {
     if (Elt == Elt0)
       continue;
-    Diff.insert(Elt);
+    Diff.push_back(Elt);
   }
   return Diff;
 }
@@ -222,7 +244,7 @@ void ReductionInfo::processLoop(VLoop *VL) {
       return nullptr;
     auto *Merged = copyReduction(Rdx2);
     for (auto &Elt : Merged->Elements) {
-      if (!Diff->count(Elt)) {
+      if (!llvm::count(*Diff, Elt)) {
         // in the case the A is not a reduction
         // but showed up in both side,
         // we set its condition to be disjunction of both side
