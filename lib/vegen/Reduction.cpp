@@ -131,7 +131,7 @@ Optional<SimpleReduction> matchReduction(Instruction *I) {
   else if (match(I, m_Or(A, B)))
     Rdx.Kind = RecurKind::Or;
   else if (match(I, m_And(A, B)))
-    Rdx.Kind = RecurKind::Or;
+    Rdx.Kind = RecurKind::And;
   else if (match(I, m_Xor(A, B)))
     Rdx.Kind = RecurKind::Xor;
   else if (match(I, m_SMin(A, B)))
