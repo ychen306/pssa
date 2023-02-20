@@ -283,8 +283,9 @@ void ReductionInfo::processLoop(VLoop *VL) {
           if (auto *Rdx = ValueToReductionMap.lookup(Val)) {
             if (LiveOutRdxs.count(Val)) {
               auto [LiveOutRdx, ProducerVL] = LiveOutRdxs[Val];
-              // Ensure that this is indeed a LCSSA Phi
-              if (!ProducerVL->contains(PN)) {
+              // TODO: generalize this to deal with loop exits that cross
+              // multiple loop bounaries Ensure that this is indeed a LCSSA Phi
+              if (!ProducerVL->contains(PN) && ProducerVL->getParent() == VL) {
                 auto *Rdx = copyReduction(LiveOutRdx);
                 Rdx->ParentCond = VL->getInstCond(PN);
                 setReductionFor(PN, Rdx);
