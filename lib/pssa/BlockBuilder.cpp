@@ -189,16 +189,17 @@ BasicBlock *BlockBuilder::getBlockFor(const ControlCondition *C) {
         UnresolvedConds.push_back(C2);
     }
 
-    assert(UnresolvedConds.empty());
-    for (auto *C2 : Conds) {
-      auto It = ActiveConds.find(C2);
-      assert(It != ActiveConds.end());
-      BranchInst::Create(BB, It->second);
-      ActiveConds.erase(It);
-      SemiActiveConds[C2] = {Or};
-      ParentConds[Or].push_back(C2);
+    if (UnresolvedConds.empty()) {
+      for (auto *C2 : Conds) {
+        auto It = ActiveConds.find(C2);
+        assert(It != ActiveConds.end());
+        BranchInst::Create(BB, It->second);
+        ActiveConds.erase(It);
+        SemiActiveConds[C2] = {Or};
+        ParentConds[Or].push_back(C2);
+      }
+      return ActiveConds[Or] = BB;
     }
-    return ActiveConds[Or] = BB;
   }
 
   auto *CommonC = Or->GreatestCommonCond;
