@@ -349,9 +349,9 @@ void ReductionInfo::processLoop(VLoop *VL) {
 
     auto *Rdx = copyReduction(OrigRdx);
 
-    // Make sure OrigRdx contains Mu
+    // Make sure OrigRdx accumulates Mu unconditionally
     auto It = llvm::find_if(Rdx->Elements, [Mu](const ReductionElement &Elt) {
-      return Elt.Val == Mu && !Elt.reducedByLoop();
+      return Elt.Val == Mu && !Elt.reducedByLoop() && !Elt.C;
     });
     if (It == Rdx->Elements.end())
       continue;
