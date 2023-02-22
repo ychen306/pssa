@@ -10,7 +10,8 @@ set(LIB_VEGEN_SRC
     Reduction.cpp
     Reducer.cpp
     LooseInstructionTable.cpp
-    InstructionDescriptor.cpp)
+    InstructionDescriptor.cpp
+    Matcher.cpp)
 
 if (APPLE)
   add_library(VeGen STATIC ${LIB_VEGEN_SRC})
