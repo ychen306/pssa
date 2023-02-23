@@ -2,7 +2,9 @@
 #define VEGEN_MATCHER_H
 
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Optional.h"
+#include "llvm/ADT/ArrayRef.h"
 
 namespace llvm {
 class Value;
@@ -16,12 +18,16 @@ class LooseInstructionTable;
 class Matcher {
   ReductionInfo &RI;
   LooseInstructionTable &LIT;
+
+  // Remember the matched values
+  using MatchKey = std::pair<const Operation *, llvm::Value *>;
+  llvm::DenseMap<MatchKey, std::vector<llvm::Value *>> Memo;
+
 public:
   Matcher(ReductionInfo &RI, LooseInstructionTable &LIT) : RI(RI), LIT(LIT) {}
 
-  using Substitution = llvm::SmallVector<llvm::Value *, 4>;
   // Check if we can match `V` with `Op` and fill in 
-  llvm::Optional<Substitution> match(const Operation *Op, llvm::Value *V);
+  llvm::ArrayRef<llvm::Value *> match(const Operation *Op, llvm::Value *V);
 };
 
 #endif // VEGEN_MATCHER_H

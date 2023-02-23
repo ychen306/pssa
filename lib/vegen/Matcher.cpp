@@ -6,8 +6,11 @@
 
 using namespace llvm;
 
-Optional<Matcher::Substitution> Matcher::match(const Operation *Op, Value *V) {
-  Substitution Subst;
+ArrayRef<Value *> Matcher::match(const Operation *Op, Value *V) {
+  auto [It, Inserted] = Memo.try_emplace(MatchKey(Op, V));
+  if (!Inserted)
+    return It->second;
+  auto  &Subst = It->second;
   // Add a substitution, return if there's a conflict.
   auto AddToSubst = [&Subst](unsigned i, Value *V) -> bool {
     if (Subst.size() >= i)
