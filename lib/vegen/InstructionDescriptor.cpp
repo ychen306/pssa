@@ -25,22 +25,22 @@ static Operation *buildMulAdd() {
 
 std::vector<InstructionDescriptor> getTestInsts() {
   auto *MulAdd = buildMulAdd();
-  InputElement a1{0, 0};
-  InputElement a2{0, 1};
-  InputElement a3{0, 2};
-  InputElement a4{0, 4};
-  InputElement a5{0, 5};
-  InputElement a6{0, 6};
-  InputElement a7{0, 7};
-  InputElement a8{0, 8};
-  InputElement b1{1, 0};
-  InputElement b2{1, 1};
-  InputElement b3{1, 2};
-  InputElement b4{1, 4};
-  InputElement b5{1, 5};
-  InputElement b6{1, 6};
-  InputElement b7{1, 7};
-  InputElement b8{1, 8};
+  ElementBinding a1{0, 0};
+  ElementBinding a2{0, 1};
+  ElementBinding a3{0, 2};
+  ElementBinding a4{0, 4};
+  ElementBinding a5{0, 5};
+  ElementBinding a6{0, 6};
+  ElementBinding a7{0, 7};
+  ElementBinding a8{0, 8};
+  ElementBinding b1{1, 0};
+  ElementBinding b2{1, 1};
+  ElementBinding b3{1, 2};
+  ElementBinding b4{1, 4};
+  ElementBinding b5{1, 5};
+  ElementBinding b6{1, 6};
+  ElementBinding b7{1, 7};
+  ElementBinding b8{1, 8};
   return {InstructionDescriptor("pmaddwd128",
                                 {VectorSize{128, 16}, VectorSize{128, 16}},
                                 {

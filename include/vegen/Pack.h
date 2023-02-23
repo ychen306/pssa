@@ -37,7 +37,10 @@ public:
     PK_Mu,
     PK_Blend,
     PK_GEP,
-    PK_Reduction, // *horizontal* reduction
+    // *Horizontal* reduction
+    PK_Reduction,
+    // Arbitrary, potentially non-SIMD instructions
+    PK_General,
   };
 
 private:
@@ -270,6 +273,19 @@ public:
   void print(llvm::raw_ostream &OS) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_Reduction; }
   Pack *clone() const override;
+};
+
+struct Match;
+class InstructionDescriptor;
+class GeneralPack : public Pack {
+  InstructionDescriptor &InstDesc;
+  llvm::SmallVector<Match *, 4> Matches;
+public:
+  GeneralPack(InstructionDescriptor &InstDesc, llvm::ArrayRef<Match *> Matches);
+  llvm::SmallVector<OperandPack, 2> getOperands() const override;
+  llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
+  static bool classof(const Pack *P) { return P->getKind() == PK_General; }
+  Pack *clone() const override { return new GeneralPack(InstDesc, Matches); }
 };
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, Pack &);

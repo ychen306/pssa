@@ -6,34 +6,40 @@
 
 using namespace llvm;
 
-ArrayRef<Value *> Matcher::match(const Operation *Op, Value *V) {
-  auto [It, Inserted] = Memo.try_emplace(MatchKey(Op, V));
+Match *Matcher::match(const Operation *Op, Instruction *Root) {
+  auto [It, Inserted] = Matches.try_emplace(MatchKey(Op, Root));
   if (!Inserted)
-    return It->second;
-  auto  &Subst = It->second;
+    return It->second.get();
+
+  SmallVector<Use *> LiveIns;
   // Add a substitution, return if there's a conflict.
-  auto AddToSubst = [&Subst](unsigned i, Value *V) -> bool {
-    if (Subst.size() >= i)
-      Subst.resize(i, nullptr);
-    if (Subst[i] && Subst[i] != V)
+  auto AddLiveIn = [&LiveIns](unsigned i, Use *U) -> bool {
+    if (LiveIns.size() >= i)
+      LiveIns.resize(i, nullptr);
+    if (LiveIns[i] && LiveIns[i] != U)
       return false;
-    Subst[i] = V;
+    LiveIns[i] = U;
     return true;
   };
 
   // List of things we want to match
-  SmallVector<std::pair<const Operation *, Value *>> Worklist{{Op, V}};
+  using ValueOrUse = PointerUnion<Value *, Use *>;
+  SmallVector<std::pair<const Operation *, ValueOrUse>> Worklist{{Op, Root}};
   while (!Worklist.empty()) {
-    auto [Op, V] = Worklist.pop_back_val();
+    auto [Op, ValOrUse] = Worklist.pop_back_val();
+
+    auto *U = ValOrUse.dyn_cast<Use *>();
+    auto *V = U ? U->get() : ValOrUse.get<Value *>();
 
     // Abort if the bit width doesn't match
     auto *Ty = V->getType();
     if (!Ty->isSized() || Ty->getScalarSizeInBits() != Op->size())
-      return None;
+      return nullptr;
 
     if (auto *Input = dyn_cast<InputOperation>(Op)) {
-      if (!AddToSubst(Input->id(), V))
-        return None;
+      assert(U);
+      if (!AddLiveIn(Input->id(), U))
+        return nullptr;
       continue;
     }
     // For most operation the matched value is the same as V;
@@ -68,17 +74,21 @@ ArrayRef<Value *> Matcher::match(const Operation *Op, Value *V) {
     }
 
     if (!MatchedValue)
-      return None;
+      return nullptr;
 
     auto Operands = Op->getOperands();
     if (Operands.empty())
       continue;
 
     // Recursively match the operands
-    for (auto [Op2, V2] :
-         llvm::zip(Operands, cast<User>(MatchedValue)->operand_values()))
-      Worklist.emplace_back(Op2, V2);
+    for (auto [Op2, U2] :
+         llvm::zip(Operands, cast<User>(MatchedValue)->operands()))
+      Worklist.emplace_back(Op2, U2);
   }
-
-  return Subst;
+  
+  auto *M = new Match;
+  M->Root = Root;
+  M->LiveIns = std::move(LiveIns);
+  It->second.reset(M);
+  return M;
 }

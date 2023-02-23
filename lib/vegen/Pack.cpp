@@ -1,11 +1,14 @@
 #include "vegen/Pack.h"
 #include "AddrUtil.h"
+#include "InstructionDescriptor.h"
+#include "Matcher.h"
 #include "Reducer.h"
 #include "pssa/Inserter.h"
 #include "pssa/PSSA.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/IntrinsicsX86.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -652,6 +655,45 @@ Pack *ReductionPack::clone() const {
   assert(Insts.size() == 1 &&
          "reduction pack should produce exactly one value");
   return new ReductionPack(Root);
+}
+
+static SmallVector<Instruction *> getMatchRoots(ArrayRef<Match *> Matches) {
+  SmallVector<Instruction *> Roots;
+  for (auto *M : Matches)
+    Roots.push_back(M->Root);
+  return Roots;
+}
+
+GeneralPack::GeneralPack(InstructionDescriptor &InstDesc,
+                         ArrayRef<Match *> Matches)
+    : Pack(getMatchRoots(Matches), PK_General), InstDesc(InstDesc),
+      Matches(Matches.begin(), Matches.end()) {}
+
+SmallVector<OperandPack, 2> GeneralPack::getOperands() const {
+  SmallVector<OperandPack, 2> Operands;
+
+  // Initialize size of the vector operands
+  for (auto &VecSize : InstDesc.getInputSizes())
+    Operands.emplace_back(VecSize.getNumElements(), nullptr);
+
+  // Fill in the operands
+  assert(InstDesc.getOperations().size() == Matches.size());
+  using llvm::zip;
+  for (auto [BoundOp, M] : zip(InstDesc.getOperations(), Matches)) {
+    assert(BoundOp.Bindings.size() == M->LiveIns.size());
+    for (auto [Binding, Use] : zip(BoundOp.Bindings, M->LiveIns))
+      Operands[Binding.OperandId][Binding.ElementId] = Use->get();
+  }
+  return Operands;
+}
+
+Value *GeneralPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
+  if (InstDesc.getName() == "pmaddwd128") {
+    assert(Operands.size() == 2);
+    return Insert.createIntrinsicCall(Intrinsic::x86_sse2_pmadd_wd,
+                                      {} /*overloaded types*/, Operands);
+  }
+  llvm_unreachable("not implemented");
 }
 
 raw_ostream &operator<<(raw_ostream &OS, Pack &P) {
