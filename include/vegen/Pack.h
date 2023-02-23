@@ -276,16 +276,28 @@ public:
 };
 
 struct Match;
+class Matcher;
 class InstructionDescriptor;
 class GeneralPack : public Pack {
   InstructionDescriptor &InstDesc;
   llvm::SmallVector<Match *, 4> Matches;
+  GeneralPack(InstructionDescriptor &InstDesc,
+              llvm::ArrayRef<llvm::Instruction *> Insts,
+              llvm::ArrayRef<Match *> Matches)
+      : Pack(Insts, PK_General), InstDesc(InstDesc),
+        Matches(Matches.begin(), Matches.end()) {}
+
 public:
-  GeneralPack(InstructionDescriptor &InstDesc, llvm::ArrayRef<Match *> Matches);
+  // Try to pack `Insts` with a specific instruction
+  static GeneralPack *tryPack(InstructionDescriptor &InstDesc,
+                              llvm::ArrayRef<llvm::Instruction *> Insts,
+                              Matcher &TheMatcher);
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_General; }
-  Pack *clone() const override { return new GeneralPack(InstDesc, Matches); }
+  Pack *clone() const override {
+    return new GeneralPack(InstDesc, values(), Matches);
+  }
 };
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, Pack &);

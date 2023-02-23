@@ -657,17 +657,18 @@ Pack *ReductionPack::clone() const {
   return new ReductionPack(Root);
 }
 
-static SmallVector<Instruction *> getMatchRoots(ArrayRef<Match *> Matches) {
-  SmallVector<Instruction *> Roots;
-  for (auto *M : Matches)
-    Roots.push_back(M->Root);
-  return Roots;
+GeneralPack *GeneralPack::tryPack(InstructionDescriptor &InstDesc,
+                                  ArrayRef<Instruction *> Insts,
+                                  Matcher &TheMatcher) {
+  SmallVector<Match *> Matches;
+  for (auto [BoundOp, I] : llvm::zip(InstDesc.getOperations(), Insts)) {
+    auto *M = TheMatcher.match(BoundOp.Op, I);
+    if (!M)
+      return nullptr;
+    Matches.push_back(M);
+  }
+  return new GeneralPack(InstDesc, Insts, Matches);
 }
-
-GeneralPack::GeneralPack(InstructionDescriptor &InstDesc,
-                         ArrayRef<Match *> Matches)
-    : Pack(getMatchRoots(Matches), PK_General), InstDesc(InstDesc),
-      Matches(Matches.begin(), Matches.end()) {}
 
 SmallVector<OperandPack, 2> GeneralPack::getOperands() const {
   SmallVector<OperandPack, 2> Operands;
@@ -691,7 +692,7 @@ Value *GeneralPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   if (InstDesc.getName() == "pmaddwd128") {
     assert(Operands.size() == 2);
     return Insert.createIntrinsicCall(Intrinsic::x86_sse2_pmadd_wd,
-                                      {} /*overloaded types*/, Operands);
+                                      {} /*(overloaded) types*/, Operands);
   }
   llvm_unreachable("not implemented");
 }
