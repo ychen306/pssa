@@ -3,8 +3,44 @@
 #include "LooseInstructionTable.h"
 #include "Reducer.h"
 #include "Reduction.h"
+#include "llvm/IR/PatternMatch.h"
 
 using namespace llvm;
+
+// Detect a binary, unconditional reduction
+static bool isSimpleReduction(RecurKind Kind, Value *V, Value *&A, Value *&B) {
+  using namespace PatternMatch;
+  switch (Kind) {
+  case RecurKind::Add:
+    return m_Add(m_Value(A), m_Value(B)).match(V);
+  case RecurKind::Mul:
+    return m_Mul(m_Value(A), m_Value(B)).match(V);
+  case RecurKind::And:
+    return m_And(m_Value(A), m_Value(B)).match(V);
+  case RecurKind::Or:
+    return m_Or(m_Value(A), m_Value(B)).match(V);
+  case RecurKind::Xor:
+    return m_Xor(m_Value(A), m_Value(B)).match(V);
+  case RecurKind::FAdd:
+    return m_FAdd(m_Value(A), m_Value(B)).match(V);
+  case RecurKind::FMul:
+    return m_FMul(m_Value(A), m_Value(B)).match(V);
+  case RecurKind::SMax:
+    return m_SMax(m_Value(A), m_Value(B)).match(V);
+  case RecurKind::SMin:
+    return m_SMin(m_Value(A), m_Value(B)).match(V);
+  case RecurKind::UMax:
+    return m_UMax(m_Value(A), m_Value(B)).match(V);
+  case RecurKind::UMin:
+    return m_UMin(m_Value(A), m_Value(B)).match(V);
+  case RecurKind::FMax:
+    return m_OrdFMax(m_Value(A), m_Value(B)).match(V);
+  case RecurKind::FMin:
+    return m_OrdFMin(m_Value(A), m_Value(B)).match(V);
+  default:
+    llvm_unreachable("unexpected reduction kind");
+  }
+}
 
 Match *Matcher::match(const Operation *Op, Instruction *Root) {
   assert(Op);
@@ -40,21 +76,39 @@ Match *Matcher::match(const Operation *Op, Instruction *Root) {
         return nullptr;
       continue;
     }
+
     // For most operation the matched value is the same as V;
     // But if V is a reduction, its matched value is a Reducer.
     Value *MatchedValue = nullptr;
-    // FIXME: deal with the case of V being a simple reduction not not reported by RI
+
+    // By default, the matched operands are just the operands of the matched instruction
+    // But we may overwrite it later
+    SmallVector<Value *, 4> MatchedOperands;
+    if (auto *I = dyn_cast<Instruction>(V))
+      MatchedOperands.append(I->value_op_begin(), I->value_op_end());
+
     if (auto *ReductionOp = dyn_cast<ReductionOperation>(Op)) {
       auto Operands = Op->getOperands();
+
       // FIXME: deal with multi-way reduction later
       assert(Operands.size() == 2);
       Reduction *Rdx = dyn_cast<Reduction>(V);
       if (!Rdx)
         Rdx = RI.getReductionFor(V);
-      if (Rdx && Rdx->Kind == ReductionOp->getReductionKind()) {
-        MatchedValue = RI.decomposeWithBinary(Rdx, LIT);
-        if (LIT.isLoose(MatchedValue))
-          LooseInsts.push_back(cast<Instruction>(MatchedValue));
+
+      auto RdxKind = ReductionOp->getReductionKind();
+      Value *A = nullptr;
+      Value *B = nullptr;
+
+      if (Rdx && Rdx->Kind == RdxKind) {
+        Instruction *I = RI.decomposeWithBinary(Rdx, LIT);
+        if (I && LIT.isLoose(I))
+          LooseInsts.push_back(I);
+        MatchedOperands.assign(I->value_op_begin(), I->value_op_end());
+        MatchedValue = I;
+      } else if (!Rdx && isSimpleReduction(RdxKind, V, A, B)) {
+        MatchedValue = V;
+        MatchedOperands = {A, B};
       }
     } else if (auto *Select = dyn_cast<SelectOperation>(Op)) {
       MatchedValue = dyn_cast<SelectInst>(V);
@@ -78,12 +132,12 @@ Match *Matcher::match(const Operation *Op, Instruction *Root) {
     }
 
     auto Operands = Op->getOperands();
+    assert(MatchedOperands.size() == Operands.size());
     if (Operands.empty())
       continue;
 
     // Recursively match the operands
-    for (auto [Op2, V2] :
-         llvm::zip(Operands, cast<User>(MatchedValue)->operand_values()))
+    for (auto [Op2, V2] : llvm::zip(Operands, MatchedOperands))
       Worklist.emplace_back(Op2, V2);
 
     if (V == Root)
