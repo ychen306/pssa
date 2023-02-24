@@ -8,7 +8,6 @@
 
 namespace llvm {
 class Value;
-class Use;
 class Instruction;
 }
 
@@ -18,9 +17,8 @@ class LooseInstructionTable;
 
 struct Match {
   llvm::Instruction *Root;
-  // Track the use instead of just the values
-  // in case those values get replaced later
-  llvm::SmallVector<llvm::Use *, 4> LiveIns;
+  llvm::SmallVector<llvm::Value *, 4> LiveIns;
+  llvm::SmallVector<llvm::Instruction *, 4> LooseInsts;
 };
 
 class Matcher {

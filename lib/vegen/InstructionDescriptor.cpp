@@ -23,30 +23,34 @@ static Operation *buildMulAdd() {
   return add(mul(a1, b1), mul(a2, b2));
 }
 
-std::vector<InstructionDescriptor> getTestInsts() {
+static std::vector<InstructionDescriptor> TestInsts;
+ArrayRef<InstructionDescriptor> getTestInsts() {
+  if (!TestInsts.empty())
+    return TestInsts;
   auto *MulAdd = buildMulAdd();
   ElementBinding a1{0, 0};
   ElementBinding a2{0, 1};
   ElementBinding a3{0, 2};
-  ElementBinding a4{0, 4};
-  ElementBinding a5{0, 5};
-  ElementBinding a6{0, 6};
-  ElementBinding a7{0, 7};
-  ElementBinding a8{0, 8};
+  ElementBinding a4{0, 3};
+  ElementBinding a5{0, 4};
+  ElementBinding a6{0, 5};
+  ElementBinding a7{0, 6};
+  ElementBinding a8{0, 7};
   ElementBinding b1{1, 0};
   ElementBinding b2{1, 1};
   ElementBinding b3{1, 2};
-  ElementBinding b4{1, 4};
-  ElementBinding b5{1, 5};
-  ElementBinding b6{1, 6};
-  ElementBinding b7{1, 7};
-  ElementBinding b8{1, 8};
-  return {InstructionDescriptor("pmaddwd128",
-                                {VectorSize{128, 16}, VectorSize{128, 16}},
-                                {
-                                    {MulAdd, {a1, b1, a2, b2}},
-                                    {MulAdd, {a3, b3, a4, b4}},
-                                    {MulAdd, {a5, b5, a6, b6}},
-                                    {MulAdd, {a7, b7, a8, b8}},
-                                })};
-};
+  ElementBinding b4{1, 3};
+  ElementBinding b5{1, 4};
+  ElementBinding b6{1, 5};
+  ElementBinding b7{1, 6};
+  ElementBinding b8{1, 7};
+  TestInsts.push_back(InstructionDescriptor(
+      "pmaddwd128", {VectorSize{128, 16}, VectorSize{128, 16}},
+      {
+          {MulAdd, {a2, b2, a1, b1}},
+          {MulAdd, {a4, b4, a3, b3}},
+          {MulAdd, {a6, b6, a5, b5}},
+          {MulAdd, {a8, b8, a7, b7}},
+      }));
+  return TestInsts;
+}

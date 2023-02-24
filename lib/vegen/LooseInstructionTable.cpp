@@ -292,7 +292,7 @@ PHINode *LooseInstructionTable::createOneHotPhi(VLoop *VL,
   return UniquePN->PN = PN;
 }
 
-LooseInstructionTable::~LooseInstructionTable() {
+void LooseInstructionTable::destroy() {
   // The table owns all of the loose instructions
   // that are still left in the table
   for (Instruction *I : make_first_range(LooseInsts))

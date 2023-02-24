@@ -1,6 +1,7 @@
 #include "vegen/Pack.h"
 #include "AddrUtil.h"
 #include "InstructionDescriptor.h"
+#include "LooseInstructionTable.h"
 #include "Matcher.h"
 #include "Reducer.h"
 #include "pssa/Inserter.h"
@@ -30,6 +31,17 @@ SmallVector<OperandPack, 2> Pack::getOperands() const {
   }
 
   return Operands;
+}
+
+void Pack::getLooseInsts(SmallVectorImpl<Instruction *> &LooseInsts,
+                         LooseInstructionTable &LIT) const {
+  for (auto *I : Insts)
+    if (LIT.isLoose(I))
+      LooseInsts.push_back(I);
+}
+
+void Pack::getKilledInsts(SmallVectorImpl<Instruction *> &Killed) const {
+  Killed.append(Insts.begin(), Insts.end());
 }
 
 SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
@@ -395,7 +407,7 @@ MuPack *MuPack::tryPack(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA) {
   return new MuPack(Insts);
 }
 
-BlendPack *BlendPack::tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
+BlendPack *BlendPack::tryPack(ArrayRef<Instruction *> Insts,
                               PredicatedSSA &PSSA) {
   SmallVector<PHINode *, 8> Phis;
   for (auto *I : Insts) {
@@ -657,17 +669,19 @@ Pack *ReductionPack::clone() const {
   return new ReductionPack(Root);
 }
 
-GeneralPack *GeneralPack::tryPack(InstructionDescriptor &InstDesc,
+GeneralPack *GeneralPack::tryPack(const InstructionDescriptor &InstDesc,
                                   ArrayRef<Instruction *> Insts,
                                   Matcher &TheMatcher) {
   SmallVector<Match *> Matches;
+  SmallVector<Instruction *> Roots;
   for (auto [BoundOp, I] : llvm::zip(InstDesc.getOperations(), Insts)) {
     auto *M = TheMatcher.match(BoundOp.Op, I);
     if (!M)
       return nullptr;
     Matches.push_back(M);
+    Roots.push_back(M->Root);
   }
-  return new GeneralPack(InstDesc, Insts, Matches);
+  return new GeneralPack(InstDesc, Roots, Matches);
 }
 
 SmallVector<OperandPack, 2> GeneralPack::getOperands() const {
@@ -682,8 +696,8 @@ SmallVector<OperandPack, 2> GeneralPack::getOperands() const {
   using llvm::zip;
   for (auto [BoundOp, M] : zip(InstDesc.getOperations(), Matches)) {
     assert(BoundOp.Bindings.size() == M->LiveIns.size());
-    for (auto [Binding, Use] : zip(BoundOp.Bindings, M->LiveIns))
-      Operands[Binding.OperandId][Binding.ElementId] = Use->get();
+    for (auto [Binding, V] : zip(BoundOp.Bindings, M->LiveIns))
+      Operands[Binding.OperandId][Binding.ElementId] = V;
   }
   return Operands;
 }
@@ -695,6 +709,20 @@ Value *GeneralPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
                                       {} /*(overloaded) types*/, Operands);
   }
   llvm_unreachable("not implemented");
+}
+
+void GeneralPack::getLooseInsts(SmallVectorImpl<Instruction *> &LooseInsts,
+                                LooseInstructionTable &LIT) const {
+  for (auto *M : Matches) {
+    for (auto *I : M->LooseInsts)
+      if (LIT.isLoose(I))
+        LooseInsts.push_back(I);
+  }
+}
+
+void GeneralPack::getKilledInsts(SmallVectorImpl<Instruction *> &Killed) const {
+  for (auto *M : Matches)
+    Killed.append(M->LooseInsts.begin(), M->LooseInsts.end());
 }
 
 raw_ostream &operator<<(raw_ostream &OS, Pack &P) {

@@ -959,9 +959,10 @@ void VectorGen::runOnLoop(VLoop *VL) {
     assert(I);
     markAsProcessed(I);
     if (Pack *P = Packs.getPackForValue(I)) {
-      DeadInsts.push_back(I);
       if (!Lowered.insert(P).second)
         continue;
+
+      P->getKilledInsts(DeadInsts);
 
       SmallVector<const ControlCondition *, 8> Conds;
       for (auto *I : P->values())

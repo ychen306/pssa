@@ -7,6 +7,9 @@
 #include "vegen/Pack.h"
 #include "vegen/Reducer.h"
 #include "vegen/Reduction.h"
+#include "vegen/Matcher.h"
+#include "vegen/LooseInstructionTable.h"
+#include "vegen/InstructionDescriptor.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -205,6 +208,14 @@ static void removeDeadInsts(VLoop *VL,
   }
 }
 
+static const InstructionDescriptor &getInstByName(StringRef Name) {
+  for (auto &InstDesc : getTestInsts()) {
+    if (InstDesc.getName() == Name)
+      return InstDesc;
+  }
+  llvm_unreachable("Can't find requested instruction");
+}
+
 PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
   auto &DL = F.getParent()->getDataLayout();
@@ -215,6 +226,8 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   auto &AA = AM.getResult<AAManager>(F);
   PredicatedSSA PSSA(&F, LI, DT, PDT, &SE);
   ReductionInfo RI(PSSA);
+  LooseInstructionTable LIT;
+  Matcher TheMatcher(RI, LIT);
 
   DenseMap<StringRef, Instruction *> NameToInstMap;
   DenseMap<StringRef, Instruction *> NameToStoreMap;
@@ -236,6 +249,12 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   for (StringRef Arg : InstsToPack) {
     SmallVector<StringRef> Names;
     Arg.split(Names, ',');
+    StringRef Opcode;
+    if (Names.back().contains("/")) {
+      auto [a, b] = Names.back().split('/');
+      Names.back() = a;
+      Opcode = b;
+    }
 
     SmallVector<Instruction *> Insts;
     for (StringRef Name : Names) {
@@ -250,7 +269,13 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       Insts.push_back(I);
     }
 
-    if (auto *Pack = SIMDPack::tryPack(Insts)) {
+    if (!Opcode.empty()) {
+      // Pack with the user specified vector instruction
+      auto &InstrDesc = getInstByName(Opcode);
+      auto *Pack = GeneralPack::tryPack(InstrDesc, Insts, TheMatcher);
+      assert(Pack && "failed to pack with specified instruction");
+      Packs.push_back(Pack);
+    } else if (auto *Pack = SIMDPack::tryPack(Insts)) {
       Packs.push_back(Pack);
     } else if (auto *P = GEPPack::tryPack(Insts)) {
       Packs.push_back(P);
@@ -274,12 +299,11 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     errs() << "Packing " << *Packs.back() << '\n';
   }
 
-  if (Rdx) {
-    auto DeadInsts = findDeadInsts(RI, PSSA);
+  auto DeadInsts = findDeadInsts(RI, PSSA);
 
+  if (Rdx) {
     errs() << "Packing reduction " << *Rdx << '\n';
     SmallVector<Reduction *, 4> SubRdxs;
-    LooseInstructionTable LIT;
     RI.split(Rdx, std::min<unsigned>(ReductionWidth, Rdx->Elements.size()),
              SubRdxs);
     // Produce the decomposed reductions as a vector
@@ -291,25 +315,25 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
 
     // Pack the final horizontal reduction
     Packs.push_back(new ReductionPack(RootR));
-    std::vector<Instruction *> LooseInsts;
-    for (auto *P : Packs) {
-      for (auto *I : P->values())
-        if (LIT.isLoose(I))
-          LooseInsts.push_back(I);
-    }
-    DependenceChecker DepChecker(PSSA, DI, AA, LI, &DeadInsts);
-    // Insert all of the loose instructions resulting from
-    // matching and packing the reductions
-    bool Ok = LIT.insertInto(LooseInsts, PSSA, DepChecker, RI);
-    if (!Ok)
-      return PreservedAnalyses::none();
-    if (RemoveDeadInsts)
-      removeDeadInsts(&PSSA.getTopLevel(), DeadInsts);
-    // Lower any un-decomposed reductions as scalars
-    lowerReductions(RI, PSSA, LIT, DepChecker, ReplaceInsts);
   }
 
-  bool Ok = lower(Packs, PSSA, DI, AA, LI);
+  DependenceChecker DepChecker(PSSA, DI, AA, LI, &DeadInsts);
+  // Insert all of the loose instructions resulting from
+  // matching and packing the reductions
+  SmallVector<Instruction *> LooseInsts;
+  for (auto *P : Packs)
+    P->getLooseInsts(LooseInsts, LIT);
+  bool Ok = LIT.insertInto(LooseInsts, PSSA, DepChecker, RI);
+  if (!Ok)
+    return PreservedAnalyses::none();
+  if (RemoveDeadInsts)
+    removeDeadInsts(&PSSA.getTopLevel(), DeadInsts);
+  // Lower any un-decomposed reductions as scalars
+  lowerReductions(RI, PSSA, LIT, DepChecker, ReplaceInsts);
+
+  LIT.destroy();
+
+  Ok = lower(Packs, PSSA, DI, AA, LI);
   assert(Ok && "can't lower due to circular dep");
   lowerPSSAToLLVM(&F, PSSA);
 

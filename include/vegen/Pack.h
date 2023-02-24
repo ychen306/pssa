@@ -18,6 +18,7 @@ class Reducer;
 
 class PredicatedSSA;
 class Inserter;
+class LooseInstructionTable;
 
 using OperandPack = llvm::SmallVector<llvm::Value *, 8>;
 class ControlCondition;
@@ -64,6 +65,11 @@ public:
   // Override for masked load/store and blending, etc
   virtual llvm::SmallVector<VectorMask, 2> masks() const { return {}; }
   virtual llvm::InstructionCost getCost() const { return 1; }
+  // Get the loose insts that need to be inserted if we want to make this pack
+  virtual void getLooseInsts(llvm::SmallVectorImpl<llvm::Instruction *> &,
+                             LooseInstructionTable &) const;
+  // Return instructions immediately killed by using this pack
+  virtual void getKilledInsts(llvm::SmallVectorImpl<llvm::Instruction *> &) const;
   virtual Pack *clone() const = 0;
 };
 
@@ -279,9 +285,9 @@ struct Match;
 class Matcher;
 class InstructionDescriptor;
 class GeneralPack : public Pack {
-  InstructionDescriptor &InstDesc;
+  const InstructionDescriptor &InstDesc;
   llvm::SmallVector<Match *, 4> Matches;
-  GeneralPack(InstructionDescriptor &InstDesc,
+  GeneralPack(const InstructionDescriptor &InstDesc,
               llvm::ArrayRef<llvm::Instruction *> Insts,
               llvm::ArrayRef<Match *> Matches)
       : Pack(Insts, PK_General), InstDesc(InstDesc),
@@ -289,15 +295,18 @@ class GeneralPack : public Pack {
 
 public:
   // Try to pack `Insts` with a specific instruction
-  static GeneralPack *tryPack(InstructionDescriptor &InstDesc,
+  static GeneralPack *tryPack(const InstructionDescriptor &InstDesc,
                               llvm::ArrayRef<llvm::Instruction *> Insts,
                               Matcher &TheMatcher);
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_General; }
+  void getLooseInsts(llvm::SmallVectorImpl<llvm::Instruction *> &,
+                     LooseInstructionTable &) const override;
   Pack *clone() const override {
     return new GeneralPack(InstDesc, values(), Matches);
   }
+  void getKilledInsts(llvm::SmallVectorImpl<llvm::Instruction *> &) const override;
 };
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, Pack &);

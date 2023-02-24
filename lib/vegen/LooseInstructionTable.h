@@ -119,7 +119,7 @@ class LooseInstructionTable {
                                      VLoop *VL, const ControlCondition *C);
 
 public:
-  ~LooseInstructionTable();
+  void destroy();
 
   llvm::Reducer *getOrCreateReducer(Reduction *,
                                     llvm::ArrayRef<llvm::Value *> Elts,

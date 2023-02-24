@@ -7,9 +7,13 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
 using namespace PatternMatch;
+
+cl::opt<bool> DetectSimpleReduction("detect-simple-reduction", cl::desc("Detect binary, unconditional reduction"),
+                          cl::init(false));
 
 StringRef getReductionName(RecurKind Kind) {
   switch (Kind) {
@@ -410,7 +414,7 @@ ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
     assert(PSSA.getInstCond(I) == Rdx->ParentCond);
     assert(PSSA.getLoopForInst(I) == Rdx->ParentLoop);
 
-    if (isSimpleReduction(Rdx)) {
+    if (!DetectSimpleReduction && isSimpleReduction(Rdx)) {
       SimpleRdxInsts.push_back(I);
       continue;
     }
