@@ -2,6 +2,7 @@
 #define VEGEN_LOWER_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/IR/PassManager.h"
 
 namespace llvm {
 class DependenceInfo;
@@ -13,6 +14,7 @@ class Value;
 
 class Pack;
 class PredicatedSSA;
+class ControlCondition;
 
 // Lower a set of packs to vector instructions.
 // May bail out due to circular deps introduced by the packs.
@@ -27,5 +29,10 @@ findSpeculativeCond(llvm::Instruction *I,
 
 bool canSpeculateAt(llvm::Value *V, const ControlCondition *C,
                     PredicatedSSA &PSSA);
+
+struct TestVectorGen : public llvm::PassInfoMixin<TestVectorGen> {
+  llvm::PreservedAnalyses run(llvm::Function &,
+                              llvm::FunctionAnalysisManager &);
+};
 
 #endif // end VEGEN_LOWER_H

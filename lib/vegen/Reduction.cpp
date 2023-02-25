@@ -481,7 +481,8 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
 }
 
 // TODO: generalize to deal with multiple elements
-Reduction *ReductionInfo::unwrapLoop(Reduction *Rdx, LooseInstructionTable &LIT) {
+Reduction *ReductionInfo::unwrapLoop(Reduction *Rdx,
+                                     LooseInstructionTable &LIT) {
   // Decompose a recurrent reduction
   if (Rdx->size() == 1 && !Rdx->Elements.front().Loops.empty()) {
     // decompose (+ a^L) -> (+ a^L'), (+ a)
@@ -829,4 +830,29 @@ DenseSet<Instruction *> findDeadInsts(ReductionInfo &RI, PredicatedSSA &PSSA) {
   MarkDead(&PSSA.getTopLevel());
 
   return DeadInsts;
+}
+
+void removeDeadInsts(VLoop *VL, const DenseSet<Instruction *> &DeadInsts) {
+  SmallVector<PHINode *> DeadMus;
+  for (auto *Mu : VL->mus())
+    if (DeadInsts.count(Mu))
+      DeadMus.push_back(Mu);
+  for (auto *Mu : DeadMus) {
+    VL->eraseMu(Mu);
+    Mu->replaceAllUsesWith(UndefValue::get(Mu->getType()));
+    Mu->dropAllReferences();
+  }
+  for (auto &It : VL->items()) {
+    if (auto *SubVL = It.asLoop()) {
+      removeDeadInsts(SubVL, DeadInsts);
+    } else {
+      auto *I = It.asInstruction();
+      assert(I);
+      if (DeadInsts.count(I)) {
+        I->replaceAllUsesWith(UndefValue::get(I->getType()));
+        VL->erase(I);
+        I->dropAllReferences();
+      }
+    }
+  }
 }

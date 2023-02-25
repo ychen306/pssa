@@ -10,8 +10,8 @@ set(LIB_VEGEN_SRC
     Reduction.cpp
     Reducer.cpp
     LooseInstructionTable.cpp
-    InstructionDescriptor.cpp
-    Matcher.cpp)
+    Matcher.cpp
+    TestVectorGen.cpp)
 
 if (APPLE)
   add_library(VeGen STATIC ${LIB_VEGEN_SRC})

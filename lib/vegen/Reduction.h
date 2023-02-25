@@ -61,8 +61,7 @@ struct Reduction : public llvm::Instruction {
     ParentCond = Rdx->ParentCond;
   }
 
-  Reduction(llvm::Type *Ty)
-      : Instruction(Ty, ReductionValID, nullptr, 0) {}
+  Reduction(llvm::Type *Ty) : Instruction(Ty, ReductionValID, nullptr, 0) {}
   void *operator new(size_t S) { return User::operator new(S, 0); }
 
   // Methods for support type inquiry through isa, cast, and dyn_cast:
@@ -192,6 +191,8 @@ void lowerReductions(ReductionInfo &, PredicatedSSA &, LooseInstructionTable &,
 //   but can also transitively kill some of I's operands.
 llvm::DenseSet<llvm::Instruction *> findDeadInsts(ReductionInfo &,
                                                   PredicatedSSA &);
+
+void removeDeadInsts(VLoop *, const llvm::DenseSet<llvm::Instruction *> &);
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const Reduction &);
 llvm::StringRef getReductionName(llvm::RecurKind);
