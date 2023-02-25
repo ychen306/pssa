@@ -3,7 +3,6 @@
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Analysis/IVDescriptors.h"
 #include "llvm/Support/InstructionCost.h"
 
 namespace llvm {
@@ -264,8 +263,6 @@ public:
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>,
                     llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
 };
-
-struct Reduction;
 
 class ReductionPack : public Pack {
   // We will implement this reducer by horizontally adding up all of its

@@ -1,9 +1,7 @@
 #ifndef VEGEN_MATCHER_H
 #define VEGEN_MATCHER_H
 
-#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace llvm {

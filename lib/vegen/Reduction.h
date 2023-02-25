@@ -89,7 +89,6 @@ struct Reduction : public llvm::Instruction {
   void dump() const;
 };
 
-class Pack;
 class LooseInstructionTable;
 
 void profileReduction(const Reduction *, llvm::FoldingSetNodeID &);

@@ -4,8 +4,6 @@
 #include "Reduction.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/OperandTraits.h"
-#include "llvm/Analysis/IVDescriptors.h"
-
 
 namespace llvm {
 
