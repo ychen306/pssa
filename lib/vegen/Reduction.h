@@ -119,11 +119,6 @@ class ReductionInfo {
     Reductions.emplace_back(new Reduction(Ty));
     return Reductions.back().get();
   }
-  Reduction *copyReduction(const Reduction *OrigRdx) {
-    auto *Rdx = newReduction(OrigRdx->getType());
-    Rdx->copyFrom(OrigRdx);
-    return Rdx;
-  }
   void processLoop(VLoop *);
   void setReductionFor(llvm::Value *V, Reduction *Rdx);
 
@@ -154,6 +149,9 @@ public:
   // (+ a@c) -> phi (c : a, _: 0)
   llvm::PHINode *unwrapCondition(Reduction *Rdx, LooseInstructionTable &LIT);
 
+  // (+ a^L b^L) -> (+ acc a b)
+  Reduction *unwrapLoop(Reduction *Rdx, LooseInstructionTable &LIT);
+
   // Get the original IR values that computes a given reduction
   llvm::ArrayRef<llvm::Value *> getValuesForReduction(Reduction *Rdx) const {
     auto It = ReductionToValuesMap.find(Rdx);
@@ -162,6 +160,11 @@ public:
     return It->second;
   }
 
+  Reduction *copyReduction(const Reduction *OrigRdx) {
+    auto *Rdx = newReduction(OrigRdx->getType());
+    Rdx->copyFrom(OrigRdx);
+    return Rdx;
+  }
   Reduction *dedup(Reduction *);
 };
 
@@ -170,7 +173,7 @@ class Inserter;
 llvm::Value *emitBinaryReduction(llvm::RecurKind, llvm::Value *A,
                                  llvm::Value *B, Inserter &);
 
-// Convenience wrapper around RAUW to replace uses of Rdx to I 
+// Convenience wrapper around RAUW to replace uses of Rdx to I
 // (assuming I produces Rdx)
 void replaceUsesOfReductionWith(Reduction *Rdx, llvm::Instruction *I,
                                 ReductionInfo &RI);

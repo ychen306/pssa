@@ -2,14 +2,13 @@
 #include "pssa/PSSA.h"
 #include "vegen/DependenceChecker.h"
 #include "vegen/GlobalSLP.h"
+#include "vegen/InstructionDescriptor.h"
 #include "vegen/LooseInstructionTable.h"
 #include "vegen/Lower.h"
+#include "vegen/Matcher.h"
 #include "vegen/Pack.h"
 #include "vegen/Reducer.h"
 #include "vegen/Reduction.h"
-#include "vegen/Matcher.h"
-#include "vegen/LooseInstructionTable.h"
-#include "vegen/InstructionDescriptor.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -164,8 +163,18 @@ static void packReductions(ArrayRef<Reduction *> Rdxs,
   std::function<void(ArrayRef<Reduction *>)> PackRec =
       [&](ArrayRef<Reduction *> Rdxs) {
         auto *P = decomposeAndPack(PSSA, RI, LIT, Rdxs);
-        if (!P)
+        if (!P) {
+          // If we fail to decompose, try to unwrap a loop level
+          SmallVector<Reduction *> InnerRdxs;
+          for (auto *Rdx : Rdxs) {
+            auto *InnerRdx = RI.unwrapLoop(Rdx, LIT);
+            if (!InnerRdx)
+              return;
+            InnerRdxs.push_back(InnerRdx);
+          }
+          PackRec(InnerRdxs);
           return;
+        }
         Packs.push_back(P);
 
         for (auto O : P->getOperands()) {
@@ -427,7 +436,7 @@ PreservedAnalyses ReductionLowering::run(Function &F,
   DependenceChecker DepChecker(PSSA, DI, AA, LI, &DeadInsts);
   removeDeadInsts(&PSSA.getTopLevel(), DeadInsts);
   LooseInstructionTable LIT;
-  lowerReductions(RI, PSSA, LIT, DepChecker, true/*ReplaceInsts*/);
+  lowerReductions(RI, PSSA, LIT, DepChecker, true /*ReplaceInsts*/);
   lowerPSSAToLLVM(&F, PSSA);
   return PreservedAnalyses::none();
 }

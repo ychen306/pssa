@@ -6,13 +6,15 @@
 #include "pssa/Visitor.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/PatternMatch.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 using namespace PatternMatch;
 
-cl::opt<bool> DetectSimpleReduction("detect-simple-reduction", cl::desc("Detect binary, unconditional reduction"),
+cl::opt<bool>
+    DetectSimpleReduction("detect-simple-reduction",
+                          cl::desc("Detect binary, unconditional reduction"),
                           cl::init(false));
 
 StringRef getReductionName(RecurKind Kind) {
@@ -461,27 +463,6 @@ void ReductionInfo::split(const Reduction *Rdx, unsigned Parts,
 
 Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
                                             LooseInstructionTable &LIT) {
-  assert(Rdx->size() > 0);
-
-  // Decompose a recurrent reduction
-  // FIXME: this is getting messy. Refactor the decomposition code into utility
-  if (Rdx->size() == 1 && !Rdx->Elements.front().Loops.empty()) {
-    // decompose (+ a^L) -> (+ a^L'), (+ a)
-    auto *Cur = copyReduction(Rdx);
-    auto &Elt = Cur->Elements.front();
-    auto *VL = Elt.Loops.pop_back_val();
-    Cur->ParentLoop = VL;
-    // The accumulation must happen unconditionally every iteraiton
-    Cur->ParentCond = nullptr;
-
-    // If the loop's execution is not implied by the parent condition
-    // then we need to unwrap the condition first.
-    if (!isImplied(VL->getLoopCond(), Rdx->getParentCond()))
-      return nullptr;
-
-    return LIT.getOrCreateRecurrentReducer(Rdx, {dedup(Cur)}, VL);
-  }
-
   if (Rdx->size() < 2)
     return nullptr;
 
@@ -497,6 +478,23 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
 
   return LIT.getOrCreateReducer(Rdx, {dedup(Left), dedup(Right)},
                                 "binary-reducer" /*name*/);
+}
+
+// TODO: generalize to deal with multiple elements
+Reduction *ReductionInfo::unwrapLoop(Reduction *Rdx, LooseInstructionTable &LIT) {
+  // Decompose a recurrent reduction
+  if (Rdx->size() == 1 && !Rdx->Elements.front().Loops.empty()) {
+    // decompose (+ a^L) -> (+ a^L'), (+ a)
+    auto *VL = Rdx->Elements.front().Loops.back();
+
+    // If the loop's execution is not implied by the parent condition
+    // then we need to unwrap the condition first.
+    if (!isImplied(VL->getLoopCond(), Rdx->getParentCond()))
+      return nullptr;
+
+    return LIT.getOrCreateInnerReduction(Rdx, VL, *this);
+  }
+  return nullptr;
 }
 
 void ReductionInfo::setReductionFor(Value *V, Reduction *Rdx) {
@@ -704,6 +702,10 @@ void lowerReductions(ReductionInfo &RI, PredicatedSSA &PSSA,
       NewInst = R;
     } else if (auto *PN = RI.unwrapCondition(Rdx, LIT)) {
       NewInst = PN;
+    } else if (auto *InnerRdx = RI.unwrapLoop(Rdx, LIT)) {
+      // if all else fails, try to unwrap a loop level
+      Worklist.push_back(InnerRdx);
+      continue;
     }
     assert(NewInst && "don't know how to decompose reduction");
     // FIXME: this doesn't work for recurrent decomposition, which emits a mu +
@@ -716,9 +718,8 @@ void lowerReductions(ReductionInfo &RI, PredicatedSSA &PSSA,
 
   // Some of the intermediate reductions are produced by instructions inserted
   // previously, rewire their uses.
-  for (auto [Rdx, I] : RdxToPatch) {
+  for (auto [Rdx, I] : RdxToPatch)
     replaceUsesOfReductionWith(Rdx, I, RI);
-  }
 
   // Insert the new instructions
   LIT.insertInto(LooseInsts, PSSA, DepChecker, RI);

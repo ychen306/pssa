@@ -104,29 +104,28 @@ Reducer *LooseInstructionTable::getOrCreateReducer(Reduction *Rdx,
   return R;
 }
 
-void UniqueRecurrentReducer::Profile(FoldingSetNodeID &ID) const {
-  ID.AddPointer(VL);
-  ID.AddPointer(Rdx);
-  for (auto *LoopRdx : LoopRdxs)
-    ID.AddPointer(LoopRdx);
-}
+Reduction *LooseInstructionTable::getOrCreateInnerReduction(Reduction *Rdx,
+                                                            VLoop *VL,
+                                                            ReductionInfo &RI) {
+  auto [It, Inserted] = InnerReductions.try_emplace(Rdx);
+  if (!Inserted)
+    return It->second;
 
-Reducer *LooseInstructionTable::getOrCreateRecurrentReducer(
-    Reduction *Rdx, ArrayRef<Reduction *> LoopRdxs, VLoop *VL) {
-  auto *UniqueRecRdx = UniqueRecReducers.GetOrInsertNode(new (
-      UniqueRecReducerAllocator) UniqueRecurrentReducer(Rdx, LoopRdxs, VL));
-  if (!UniqueRecRdx->R) {
-    auto *Prev = createMu(VL, Rdx->identity());
-    SmallVector<Value *, 8> Elts = {Prev};
-    Elts.append(LoopRdxs.begin(), LoopRdxs.end());
-    auto *R = getOrCreateReducer(
-        Rdx, Elts, VL,
-        nullptr /*the recurrent reduction happens unconditionally*/,
-        "rec-rdx" /*name*/);
-    Prev->setIncomingValue(1, R);
-    UniqueRecRdx->R = R;
-  }
-  return UniqueRecRdx->R;
+  auto *Cur = RI.copyReduction(Rdx);
+  // VL is the loop where we are doing the accumulation
+  Cur->ParentLoop = VL;
+  // Accumulation happens unconditionally
+  Cur->ParentCond = nullptr;
+
+  // Decompose (+ a^L b^L) into (+ acc a b)
+  for (auto &Elt : Cur->Elements)
+    Elt.Loops.pop_back();
+
+  PHINode *Mu = createMu(VL, Rdx->identity());
+  Cur->Elements.insert(Cur->Elements.begin(), ReductionElement(Mu, nullptr));
+  Cur = RI.dedup(Cur);
+  Mu->setIncomingValue(1, Cur);
+  return It->second = Cur;
 }
 
 bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
@@ -247,6 +246,35 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
     bool Ok = InsertIfLoose(I);
     if (!Ok)
       return false;
+  }
+
+  // Look for all uses of any unresolved of reduction R such that
+  // R has a inner reduction R' that's been produced in an inner loop
+  // and replace that use of R with the producer of R'.
+  SmallVector<Item> Worklist{&PSSA.getTopLevel()};
+  while (!Worklist.empty()) {
+    auto It = Worklist.pop_back_val();
+    if (auto *VL = It.asLoop()) {
+      Worklist.append(VL->item_begin(), VL->item_end());
+      continue;
+    }
+    auto *I = It.asInstruction();
+    assert(I);
+    for (Use &U : I->operands()) {
+      auto *Rdx = dyn_cast<Reduction>(U.get());
+      if (!Rdx)
+        continue;
+      auto *InnerRdx = InnerReductions.lookup(Rdx);
+      if (!InnerRdx)
+        continue;
+      auto *I2 = getProducer(InnerRdx);
+      if (PSSA.getInstCond(I2) != InnerRdx->getParentCond())
+        continue;
+      auto *VL = PSSA.getLoopForInst(I);
+      auto *VL2 = PSSA.getLoopForInst(I2);
+      if (VL != VL2 && VL->contains(VL2))
+        U.set(I2);
+    }
   }
 
   return true;
