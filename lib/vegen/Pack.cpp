@@ -696,8 +696,8 @@ SmallVector<OperandPack, 2> GeneralPack::getOperands() const {
   using llvm::zip;
   for (auto [BoundOp, M] : zip(InstDesc.getOperations(), Matches)) {
     assert(BoundOp.Bindings.size() == M->LiveIns.size());
-    for (auto [Binding, V] : zip(BoundOp.Bindings, M->LiveIns))
-      Operands[Binding.OperandId][Binding.ElementId] = V;
+    for (auto [Binding, U] : zip(BoundOp.Bindings, M->LiveIns))
+      Operands[Binding.OperandId][Binding.ElementId] = U->get();
   }
   return Operands;
 }

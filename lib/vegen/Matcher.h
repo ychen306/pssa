@@ -7,7 +7,8 @@
 namespace llvm {
 class Value;
 class Instruction;
-}
+class Use;
+} // namespace llvm
 
 class Operation;
 class ReductionInfo;
@@ -15,7 +16,9 @@ class LooseInstructionTable;
 
 struct Match {
   llvm::Instruction *Root;
-  llvm::SmallVector<llvm::Value *, 4> LiveIns;
+  // Keep track of the *use of the live ins* instead of just the values in case
+  // they get rewritten (e.g., during co-iteration)
+  llvm::SmallVector<llvm::Use *, 4> LiveIns;
   llvm::SmallVector<llvm::Instruction *, 4> LooseInsts;
 };
 

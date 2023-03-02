@@ -7,41 +7,82 @@
 
 using namespace llvm;
 
+static std::pair<Use *, Use *> getBinaryOperands(Instruction *I) {
+  auto *BO = cast<BinaryOperator>(I);
+  return {&BO->getOperandUse(0), &BO->getOperandUse(1)};
+}
+
+// FIXME: deal with operands of non-binary inst
 // Detect a binary, unconditional reduction
-static bool isSimpleReduction(RecurKind Kind, Value *V, Value *&A, Value *&B) {
+static Optional<std::pair<Use *, Use *>>
+matchSimpleReduction(RecurKind Kind, Value *V) {
   using namespace PatternMatch;
+  auto *I = dyn_cast<Instruction>(V);
   switch (Kind) {
   case RecurKind::Add:
-    return m_Add(m_Value(A), m_Value(B)).match(V);
+    if (m_Add(m_Value(), m_Value()).match(V))
+      return getBinaryOperands(I);
+    return None;
   case RecurKind::Mul:
-    return m_Mul(m_Value(A), m_Value(B)).match(V);
+    if (m_Mul(m_Value(), m_Value()).match(V))
+      return getBinaryOperands(I);
+    return None;
   case RecurKind::And:
-    return m_And(m_Value(A), m_Value(B)).match(V);
+    if (m_And(m_Value(), m_Value()).match(V))
+      return getBinaryOperands(I);
+    return None;
   case RecurKind::Or:
-    return m_Or(m_Value(A), m_Value(B)).match(V);
+    if (m_Or(m_Value(), m_Value()).match(V))
+      return getBinaryOperands(I);
+    return None;
   case RecurKind::Xor:
-    return m_Xor(m_Value(A), m_Value(B)).match(V);
+    if (m_Xor(m_Value(), m_Value()).match(V))
+      return getBinaryOperands(I);
+    return None;
   case RecurKind::FAdd:
-    return m_FAdd(m_Value(A), m_Value(B)).match(V);
+    if (m_FAdd(m_Value(), m_Value()).match(V))
+      return getBinaryOperands(I);
+    return None;
   case RecurKind::FMul:
-    return m_FMul(m_Value(A), m_Value(B)).match(V);
+    if (m_FMul(m_Value(), m_Value()).match(V))
+      return getBinaryOperands(I);
+    return None;
   case RecurKind::SMax:
-    return m_SMax(m_Value(A), m_Value(B)).match(V);
+    if (m_SMax(m_Value(), m_Value()).match(V))
+      return getBinaryOperands(I);
+    return None;
   case RecurKind::SMin:
-    return m_SMin(m_Value(A), m_Value(B)).match(V);
+    if (m_SMin(m_Value(), m_Value()).match(V))
+      return getBinaryOperands(I);
+    return None;
   case RecurKind::UMax:
-    return m_UMax(m_Value(A), m_Value(B)).match(V);
+    if (m_UMax(m_Value(), m_Value()).match(V))
+      return getBinaryOperands(I);
+    return None;
   case RecurKind::UMin:
-    return m_UMin(m_Value(A), m_Value(B)).match(V);
+    if (m_UMin(m_Value(), m_Value()).match(V))
+      return getBinaryOperands(I);
+    return None;
   case RecurKind::FMax:
-    return m_OrdFMax(m_Value(A), m_Value(B)).match(V);
+    if (m_OrdFMax(m_Value(), m_Value()).match(V))
+      return getBinaryOperands(I);
+    return None;
   case RecurKind::FMin:
-    return m_OrdFMin(m_Value(A), m_Value(B)).match(V);
+    if (m_OrdFMin(m_Value(), m_Value()).match(V))
+      return getBinaryOperands(I);
+    return None;
   default:
     llvm_unreachable("unexpected reduction kind");
   }
 }
 
+static void getUses(Instruction *I, SmallVectorImpl<Use *> &Uses) {
+  Uses.clear();
+  for (Use &U : I->operands())
+    Uses.push_back(&U);
+}
+
+// FIXME: cache failure
 Match *Matcher::match(const Operation *Op, Instruction *Root) {
   assert(Op);
 
@@ -52,40 +93,28 @@ Match *Matcher::match(const Operation *Op, Instruction *Root) {
   decltype(Match::LooseInsts) LooseInsts;
   decltype(Match::LiveIns) LiveIns;
   // Add a substitution, return if there's a conflict.
-  auto AddLiveIn = [&LiveIns](unsigned i, Value *V) -> bool {
+  auto AddLiveIn = [&LiveIns](unsigned i, Use *U) -> bool {
     if (LiveIns.size() <= i)
-      LiveIns.resize(i+1, nullptr);
-    if (LiveIns[i] && LiveIns[i] != V)
+      LiveIns.resize(i + 1, nullptr);
+    if (LiveIns[i] && LiveIns[i] != U)
       return false;
-    LiveIns[i] = V;
+    LiveIns[i] = U;
     return true;
   };
 
-  // List of things we want to match
-  SmallVector<std::pair<const Operation *, Value *>> Worklist{{Op, Root}};
-  while (!Worklist.empty()) {
-    auto [Op, V] = Worklist.pop_back_val();
-
-    // Abort if the bit width doesn't match
-    auto *Ty = V->getType();
-    if (!Ty->isSized() || Ty->getScalarSizeInBits() != Op->size())
-      return nullptr;
-
-    if (auto *Input = dyn_cast<InputOperation>(Op)) {
-      if (!AddLiveIn(Input->id(), V))
-        return nullptr;
-      continue;
-    }
-
+  SmallVector<std::pair<const Operation *, Use *>> Worklist;
+  // Match Op on V locally.
+  auto TryMatch = [&](const Operation *Op, Value *V) -> bool {
     // For most operation the matched value is the same as V;
     // But if V is a reduction, its matched value is a Reducer.
     Value *MatchedValue = nullptr;
 
-    // By default, the matched operands are just the operands of the matched instruction
-    // But we may overwrite it later
-    SmallVector<Value *, 4> MatchedOperands;
+    // By default, the matched operands are just the operands of the matched
+    // instruction. But we may overwrite it later
+    SmallVector<Use *, 4> MatchedOperands;
+
     if (auto *I = dyn_cast<Instruction>(V))
-      MatchedOperands.append(I->value_op_begin(), I->value_op_end());
+      getUses(I, MatchedOperands);
 
     if (auto *ReductionOp = dyn_cast<ReductionOperation>(Op)) {
       auto Operands = Op->getOperands();
@@ -97,18 +126,19 @@ Match *Matcher::match(const Operation *Op, Instruction *Root) {
         Rdx = RI.getReductionFor(V);
 
       auto RdxKind = ReductionOp->getReductionKind();
-      Value *A = nullptr;
-      Value *B = nullptr;
-
       if (Rdx && Rdx->Kind == RdxKind) {
-        Instruction *I = RI.decomposeWithBinary(Rdx, LIT);
-        if (I && LIT.isLoose(I))
-          LooseInsts.push_back(I);
-        MatchedOperands.assign(I->value_op_begin(), I->value_op_end());
-        MatchedValue = I;
-      } else if (!Rdx && isSimpleReduction(RdxKind, V, A, B)) {
-        MatchedValue = V;
-        MatchedOperands = {A, B};
+        if (Instruction *I = RI.decomposeWithBinary(Rdx, LIT)) {
+          if (LIT.isLoose(I))
+            LooseInsts.push_back(I);
+          getUses(I, MatchedOperands);
+          MatchedValue = I;
+        }
+      } else if (!Rdx) {
+        if (auto Operands = matchSimpleReduction(RdxKind, V)) {
+          auto [A, B] = *Operands;
+          MatchedValue = V;
+          MatchedOperands.assign({A, B});
+        }
       }
     } else if (auto *Select = dyn_cast<SelectOperation>(Op)) {
       MatchedValue = dyn_cast<SelectInst>(V);
@@ -131,19 +161,47 @@ Match *Matcher::match(const Operation *Op, Instruction *Root) {
         MatchedValue = C;
     }
 
+    if (!MatchedValue)
+      return false;
+
     auto Operands = Op->getOperands();
     assert(MatchedOperands.size() == Operands.size());
     if (Operands.empty())
-      continue;
+      return false;
 
     // Recursively match the operands
-    for (auto [Op2, V2] : llvm::zip(Operands, MatchedOperands))
-      Worklist.emplace_back(Op2, V2);
+    for (auto [Op2, Operand] : llvm::zip(Operands, MatchedOperands))
+      Worklist.emplace_back(Op2, Operand);
 
     if (V == Root)
       Root = cast<Instruction>(MatchedValue);
+
+    return true;
+  };
+
+  if (!TryMatch(Op, Root))
+    return nullptr;
+
+  while (!Worklist.empty()) {
+    auto [Op, Use] = Worklist.pop_back_val();
+
+    auto *V = Use->get();
+
+    // Abort if the bit width doesn't match
+    auto *Ty = V->getType();
+    if (!Ty->isSized() || Ty->getScalarSizeInBits() != Op->size())
+      return nullptr;
+
+    if (auto *Input = dyn_cast<InputOperation>(Op)) {
+      if (!AddLiveIn(Input->id(), Use))
+        return nullptr;
+      continue;
+    }
+
+    if (!TryMatch(Op, V))
+      return nullptr;
   }
-  
+
   auto *M = new Match;
   M->Root = Root;
   M->LiveIns = std::move(LiveIns);

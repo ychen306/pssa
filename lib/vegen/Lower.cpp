@@ -218,6 +218,12 @@ class VectorGen {
   Value *materializeValue(const ControlCondition *, Inserter &);
 
   SmallVector<Instruction *> DeadInsts;
+  std::map<Pack *, SmallVector<OperandPack, 2>> VecOperands;
+  ArrayRef<OperandPack> getVectorOperands(Pack *P) const {
+    auto It = VecOperands.find(P);
+    assert(It != VecOperands.end());
+    return It->second;
+  }
   DenseSet<Pack *> Lowered;
   void runOnLoop(VLoop *);
 
@@ -933,7 +939,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
       continue;
 
     assert(isa<MuPack>(P));
-    auto Operands = P->getOperands();
+    auto Operands = getVectorOperands(P);
     auto *ParentVL = VL->getParent();
     // Gather the inititial vector before entering the loop
     auto *Init = gatherOperand(Operands[0], ParentVL, VL->getLoopCond(),
@@ -979,14 +985,14 @@ void VectorGen::runOnLoop(VLoop *VL) {
         // Special lowering path for phi pack
         SmallVector<Value *, 8> Operands;
         auto *PN = cast<PHINode>(P->values().front());
-        for (auto X : enumerate(P->getOperands())) {
+        for (auto X : enumerate(getVectorOperands(P))) {
           auto *C = VL->getPhiCondition(PN, X.index());
           Operands.push_back(gatherOperand(X.value(), VL, C, Iterator));
         }
         V = InsertBeforeI.createPhi(Operands, VL->getPhiConditions(PN));
       } else {
         SmallVector<Value *, 8> Operands;
-        for (OperandPack OP : P->getOperands())
+        for (OperandPack OP : getVectorOperands(P))
           Operands.push_back(gatherOperand(OP, InsertBeforeI));
         // Some instructions (e.g., masked store) also require masking
         for (auto &M : P->masks())
@@ -1054,7 +1060,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
   // Gather the recursive def. of the mu nodes at the end of the loop
   for (auto [Mu, P] : MusToPatch)
     Mu->setIncomingValue(
-        1, gatherOperand(P->getOperands()[1], VL, nullptr, VL->item_end()));
+        1, gatherOperand(getVectorOperands(P)[1], VL, nullptr, VL->item_end()));
 
   for (auto *Mu : ScalarMusToPatch)
     remapInstruction(Mu);
@@ -1231,6 +1237,10 @@ bool VectorGen::run() {
         CondToPackMap.try_emplace(C, CP.get());
   }
   //==== End secondary packing ====//
+
+  //==== Finalize the operands of the packs ====//
+  for (auto *P : Packs)
+    VecOperands[P] = P->getOperands();
 
   //==== Generate vector code from the packs ====//
   runOnLoop(&PSSA.getTopLevel());
