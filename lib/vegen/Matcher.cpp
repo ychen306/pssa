@@ -14,8 +14,8 @@ static std::pair<Use *, Use *> getBinaryOperands(Instruction *I) {
 
 // FIXME: deal with operands of non-binary inst
 // Detect a binary, unconditional reduction
-static Optional<std::pair<Use *, Use *>>
-matchSimpleReduction(RecurKind Kind, Value *V) {
+static Optional<std::pair<Use *, Use *>> matchSimpleReduction(RecurKind Kind,
+                                                              Value *V) {
   using namespace PatternMatch;
   auto *I = dyn_cast<Instruction>(V);
   switch (Kind) {
@@ -82,8 +82,8 @@ static void getUses(Instruction *I, SmallVectorImpl<Use *> &Uses) {
     Uses.push_back(&U);
 }
 
-// FIXME: cache failure
-Match *Matcher::match(const Operation *Op, Instruction *Root) {
+// FIXME: cache match failure
+Match *Matcher::matchImpl(const Operation *Op, Instruction *Root) {
   assert(Op);
 
   auto [It, Inserted] = Matches.try_emplace(MatchKey(Op, Root));
@@ -208,4 +208,48 @@ Match *Matcher::match(const Operation *Op, Instruction *Root) {
   M->LooseInsts = LooseInsts;
   It->second.reset(M);
   return M;
+}
+
+Matcher::Result Matcher::match(const Operation *Op, Instruction *Root) {
+  auto *M = matchImpl(Op, Root);
+  if (M)
+    return M;
+
+  // If we fail to match but the Root is a reduction,
+  // see if we can pull a subset of the elements and get a match.
+  auto *Rdx = dyn_cast<Reduction>(Root);
+  if (!Rdx)
+    Rdx = RI.getReductionFor(Root);
+  if (!Rdx)
+    return nullptr;
+
+  // Rule out obvious mismatch first.
+  auto *RdxOp = dyn_cast<ReductionOperation>(Op);
+  if (!RdxOp || RdxOp->getReductionKind() != Rdx->Kind ||
+      RdxOp->size() != Root->getType()->getScalarSizeInBits())
+    return nullptr;
+
+  auto Operands = Op->getOperands();
+  if (Rdx->size() < Operands.size())
+    return nullptr;
+
+  // For now, we only consider the rightmost N elements, where N is the number
+  // of operands of Op.
+  auto *RightRdx = RI.copyReduction(Rdx);
+  unsigned NumLeft = Rdx->size() - Operands.size();
+  auto Begin = RightRdx->Elements.begin();
+  RightRdx->Elements.erase(Begin, std::next(Begin, NumLeft));
+  RightRdx = RI.dedup(RightRdx);
+  if (!matchImpl(Op, RightRdx))
+    return nullptr;
+
+  // The aux reduction is the original one with the right elements replaced with
+  // a placeholder
+  auto *AuxRdx = RI.copyReduction(Rdx);
+  AuxRdx->Elements.erase(std::next(AuxRdx->Elements.begin(), NumLeft),
+                         AuxRdx->Elements.end());
+  AuxRdx->Elements.emplace_back(RightRdx, nullptr /*condition*/);
+  AuxRdx = RI.dedup(AuxRdx);
+  LIT.forwardAuxReduction(AuxRdx, Rdx);
+  return AuxRdx;
 }

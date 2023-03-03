@@ -153,10 +153,34 @@ static Optional<SmallVector<DestTy *>> cast_many(ArrayRef<SourceTy *> Xs) {
 // Light-weight bottom-up heuristic for packing reductions
 static void packReductions(ArrayRef<Reduction *> Rdxs,
                            SmallVectorImpl<Pack *> &Packs, PredicatedSSA &PSSA,
-                           ReductionInfo &RI, LooseInstructionTable &LIT) {
+                           ReductionInfo &RI, LooseInstructionTable &LIT,
+                           Matcher &TheMatcher) {
   std::function<void(ArrayRef<Reduction *>)> PackRec =
       [&](ArrayRef<Reduction *> Rdxs) {
-        auto *P = decomposeAndPack(PSSA, RI, LIT, Rdxs);
+        Pack *P = nullptr;
+
+        // Prioritize instructions from the test instruction pool
+        for (auto &InstrDesc : getTestInsts()) {
+          P = GeneralPack::tryPack(
+              InstrDesc, *cast_many<Reduction, Instruction>(Rdxs), TheMatcher);
+          if (P)
+            break;
+          // See if we can rewrite the reduction to enable matching
+          SmallVector<Reduction *> AuxRdxs;
+          for (auto [BoundOp, Rdx] :
+               llvm::zip(InstrDesc.getOperations(), Rdxs)) {
+            auto Res = TheMatcher.match(BoundOp.Op, Rdx);
+            auto *AuxRdx = Res.dyn_cast<Reduction *>();
+            if (!AuxRdx)
+              break;
+            AuxRdxs.push_back(AuxRdx);
+          }
+          if (AuxRdxs.size() == Rdxs.size())
+            return PackRec(AuxRdxs);
+        }
+
+        if (!P)
+          P = decomposeAndPack(PSSA, RI, LIT, Rdxs);
         if (!P) {
           // If we fail to decompose, try to unwrap a loop level
           SmallVector<Reduction *> InnerRdxs;
@@ -246,11 +270,24 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     }
 
     if (!Opcode.empty()) {
-      // Pack with the user specified vector instruction
-      auto &InstrDesc = getInstByName(Opcode);
-      auto *Pack = GeneralPack::tryPack(InstrDesc, Insts, TheMatcher);
-      assert(Pack && "failed to pack with specified instruction");
-      Packs.push_back(Pack);
+      if (Opcode == "bottom-up") {
+        SmallVector<Reduction *> Rdxs;
+        for (auto *I : Insts) {
+          auto *Rdx = RI.getReductionFor(I);
+          if (!Rdx)
+            break;
+          Rdxs.push_back(Rdx);
+        }
+        if (Rdxs.size() != Insts.size())
+          continue;
+        packReductions(Rdxs, Packs, PSSA, RI, LIT, TheMatcher);
+      } else {
+        // Pack with the user specified vector instruction
+        auto &InstrDesc = getInstByName(Opcode);
+        auto *Pack = GeneralPack::tryPack(InstrDesc, Insts, TheMatcher);
+        assert(Pack && "failed to pack with specified instruction");
+        Packs.push_back(Pack);
+      }
     } else if (auto *Pack = SIMDPack::tryPack(Insts)) {
       Packs.push_back(Pack);
     } else if (auto *P = GEPPack::tryPack(Insts)) {
@@ -284,7 +321,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
              SubRdxs);
     // Produce the decomposed reductions as a vector
     if (!DisableReductionPacking)
-      packReductions(SubRdxs, Packs, PSSA, RI, LIT);
+      packReductions(SubRdxs, Packs, PSSA, RI, LIT, TheMatcher);
     errs() << "!!! num packs " << Packs.size() << '\n';
     auto *RootR =
         LIT.getOrCreateReducer(Rdx, *cast_many<Reduction, Value>(SubRdxs));

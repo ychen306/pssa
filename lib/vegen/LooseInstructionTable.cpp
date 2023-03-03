@@ -7,7 +7,8 @@
 using namespace llvm;
 
 void LooseInstructionTable::addLoose(Reducer *R) {
-  assert(!LooseInsts.count(R) && "attempting to insert loose reducer twice");
+  if (LooseInsts.count(R))
+    return;
   auto *Rdx = R->getResult();
   LooseInsts.try_emplace(R,
                          Location{Rdx->getParentLoop(), Rdx->getParentCond()});
@@ -16,7 +17,8 @@ void LooseInstructionTable::addLoose(Reducer *R) {
 
 void LooseInstructionTable::addLoose(Reducer *R, VLoop *VL,
                                      const ControlCondition *C) {
-  assert(!LooseInsts.count(R) && "attempting to insert loose reducer twice");
+  if (LooseInsts.count(R))
+    return;
   LooseInsts.try_emplace(R, Location{VL, C});
   InstToReductionMap.try_emplace(R, R->getResult());
 }
@@ -143,6 +145,8 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
       return;
     // Rewrite use of reductions to instructions
     if (auto *Rdx = InstToReductionMap.lookup(I)) {
+      if (auto *OrigRdx = AuxReductionMap.lookup(Rdx))
+        Rdx = OrigRdx;
       replaceUsesOfReductionWith(Rdx, I, RI);
       ReductionToInstMap.try_emplace(Rdx, I);
     }

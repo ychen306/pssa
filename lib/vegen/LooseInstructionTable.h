@@ -90,6 +90,8 @@ class LooseInstructionTable {
   llvm::FoldingSet<UniqueReducer> UniqueReducers;
   llvm::FoldingSet<UniqueOneHotPhi> UniqueOneHotPhis;
 
+  llvm::DenseMap<Reduction *, Reduction *> AuxReductionMap;
+
   // Track a loose instruction
   void addLoose(llvm::Reducer *);
 
@@ -160,6 +162,16 @@ public:
   bool insertInto(llvm::ArrayRef<llvm::Instruction *> Insts,
                   PredicatedSSA &PSSA, DependenceChecker &DepChecker,
                   ReductionInfo &RI);
+
+  // "Forward" one reduction to another equivalent one.
+  // This is useful because sometimes we want to rewrite a reduction to simplify
+  // transformations
+  void forwardAuxReduction(Reduction *From, Reduction *To) {
+    // We will forward transitively
+    if (auto *OrigRdx = AuxReductionMap.lookup(To))
+      To = OrigRdx;
+    AuxReductionMap[From] = To;
+  }
 };
 
 #endif // END VEGEN_LOOSEINSTRUCTIONTABLE_H

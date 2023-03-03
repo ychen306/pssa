@@ -675,7 +675,8 @@ GeneralPack *GeneralPack::tryPack(const InstructionDescriptor &InstDesc,
   SmallVector<Match *> Matches;
   SmallVector<Instruction *> Roots;
   for (auto [BoundOp, I] : llvm::zip(InstDesc.getOperations(), Insts)) {
-    auto *M = TheMatcher.match(BoundOp.Op, I);
+    auto Result = TheMatcher.match(BoundOp.Op, I);
+    auto *M = Result.dyn_cast<Match *>();
     if (!M)
       return nullptr;
     Matches.push_back(M);

@@ -2,6 +2,7 @@
 #define VEGEN_MATCHER_H
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/PointerUnion.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace llvm {
@@ -13,6 +14,7 @@ class Use;
 class Operation;
 class ReductionInfo;
 class LooseInstructionTable;
+struct Reduction;
 
 struct Match {
   llvm::Instruction *Root;
@@ -30,11 +32,13 @@ class Matcher {
   using MatchKey = std::pair<const Operation *, llvm::Instruction *>;
   llvm::DenseMap<MatchKey, std::unique_ptr<Match>> Matches;
 
+  Match *matchImpl(const Operation *Op, llvm::Instruction *Root);
+
 public:
   Matcher(ReductionInfo &RI, LooseInstructionTable &LIT) : RI(RI), LIT(LIT) {}
 
-  // Check if we can match `V` with `Op` and fill in
-  Match *match(const Operation *Op, llvm::Instruction *Root);
+  using Result = llvm::PointerUnion<Match *, Reduction *>;
+  Result match(const Operation *Op, llvm::Instruction *Root);
 };
 
 #endif // VEGEN_MATCHER_H
