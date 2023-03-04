@@ -480,22 +480,23 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
                                 "binary-reducer" /*name*/);
 }
 
-// TODO: generalize to deal with multiple elements
+// FIXME: check with dependence analysis and only unwrap when loops are independent
 Reduction *ReductionInfo::unwrapLoop(Reduction *Rdx,
                                      LooseInstructionTable &LIT) {
-  // Decompose a recurrent reduction
-  if (Rdx->size() == 1 && !Rdx->Elements.front().Loops.empty()) {
-    // decompose (+ a^L) -> (+ a^L'), (+ a)
-    auto *VL = Rdx->Elements.front().Loops.back();
-
+  auto *C = Rdx->getParentCond();
+  for (auto &Elt : Rdx->Elements) {
+    if (Elt.Loops.empty())
+      return nullptr;
     // If the loop's execution is not implied by the parent condition
     // then we need to unwrap the condition first.
-    if (!isImplied(VL->getLoopCond(), Rdx->getParentCond()))
+    if (!isImplied(Elt.Loops.back()->getLoopCond(), C))
       return nullptr;
-
-    return LIT.getOrCreateInnerReduction(Rdx, VL, *this);
   }
-  return nullptr;
+
+  // Reduce with the first loop (maybe we will do something smarter later)
+  auto *VL = Rdx->Elements.front().Loops.back();
+
+  return LIT.getOrCreateInnerReduction(Rdx, VL, *this);
 }
 
 void ReductionInfo::setReductionFor(Value *V, Reduction *Rdx) {

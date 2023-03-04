@@ -179,21 +179,25 @@ static void packReductions(ArrayRef<Reduction *> Rdxs,
             return PackRec(AuxRdxs);
         }
 
-        if (!P)
-          P = decomposeAndPack(PSSA, RI, LIT, Rdxs);
         if (!P) {
-          // If we fail to decompose, try to unwrap a loop level
+          // Try to unwrap loop level
           SmallVector<Reduction *> InnerRdxs;
           for (auto *Rdx : Rdxs) {
             auto *InnerRdx = RI.unwrapLoop(Rdx, LIT);
             if (!InnerRdx)
-              return;
+              break;
             InnerRdxs.push_back(InnerRdx);
           }
-          PackRec(InnerRdxs);
-          return;
+          if (InnerRdxs.size() == Rdxs.size())
+            return PackRec(InnerRdxs);
         }
-        Packs.push_back(P);
+
+        if (!P)
+          P = decomposeAndPack(PSSA, RI, LIT, Rdxs);
+        if (P)
+          Packs.push_back(P);
+        else
+          return;
 
         for (auto O : P->getOperands()) {
           if (all_of(O, [&](auto *V) { return LIT.isLooseMu(V); })) {
@@ -265,7 +269,10 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       } else {
         I = NameToInstMap.lookup(Name);
       }
-      assert(I);
+      if (!I) {
+        errs() << "Can't find instruction with name: " << Name << '\n';
+        abort();
+      }
       Insts.push_back(I);
     }
 

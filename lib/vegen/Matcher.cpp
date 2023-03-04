@@ -210,6 +210,16 @@ Match *Matcher::matchImpl(const Operation *Op, Instruction *Root) {
   return M;
 }
 
+static void unwrapAllLoops(Reduction *Rdx) {
+  for (;;) {
+    for (auto &Elt : Rdx->Elements)
+      if (Elt.Loops.empty())
+        return;
+    for (auto &Elt : Rdx->Elements)
+      Elt.Loops.pop_back();
+  }
+}
+
 Matcher::Result Matcher::match(const Operation *Op, Instruction *Root) {
   auto *M = matchImpl(Op, Root);
   if (M)
@@ -230,7 +240,7 @@ Matcher::Result Matcher::match(const Operation *Op, Instruction *Root) {
     return nullptr;
 
   auto Operands = Op->getOperands();
-  if (Rdx->size() < Operands.size())
+  if (Rdx->size() <= Operands.size())
     return nullptr;
 
   // For now, we only consider the rightmost N elements, where N is the number
@@ -240,7 +250,10 @@ Matcher::Result Matcher::match(const Operation *Op, Instruction *Root) {
   auto Begin = RightRdx->Elements.begin();
   RightRdx->Elements.erase(Begin, std::next(Begin, NumLeft));
   RightRdx = RI.dedup(RightRdx);
-  if (!matchImpl(Op, RightRdx))
+  // The pattern matcher doesn't deal with loops, so unwrap as many loop levels as we can
+  auto *UnwrappedRight = RI.copyReduction(RightRdx);
+  unwrapAllLoops(UnwrappedRight);
+  if (!matchImpl(Op, UnwrappedRight))
     return nullptr;
 
   // The aux reduction is the original one with the right elements replaced with
