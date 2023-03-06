@@ -3,7 +3,9 @@
 #include "LooseInstructionTable.h"
 #include "Reducer.h"
 #include "Reduction.h"
+#include "llvm/ADT/BitVector.h"
 #include "llvm/IR/PatternMatch.h"
+#include <numeric> // std::iota
 
 using namespace llvm;
 
@@ -210,14 +212,16 @@ Match *Matcher::matchImpl(const Operation *Op, Instruction *Root) {
   return M;
 }
 
-static void unwrapAllLoops(Reduction *Rdx) {
+static Reduction *unwrapAllLoops(Reduction *Rdx, ReductionInfo &RI) {
+  Rdx = RI.copyReduction(Rdx);
   for (;;) {
     for (auto &Elt : Rdx->Elements)
       if (Elt.Loops.empty())
-        return;
+        return Rdx;
     for (auto &Elt : Rdx->Elements)
       Elt.Loops.pop_back();
   }
+  return Rdx;
 }
 
 Matcher::Result Matcher::match(const Operation *Op, Instruction *Root) {
@@ -243,25 +247,53 @@ Matcher::Result Matcher::match(const Operation *Op, Instruction *Root) {
   if (Rdx->size() <= Operands.size())
     return nullptr;
 
-  // For now, we only consider the rightmost N elements, where N is the number
-  // of operands of Op.
-  auto *RightRdx = RI.copyReduction(Rdx);
-  unsigned NumLeft = Rdx->size() - Operands.size();
-  auto Begin = RightRdx->Elements.begin();
-  RightRdx->Elements.erase(Begin, std::next(Begin, NumLeft));
-  RightRdx = RI.dedup(RightRdx);
-  // The pattern matcher doesn't deal with loops, so unwrap as many loop levels as we can
-  auto *UnwrappedRight = RI.copyReduction(RightRdx);
-  unwrapAllLoops(UnwrappedRight);
-  if (!matchImpl(Op, UnwrappedRight))
+  // Indices of the available reduction elements; -1 if taken
+  SmallVector<int> AvailableIdxs(Rdx->size());
+  SmallVector<int> SubMatches(Operands.size(), -1);
+  std::iota(AvailableIdxs.begin(), AvailableIdxs.end(), 0);
+  // Match the operands right-to-left
+  for (int i = Operands.size() - 1; i >= 0; i--) {
+    auto *SubOp = Operands[i];
+    bool Matched = false;
+    // Try to match SubOp from one of AvailableIdxs, preferring the right most
+    // one
+    for (int &j : llvm::reverse(AvailableIdxs)) {
+      if (j == -1)
+        continue;
+      auto *I = dyn_cast<Instruction>(Rdx->Elements[j].Val);
+      if (!I)
+        continue;
+      if (I && matchImpl(SubOp, I)) {
+        // the i'th operand matches with the j'th element
+        SubMatches[i] = j;
+        // Mark that the j'th element is used
+        j = -1;
+        Matched = true;
+        break;
+      }
+    }
+    // Abort if we fail to find match a sub operation
+    if (!Matched)
+      return nullptr;
+  }
+  // Build the sub reduction given the sub matches and do a final consistency
+  // check
+  auto *SubRdx = RI.copyReduction(Rdx);
+  SubRdx->Elements.clear();
+  for (unsigned j : SubMatches) {
+    assert(j >= 0);
+    SubRdx->Elements.push_back(Rdx->Elements[j]);
+  }
+  SubRdx = RI.dedup(SubRdx);
+  if (!matchImpl(Op, unwrapAllLoops(SubRdx, RI)))
     return nullptr;
 
-  // The aux reduction is the original one with the right elements replaced with
-  // a placeholder
   auto *AuxRdx = RI.copyReduction(Rdx);
-  AuxRdx->Elements.erase(std::next(AuxRdx->Elements.begin(), NumLeft),
-                         AuxRdx->Elements.end());
-  AuxRdx->Elements.emplace_back(RightRdx, nullptr /*condition*/);
+  AuxRdx->Elements.clear();
+  for (auto Enum : enumerate(Rdx->Elements))
+    if (!llvm::count(SubMatches, Enum.index()))
+      AuxRdx->Elements.push_back(Enum.value());
+  AuxRdx->Elements.emplace_back(SubRdx, nullptr /*condition*/);
   AuxRdx = RI.dedup(AuxRdx);
   LIT.forwardAuxReduction(AuxRdx, Rdx);
   return AuxRdx;
