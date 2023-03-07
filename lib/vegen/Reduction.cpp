@@ -461,30 +461,8 @@ void ReductionInfo::split(const Reduction *Rdx, unsigned Parts,
   }
 }
 
-Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
-                                            LooseInstructionTable &LIT) {
-#if 0
-  if (Rdx->size() < 2)
-    return nullptr;
-
-  // Left's elements is the first n-1 elements of Rdx's elements
-  auto *Left = copyReduction(Rdx);
-  Left->Elements.clear();
-  Left->Elements.insert(Left->Elements.begin(), Rdx->Elements.begin(),
-                        Rdx->Elements.end() - 1);
-
-  // Right's elements is the last element of Rdx's elements
-  auto *Right = copyReduction(Rdx);
-  Right->Elements = {Rdx->Elements.back()};
-
-  return LIT.getOrCreateReducer(Rdx, {dedup(Left), dedup(Right)},
-                                "binary-reducer" /*name*/);
-#endif
-  return decompose(Rdx, 2, LIT);
-}
-
 Reducer *ReductionInfo::decompose(Reduction *Rdx, unsigned N,
-                                            LooseInstructionTable &LIT) {
+                                  LooseInstructionTable &LIT) {
   if (Rdx->size() < N)
     return nullptr;
 
@@ -493,10 +471,10 @@ Reducer *ReductionInfo::decompose(Reduction *Rdx, unsigned N,
   auto *First = copyReduction(Rdx);
   First->Elements.clear();
   First->Elements.insert(First->Elements.begin(), Rdx->Elements.begin(),
-      Rdx->Elements.begin() + M - N + 1);
+                         Rdx->Elements.begin() + M - N + 1);
 
   SmallVector<Value *, 4> Args{First};
-  for (auto &Elt : drop_begin(Rdx->Elements, M-N+1)) {
+  for (auto &Elt : drop_begin(Rdx->Elements, M - N + 1)) {
     auto *SubRdx = copyReduction(Rdx);
     SubRdx->Elements = {Elt};
     Args.push_back(dedup(SubRdx));
@@ -506,7 +484,8 @@ Reducer *ReductionInfo::decompose(Reduction *Rdx, unsigned N,
   return LIT.getOrCreateReducer(Rdx, Args, "binary-reducer" /*name*/);
 }
 
-// FIXME: check with dependence analysis and only unwrap when loops are independent
+// FIXME: check with dependence analysis and only unwrap when loops are
+// independent
 Reduction *ReductionInfo::unwrapLoop(Reduction *Rdx,
                                      LooseInstructionTable &LIT) {
   auto *C = Rdx->getParentCond();

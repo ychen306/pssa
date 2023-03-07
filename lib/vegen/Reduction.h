@@ -142,10 +142,14 @@ public:
 
   // Decompose a reduction into sub redutions with a binary reducer
   llvm::Reducer *decomposeWithBinary(Reduction *Rdx,
-                                     LooseInstructionTable &LIT);
+                                     LooseInstructionTable &LIT) {
+
+    return decompose(Rdx, 2, LIT);
+  }
 
   // decompose with an n-ary reducer
-  llvm::Reducer *decompose(Reduction *Rdx, unsigned N, LooseInstructionTable &LIT);
+  llvm::Reducer *decompose(Reduction *Rdx, unsigned N,
+                           LooseInstructionTable &LIT);
 
   // (+ a@c) -> phi (c : a, _: 0)
   llvm::PHINode *unwrapCondition(Reduction *Rdx, LooseInstructionTable &LIT);
