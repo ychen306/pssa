@@ -463,6 +463,7 @@ void ReductionInfo::split(const Reduction *Rdx, unsigned Parts,
 
 Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
                                             LooseInstructionTable &LIT) {
+#if 0
   if (Rdx->size() < 2)
     return nullptr;
 
@@ -478,6 +479,31 @@ Reducer *ReductionInfo::decomposeWithBinary(Reduction *Rdx,
 
   return LIT.getOrCreateReducer(Rdx, {dedup(Left), dedup(Right)},
                                 "binary-reducer" /*name*/);
+#endif
+  return decompose(Rdx, 2, LIT);
+}
+
+Reducer *ReductionInfo::decompose(Reduction *Rdx, unsigned N,
+                                            LooseInstructionTable &LIT) {
+  if (Rdx->size() < N)
+    return nullptr;
+
+  unsigned M = Rdx->size();
+  // The first argument are the first M-N+1 elements of Rdx
+  auto *First = copyReduction(Rdx);
+  First->Elements.clear();
+  First->Elements.insert(First->Elements.begin(), Rdx->Elements.begin(),
+      Rdx->Elements.begin() + M - N + 1);
+
+  SmallVector<Value *, 4> Args{First};
+  for (auto &Elt : drop_begin(Rdx->Elements, M-N+1)) {
+    auto *SubRdx = copyReduction(Rdx);
+    SubRdx->Elements = {Elt};
+    Args.push_back(dedup(SubRdx));
+  }
+
+  assert(Args.size() == N);
+  return LIT.getOrCreateReducer(Rdx, Args, "binary-reducer" /*name*/);
 }
 
 // FIXME: check with dependence analysis and only unwrap when loops are independent

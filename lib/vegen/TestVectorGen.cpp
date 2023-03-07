@@ -44,6 +44,16 @@ cl::opt<bool> DisableReductionPacking(
     "disable-reduction-packing",
     cl::desc("bother the operands of <rdx-to-pack> and produce them as scalar"),
     cl::init(false));
+
+cl::opt<bool>
+    IncludePMADDWD("include-pmaddwd",
+                   cl::desc("include pmaddwd in the test instruction pool"),
+                   cl::init(true));
+
+cl::opt<bool>
+    IncludeVPDPWSSD("include-vpdpwssd",
+                    cl::desc("include vpdpwssd in the test instruction pool"),
+                    cl::init(false));
 } // namespace
 
 static Operation *sext(const Operation *X, unsigned N) {
@@ -54,8 +64,9 @@ static Operation *mul(const Operation *A, const Operation *B) {
   return new ReductionOperation(RecurKind::Mul, {A, B});
 }
 
-static Operation *add(const Operation *A, const Operation *B) {
-  return new ReductionOperation(RecurKind::Add, {A, B});
+template <typename... ArgTypes> static Operation *add(ArgTypes &&...Args) {
+  return new ReductionOperation(RecurKind::Add,
+                                {std::forward<ArgTypes>(Args)...});
 }
 
 // (add (mul (sext a1) (sext b1)) (mul (sext a2) (sext b2)))
@@ -67,10 +78,16 @@ static Operation *buildMulAdd() {
   return add(mul(a1, b1), mul(a2, b2));
 }
 
-static std::vector<InstructionDescriptor> TestInsts;
-ArrayRef<InstructionDescriptor> getTestInsts() {
-  if (!TestInsts.empty())
-    return TestInsts;
+static Operation *buildMulAcc() {
+  auto *c = new InputOperation(0, 32);
+  auto *a1 = sext(new InputOperation(1, 16), 32);
+  auto *b1 = sext(new InputOperation(2, 16), 32);
+  auto *a2 = sext(new InputOperation(3, 16), 32);
+  auto *b2 = sext(new InputOperation(4, 16), 32);
+  return add(c, mul(a1, b1), mul(a2, b2));
+}
+
+static InstructionDescriptor buildPMADDWD() {
   auto *MulAdd = buildMulAdd();
   ElementBinding a1{0, 0};
   ElementBinding a2{0, 1};
@@ -88,14 +105,59 @@ ArrayRef<InstructionDescriptor> getTestInsts() {
   ElementBinding b6{1, 5};
   ElementBinding b7{1, 6};
   ElementBinding b8{1, 7};
-  TestInsts.push_back(InstructionDescriptor(
-      "pmaddwd128", {VectorSize{128, 16}, VectorSize{128, 16}},
+
+  return InstructionDescriptor("pmaddwd128",
+                               {VectorSize{128, 16}, VectorSize{128, 16}},
+                               {
+                                   {MulAdd, {a2, b2, a1, b1}},
+                                   {MulAdd, {a4, b4, a3, b3}},
+                                   {MulAdd, {a6, b6, a5, b5}},
+                                   {MulAdd, {a8, b8, a7, b7}},
+                               });
+}
+
+static InstructionDescriptor buildVPDPWSSD() {
+  auto *MulAcc = buildMulAcc();
+  ElementBinding a1{1, 0};
+  ElementBinding a2{1, 1};
+  ElementBinding a3{1, 2};
+  ElementBinding a4{1, 3};
+  ElementBinding a5{1, 4};
+  ElementBinding a6{1, 5};
+  ElementBinding a7{1, 6};
+  ElementBinding a8{1, 7};
+  ElementBinding b1{2, 0};
+  ElementBinding b2{2, 1};
+  ElementBinding b3{2, 2};
+  ElementBinding b4{2, 3};
+  ElementBinding b5{2, 4};
+  ElementBinding b6{2, 5};
+  ElementBinding b7{2, 6};
+  ElementBinding b8{2, 7};
+  ElementBinding c1{0, 0};
+  ElementBinding c2{0, 1};
+  ElementBinding c3{0, 2};
+  ElementBinding c4{0, 3};
+
+  return InstructionDescriptor(
+      "vpdpwssd128",
+      {VectorSize{128, 32}, VectorSize{128, 16}, VectorSize{128, 16}},
       {
-          {MulAdd, {a2, b2, a1, b1}},
-          {MulAdd, {a4, b4, a3, b3}},
-          {MulAdd, {a6, b6, a5, b5}},
-          {MulAdd, {a8, b8, a7, b7}},
-      }));
+          {MulAcc, {c1, a2, b2, a1, b1}},
+          {MulAcc, {c2, a4, b4, a3, b3}},
+          {MulAcc, {c3, a6, b6, a5, b5}},
+          {MulAcc, {c4, a8, b8, a7, b7}},
+      });
+}
+
+static std::vector<InstructionDescriptor> TestInsts;
+ArrayRef<InstructionDescriptor> getTestInsts() {
+  if (!TestInsts.empty())
+    return TestInsts;
+  if (IncludePMADDWD)
+    TestInsts.push_back(buildPMADDWD());
+  if (IncludeVPDPWSSD)
+    TestInsts.push_back(buildVPDPWSSD());
   return TestInsts;
 }
 

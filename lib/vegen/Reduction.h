@@ -144,6 +144,9 @@ public:
   llvm::Reducer *decomposeWithBinary(Reduction *Rdx,
                                      LooseInstructionTable &LIT);
 
+  // decompose with an n-ary reducer
+  llvm::Reducer *decompose(Reduction *Rdx, unsigned N, LooseInstructionTable &LIT);
+
   // (+ a@c) -> phi (c : a, _: 0)
   llvm::PHINode *unwrapCondition(Reduction *Rdx, LooseInstructionTable &LIT);
 

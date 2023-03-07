@@ -33,6 +33,9 @@ class Matcher {
   llvm::DenseMap<MatchKey, std::unique_ptr<Match>> Matches;
 
   Match *matchImpl(const Operation *Op, llvm::Instruction *Root);
+  // Find a way to rewrite Rdx so that Op matches one of its elements
+  Reduction *findAuxReduction(Reduction *Rdx, const Operation *Op,
+                              Reduction *&SubRdx);
 
 public:
   Matcher(ReductionInfo &RI, LooseInstructionTable &LIT) : RI(RI), LIT(LIT) {}

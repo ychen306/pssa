@@ -121,15 +121,14 @@ Match *Matcher::matchImpl(const Operation *Op, Instruction *Root) {
     if (auto *ReductionOp = dyn_cast<ReductionOperation>(Op)) {
       auto Operands = Op->getOperands();
 
-      // FIXME: deal with multi-way reduction later
-      assert(Operands.size() == 2);
       Reduction *Rdx = dyn_cast<Reduction>(V);
       if (!Rdx)
         Rdx = RI.getReductionFor(V);
 
       auto RdxKind = ReductionOp->getReductionKind();
       if (Rdx && Rdx->Kind == RdxKind) {
-        if (Instruction *I = RI.decomposeWithBinary(Rdx, LIT)) {
+        if (Instruction *I =
+                RI.decompose(Rdx, Operands.size() /*N-way reduction*/, LIT)) {
           if (LIT.isLoose(I))
             LooseInsts.push_back(I);
           getUses(I, MatchedOperands);
@@ -224,25 +223,8 @@ static Reduction *unwrapAllLoops(Reduction *Rdx, ReductionInfo &RI) {
   return Rdx;
 }
 
-Matcher::Result Matcher::match(const Operation *Op, Instruction *Root) {
-  auto *M = matchImpl(Op, Root);
-  if (M)
-    return M;
-
-  // If we fail to match but the Root is a reduction,
-  // see if we can pull a subset of the elements and get a match.
-  auto *Rdx = dyn_cast<Reduction>(Root);
-  if (!Rdx)
-    Rdx = RI.getReductionFor(Root);
-  if (!Rdx)
-    return nullptr;
-
-  // Rule out obvious mismatch first.
-  auto *RdxOp = dyn_cast<ReductionOperation>(Op);
-  if (!RdxOp || RdxOp->getReductionKind() != Rdx->Kind ||
-      RdxOp->size() != Root->getType()->getScalarSizeInBits())
-    return nullptr;
-
+Reduction *Matcher::findAuxReduction(Reduction *Rdx, const Operation *Op,
+                                     Reduction *&SubRdx) {
   auto Operands = Op->getOperands();
   if (Rdx->size() <= Operands.size())
     return nullptr;
@@ -278,7 +260,7 @@ Matcher::Result Matcher::match(const Operation *Op, Instruction *Root) {
   }
   // Build the sub reduction given the sub matches and do a final consistency
   // check
-  auto *SubRdx = RI.copyReduction(Rdx);
+  SubRdx = RI.copyReduction(Rdx);
   SubRdx->Elements.clear();
   for (unsigned j : SubMatches) {
     assert(j >= 0);
@@ -297,4 +279,46 @@ Matcher::Result Matcher::match(const Operation *Op, Instruction *Root) {
   AuxRdx = RI.dedup(AuxRdx);
   LIT.forwardAuxReduction(AuxRdx, Rdx);
   return AuxRdx;
+}
+
+Matcher::Result Matcher::match(const Operation *Op, Instruction *Root) {
+  auto *M = matchImpl(Op, Root);
+  if (M)
+    return M;
+
+  // If we fail to match but the Root is a reduction,
+  // see if we can pull a subset of the elements and get a match.
+  auto *Rdx = dyn_cast<Reduction>(Root);
+  if (!Rdx)
+    Rdx = RI.getReductionFor(Root);
+  if (!Rdx)
+    return nullptr;
+
+  // Rule out obvious mismatch first.
+  auto *RdxOp = dyn_cast<ReductionOperation>(Op);
+  if (!RdxOp || RdxOp->getReductionKind() != Rdx->Kind ||
+      RdxOp->size() != Root->getType()->getScalarSizeInBits())
+    return nullptr;
+
+  Reduction *SubRdx = nullptr;
+  if (auto *AuxRdx = findAuxReduction(Rdx, Op, SubRdx))
+    return AuxRdx;
+
+  // One last hurrah: in some cases, when Op has the form `Op = (+ acc ?)` with
+  // n arguments, where acc is an InputOperation, we can match Op on a
+  // (n-1)-nary *recurrent* reduction.
+  auto Operands = Op->getOperands();
+  if (!isa<InputOperation>(Operands.front()))
+    return nullptr;
+
+  ReductionOperation AuxOp(RdxOp->getReductionKind(), Operands.drop_front());
+  if (auto *AuxRdx = findAuxReduction(Rdx, &AuxOp, SubRdx)) {
+    // Check that all elements of the factored sub reduction are recurrent
+    for (auto &Elt : SubRdx->Elements)
+      if (!Elt.reducedByLoop())
+        return nullptr;
+    return AuxRdx;
+  }
+
+  return nullptr;
 }
