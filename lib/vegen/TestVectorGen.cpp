@@ -54,10 +54,19 @@ cl::opt<bool>
     IncludeVPDPWSSD("include-vpdpwssd",
                     cl::desc("include vpdpwssd in the test instruction pool"),
                     cl::init(false));
+
+cl::opt<bool>
+    IncludeVPDPBUSD("include-vpdpbusd",
+                    cl::desc("include vpdpbusd in the test instruction pool"),
+                    cl::init(true));
 } // namespace
 
 static Operation *sext(const Operation *X, unsigned N) {
   return new ConvertOperation(Instruction::SExt, N, X);
+}
+
+static Operation *zext(const Operation *X, unsigned N) {
+  return new ConvertOperation(Instruction::ZExt, N, X);
 }
 
 static Operation *mul(const Operation *A, const Operation *B) {
@@ -85,6 +94,19 @@ static Operation *buildMulAcc() {
   auto *a2 = sext(new InputOperation(3, 16), 32);
   auto *b2 = sext(new InputOperation(4, 16), 32);
   return add(c, mul(a1, b1), mul(a2, b2));
+}
+
+static Operation *buildDot() {
+  auto *c = new InputOperation(0, 32);
+  auto *a1 = zext(new InputOperation(1, 8), 32);
+  auto *a2 = zext(new InputOperation(2, 8), 32);
+  auto *a3 = zext(new InputOperation(3, 8), 32);
+  auto *a4 = zext(new InputOperation(4, 8), 32);
+  auto *b1 = zext(new InputOperation(5, 8), 32);
+  auto *b2 = zext(new InputOperation(6, 8), 32);
+  auto *b3 = zext(new InputOperation(7, 8), 32);
+  auto *b4 = zext(new InputOperation(8, 8), 32);
+  return add(c, mul(a1, b1), mul(a2, b2), mul(a3, b3), mul(a4, b4));
 }
 
 static InstructionDescriptor buildPMADDWD() {
@@ -150,6 +172,30 @@ static InstructionDescriptor buildVPDPWSSD() {
       });
 }
 
+static InstructionDescriptor buildVPDPBUSD() {
+  ElementBinding c[4];
+  ElementBinding a[16];
+  ElementBinding b[16];
+  for (unsigned i = 0; i < 4; i++)
+    c[i] = ElementBinding{0, i};
+  for (unsigned i = 0; i < 16; i++) {
+    a[i] = ElementBinding{1, i};
+    b[i] = ElementBinding{2, i};
+  }
+  auto *Dot = buildDot();
+  BoundOperation Out[4];
+  for (unsigned i = 0; i < 4; i++) {
+    Out[i] = BoundOperation{Dot,
+                            {c[i], a[4 * i], b[4 * i], a[4 * i + 1],
+                             b[4 * i + 1], a[4 * i + 2], b[4 * i + 2],
+                             a[4 * i + 3], b[4 * i + 3]}};
+  }
+  return InstructionDescriptor(
+      "vpdpbusd128",
+      {VectorSize{128, 32}, VectorSize{128, 8}, VectorSize{128, 8}},
+      {Out[0], Out[1], Out[2], Out[3]});
+}
+
 static std::vector<InstructionDescriptor> TestInsts;
 ArrayRef<InstructionDescriptor> getTestInsts() {
   if (!TestInsts.empty())
@@ -158,6 +204,8 @@ ArrayRef<InstructionDescriptor> getTestInsts() {
     TestInsts.push_back(buildPMADDWD());
   if (IncludeVPDPWSSD)
     TestInsts.push_back(buildVPDPWSSD());
+  if (IncludeVPDPBUSD)
+    TestInsts.push_back(buildVPDPBUSD());
   return TestInsts;
 }
 

@@ -180,6 +180,8 @@ Match *Matcher::matchImpl(const Operation *Op, Instruction *Root) {
     return true;
   };
 
+  assert(!isa<InputOperation>(Op) && "can't match with trivial input");
+
   if (!TryMatch(Op, Root))
     return nullptr;
 
@@ -223,46 +225,94 @@ static Reduction *unwrapAllLoops(Reduction *Rdx, ReductionInfo &RI) {
   return Rdx;
 }
 
+Optional<Matcher::Matching>
+Matcher::findMatching(ArrayRef<const Operation *> Ops,
+                      ArrayRef<Instruction *> Insts) {
+
+  Matching Result(Ops.size(), -1);
+
+  SmallVector<BitVector> InstToOps(Insts.size(), BitVector(Ops.size(), false));
+  SmallVector<BitVector> OpToInsts(Ops.size(), BitVector(Insts.size(), false));
+  for (unsigned i = 0; i < Ops.size(); i++) {
+    auto *Op = Ops[i];
+    OpToInsts.emplace_back(Insts.size());
+    bool IsInputOp = isa<InputOperation>(Op);
+    for (unsigned j = 0; j < Insts.size(); j++) {
+      auto *I = Insts[j];
+      if (I && (IsInputOp || matchImpl(Op, I))) {
+        // the i'th op is compatible with the j'th Inst
+        OpToInsts[i].set(j);
+        InstToOps[j].set(i);
+      }
+    }
+  }
+
+  // indicate whether an instruction is availlable; false if taken
+  BitVector AvailableInsts(Insts.size(), true);
+  BitVector AvailableOps(Ops.size(), true);
+
+  // Build the matching
+  unsigned NumMatched = 0;
+  while (NumMatched < Ops.size()) {
+    // Match the most constrained Ops with the least matched insts;
+    // Tiebreak left to right
+    int OpId = -1;
+    unsigned MinAvail;
+    for (unsigned i : AvailableOps.set_bits()) {
+      OpToInsts[i] &= AvailableInsts;
+      unsigned NumInsts = OpToInsts[i].count();
+      if (OpId == -1 || NumInsts <= MinAvail) {
+        MinAvail = NumInsts;
+        OpId = i;
+      }
+    }
+    if (OpId == -1)
+      return None;
+
+    // Find the most constrained instructions that's compatible with the Op
+    int InstId = -1;
+    for (unsigned i : OpToInsts[OpId].set_bits()) {
+      InstToOps[i] &= AvailableOps;
+      assert(InstToOps[i].test(OpId));
+      unsigned NumOps = InstToOps[i].count();
+      if (InstId == -1 || NumOps <= MinAvail) {
+        MinAvail = NumOps;
+        InstId = i;
+      }
+    }
+    if (InstId == -1)
+      return None;
+
+    assert(AvailableInsts.test(InstId));
+    assert(AvailableOps.test(OpId));
+    AvailableInsts.reset(InstId);
+    AvailableOps.reset(OpId);
+    Result[OpId] = InstId;
+    NumMatched++;
+  }
+
+  return Result;
+}
+
 Reduction *Matcher::findAuxReduction(Reduction *Rdx, const Operation *Op,
                                      Reduction *&SubRdx) {
   auto Operands = Op->getOperands();
-  if (Rdx->size() <= Operands.size())
+  if (Rdx->size() < Operands.size())
     return nullptr;
 
-  // Indices of the available reduction elements; -1 if taken
-  SmallVector<int> AvailableIdxs(Rdx->size());
-  SmallVector<int> SubMatches(Operands.size(), -1);
-  std::iota(AvailableIdxs.begin(), AvailableIdxs.end(), 0);
-  // Match the operands right-to-left
-  for (int i = Operands.size() - 1; i >= 0; i--) {
-    auto *SubOp = Operands[i];
-    bool Matched = false;
-    // Try to match SubOp from one of AvailableIdxs, preferring the right most
-    // one
-    for (int &j : llvm::reverse(AvailableIdxs)) {
-      if (j == -1)
-        continue;
-      auto *I = dyn_cast<Instruction>(Rdx->Elements[j].Val);
-      if (!I)
-        continue;
-      if (I && matchImpl(SubOp, I)) {
-        // the i'th operand matches with the j'th element
-        SubMatches[i] = j;
-        // Mark that the j'th element is used
-        j = -1;
-        Matched = true;
-        break;
-      }
-    }
-    // Abort if we fail to find match a sub operation
-    if (!Matched)
-      return nullptr;
-  }
+  SmallVector<Instruction *, 8> Insts;
+  for (auto &Elt : Rdx->Elements)
+    Insts.push_back(dyn_cast<Instruction>(Elt.Val));
+
+  auto OpMatching = findMatching(Operands, Insts);
+  if (!OpMatching)
+    return nullptr;
+
   // Build the sub reduction given the sub matches and do a final consistency
   // check
   SubRdx = RI.copyReduction(Rdx);
   SubRdx->Elements.clear();
-  for (unsigned j : SubMatches) {
+  for (int j : *OpMatching) {
     assert(j >= 0);
     SubRdx->Elements.push_back(Rdx->Elements[j]);
   }
@@ -270,10 +320,16 @@ Reduction *Matcher::findAuxReduction(Reduction *Rdx, const Operation *Op,
   if (!matchImpl(Op, unwrapAllLoops(SubRdx, RI)))
     return nullptr;
 
+  // Special case where the sub rdx is just the original reduction permuted
+  if (SubRdx->size() == Rdx->size()) {
+    LIT.forwardAuxReduction(SubRdx, Rdx);
+    return SubRdx;
+  }
+
   auto *AuxRdx = RI.copyReduction(Rdx);
   AuxRdx->Elements.clear();
   for (auto Enum : enumerate(Rdx->Elements))
-    if (!llvm::count(SubMatches, Enum.index()))
+    if (!llvm::count(*OpMatching, Enum.index()))
       AuxRdx->Elements.push_back(Enum.value());
   AuxRdx->Elements.emplace_back(SubRdx, nullptr /*condition*/);
   AuxRdx = RI.dedup(AuxRdx);
@@ -291,7 +347,9 @@ Matcher::Result Matcher::match(const Operation *Op, Instruction *Root) {
   auto *Rdx = dyn_cast<Reduction>(Root);
   if (!Rdx)
     Rdx = RI.getReductionFor(Root);
-  if (!Rdx)
+
+  // Don't bother if Root is not a reduction of if it's rewritten already
+  if (!Rdx || LIT.isAuxReduction(Rdx))
     return nullptr;
 
   // Rule out obvious mismatch first.

@@ -172,6 +172,10 @@ public:
       To = OrigRdx;
     AuxReductionMap[From] = To;
   }
+
+  bool isAuxReduction(Reduction *Rdx) const {
+    return AuxReductionMap.count(Rdx);
+  }
 };
 
 #endif // END VEGEN_LOOSEINSTRUCTIONTABLE_H
