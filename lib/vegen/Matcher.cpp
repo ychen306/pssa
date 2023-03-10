@@ -84,12 +84,20 @@ static void getUses(Instruction *I, SmallVectorImpl<Use *> &Uses) {
     Uses.push_back(&U);
 }
 
+static bool isTrivialMatching(ArrayRef<int> Xs) {
+  for (unsigned i = 0; i < Xs.size(); i++)
+    if (Xs[i] != (int)i)
+      return false;
+  return true;
+}
+
 // FIXME: cache match failure
 Match *Matcher::matchImpl(const Operation *Op, Instruction *Root) {
   assert(Op);
 
-  auto [It, Inserted] = Matches.try_emplace(MatchKey(Op, Root));
-  if (!Inserted)
+  auto Key = MatchKey(Op, Root);
+  auto It = Matches.find(Key);
+  if (It != Matches.end())
     return It->second.get();
 
   decltype(Match::LooseInsts) LooseInsts;
@@ -129,6 +137,20 @@ Match *Matcher::matchImpl(const Operation *Op, Instruction *Root) {
       if (Rdx && Rdx->Kind == RdxKind) {
         if (Instruction *I =
                 RI.decompose(Rdx, Operands.size() /*N-way reduction*/, LIT)) {
+          // Try to reorder the reducer operands to enable matching
+          SmallVector<Instruction *> Insts;
+          for (auto *V : I->operand_values())
+            Insts.push_back(dyn_cast<Instruction>(V));
+          auto Matching = findMatching(Operands, Insts);
+          if (!Matching)
+            return false;
+          if (!isTrivialMatching(*Matching)) {
+            SmallVector<Value *> ReducerArgs;
+            for (int i : *Matching)
+              ReducerArgs.push_back(Insts[i]);
+            I = LIT.getOrCreateReducer(Rdx, ReducerArgs);
+          }
+
           if (LIT.isLoose(I))
             LooseInsts.push_back(I);
           getUses(I, MatchedOperands);
@@ -209,7 +231,7 @@ Match *Matcher::matchImpl(const Operation *Op, Instruction *Root) {
   M->Root = Root;
   M->LiveIns = std::move(LiveIns);
   M->LooseInsts = LooseInsts;
-  It->second.reset(M);
+  Matches[Key].reset(M);
   return M;
 }
 
@@ -297,7 +319,7 @@ Matcher::findMatching(ArrayRef<const Operation *> Ops,
 Reduction *Matcher::findAuxReduction(Reduction *Rdx, const Operation *Op,
                                      Reduction *&SubRdx) {
   auto Operands = Op->getOperands();
-  if (Rdx->size() < Operands.size())
+  if (Rdx->size() <= Operands.size())
     return nullptr;
 
   SmallVector<Instruction *, 8> Insts;
@@ -348,8 +370,7 @@ Matcher::Result Matcher::match(const Operation *Op, Instruction *Root) {
   if (!Rdx)
     Rdx = RI.getReductionFor(Root);
 
-  // Don't bother if Root is not a reduction of if it's rewritten already
-  if (!Rdx || LIT.isAuxReduction(Rdx))
+  if (!Rdx)
     return nullptr;
 
   // Rule out obvious mismatch first.
