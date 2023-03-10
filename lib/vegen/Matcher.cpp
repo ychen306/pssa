@@ -84,11 +84,12 @@ static void getUses(Instruction *I, SmallVectorImpl<Use *> &Uses) {
     Uses.push_back(&U);
 }
 
-static bool isTrivialMatching(ArrayRef<int> Xs) {
-  for (unsigned i = 0; i < Xs.size(); i++)
-    if (Xs[i] != (int)i)
-      return false;
-  return true;
+template <typename T>
+static void permute(SmallVectorImpl<T> &Xs, SmallVectorImpl<int> &Idxs) {
+  SmallVector<T> Permuted;
+  for (int i : Idxs)
+    Permuted.push_back(Xs[i]);
+  Xs = Permuted;
 }
 
 // FIXME: cache match failure
@@ -127,40 +128,24 @@ Match *Matcher::matchImpl(const Operation *Op, Instruction *Root) {
       getUses(I, MatchedOperands);
 
     if (auto *ReductionOp = dyn_cast<ReductionOperation>(Op)) {
-      auto Operands = Op->getOperands();
-
       Reduction *Rdx = dyn_cast<Reduction>(V);
       if (!Rdx)
         Rdx = RI.getReductionFor(V);
 
       auto RdxKind = ReductionOp->getReductionKind();
       if (Rdx && Rdx->Kind == RdxKind) {
-        if (Instruction *I =
-                RI.decompose(Rdx, Operands.size() /*N-way reduction*/, LIT)) {
-          // Try to reorder the reducer operands to enable matching
-          SmallVector<Instruction *> Insts;
-          for (auto *V : I->operand_values())
-            Insts.push_back(dyn_cast<Instruction>(V));
-          auto Matching = findMatching(Operands, Insts);
-          if (!Matching)
-            return false;
-          if (!isTrivialMatching(*Matching)) {
-            SmallVector<Value *> ReducerArgs;
-            for (int i : *Matching)
-              ReducerArgs.push_back(Insts[i]);
-            I = LIT.getOrCreateReducer(Rdx, ReducerArgs);
-          }
-
+        if (Instruction *I = RI.decompose(
+                Rdx, Op->getOperands().size() /*N-way reduction*/, LIT)) {
           if (LIT.isLoose(I))
             LooseInsts.push_back(I);
           getUses(I, MatchedOperands);
           MatchedValue = I;
         }
       } else if (!Rdx) {
-        if (auto Operands = matchSimpleReduction(RdxKind, V)) {
-          auto [A, B] = *Operands;
-          MatchedValue = V;
+        if (auto InstOperands = matchSimpleReduction(RdxKind, V)) {
+          auto [A, B] = *InstOperands;
           MatchedOperands.assign({A, B});
+          MatchedValue = V;
         }
       }
     } else if (auto *Select = dyn_cast<SelectOperation>(Op)) {
@@ -186,6 +171,17 @@ Match *Matcher::matchImpl(const Operation *Op, Instruction *Root) {
 
     if (!MatchedValue)
       return false;
+
+    if (isa<ReductionOperation>(Op)) {
+      // Try to reorder the reduction operands to enable matching
+      SmallVector<Instruction *> Insts;
+      for (Use *U : MatchedOperands)
+        Insts.push_back(dyn_cast<Instruction>(U->get()));
+      auto Matching = findMatching(Op->getOperands(), Insts);
+      if (!Matching)
+        return false;
+      permute(MatchedOperands, *Matching);
+    }
 
     auto Operands = Op->getOperands();
     assert(MatchedOperands.size() == Operands.size());
@@ -247,6 +243,7 @@ static Reduction *unwrapAllLoops(Reduction *Rdx, ReductionInfo &RI) {
   return Rdx;
 }
 
+// FIXME: sometimes leave operands are not instructions; change Insts to Values
 Optional<Matcher::Matching>
 Matcher::findMatching(ArrayRef<const Operation *> Ops,
                       ArrayRef<Instruction *> Insts) {

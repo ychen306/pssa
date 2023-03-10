@@ -719,6 +719,17 @@ Value *GeneralPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
     B = Insert.make<BitCastInst>(B, Ty);
     return Insert.createIntrinsicCall(Intrinsic::x86_avx512_vpdpwssd_128,
                                       {} /*(overloaded) types*/, {Src, A, B});
+  } else if (InstDesc.getName() == "vpdpbusd128") {
+    assert(Operands.size() == 3);
+    auto *Src = Operands[0];
+    auto *A = Operands[1];
+    auto *B = Operands[2];
+    auto *Ty = Src->getType();
+    // A and B are supposed to be 16-bit vectors, but the intrinsics' signature uses 32-bit
+    A = Insert.make<BitCastInst>(A, Ty);
+    B = Insert.make<BitCastInst>(B, Ty);
+    return Insert.createIntrinsicCall(Intrinsic::x86_avx512_vpdpbusd_128,
+                                      {} /*(overloaded) types*/, {Src, A, B});
   }
   llvm_unreachable("not implemented");
 }

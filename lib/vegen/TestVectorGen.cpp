@@ -99,13 +99,13 @@ static Operation *buildMulAcc() {
 static Operation *buildDot() {
   auto *c = new InputOperation(0, 32);
   auto *a1 = zext(new InputOperation(1, 8), 32);
-  auto *a2 = zext(new InputOperation(2, 8), 32);
-  auto *a3 = zext(new InputOperation(3, 8), 32);
-  auto *a4 = zext(new InputOperation(4, 8), 32);
-  auto *b1 = zext(new InputOperation(5, 8), 32);
-  auto *b2 = zext(new InputOperation(6, 8), 32);
-  auto *b3 = zext(new InputOperation(7, 8), 32);
-  auto *b4 = zext(new InputOperation(8, 8), 32);
+  auto *b1 = sext(new InputOperation(2, 8), 32);
+  auto *a2 = zext(new InputOperation(3, 8), 32);
+  auto *b2 = sext(new InputOperation(4, 8), 32);
+  auto *a3 = zext(new InputOperation(5, 8), 32);
+  auto *b3 = sext(new InputOperation(6, 8), 32);
+  auto *a4 = zext(new InputOperation(7, 8), 32);
+  auto *b4 = sext(new InputOperation(8, 8), 32);
   return add(c, mul(a1, b1), mul(a2, b2), mul(a3, b3), mul(a4, b4));
 }
 
