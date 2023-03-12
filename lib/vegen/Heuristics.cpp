@@ -1,6 +1,11 @@
 #include "AddrUtil.h"
 #include "DependenceChecker.h"
+#include "InstructionDescriptor.h"
+#include "LooseInstructionTable.h"
+#include "Matcher.h"
 #include "PackSet.h"
+#include "Reducer.h"
+#include "Reduction.h"
 #include "TripCount.h"
 #include "pssa/VectorHashInfo.h"
 #include "pssa/Visitor.h"
@@ -13,21 +18,27 @@
 #include "llvm/IR/Instructions.h"
 
 using namespace llvm;
-
 namespace {
 
 // A class that enumerates a list of packs
 // that can produce a given vector
 class Packer {
+  ArrayRef<InstructionDescriptor> InstPool;
   PredicatedSSA &PSSA;
+  ReductionInfo &RI;
+  LooseInstructionTable &LIT;
+  Matcher &TheMatcher;
   const llvm::DataLayout &DL;
   ScalarEvolution &SE;
   llvm::LoopInfo &LI;
 
 public:
-  Packer(PredicatedSSA &PSSA, const llvm::DataLayout &DL,
-         llvm::ScalarEvolution &SE, llvm::LoopInfo &LI)
-      : PSSA(PSSA), DL(DL), SE(SE), LI(LI) {}
+  Packer(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
+         ReductionInfo &RI, LooseInstructionTable &LIT, Matcher &TheMatcher,
+         const llvm::DataLayout &DL, llvm::ScalarEvolution &SE,
+         llvm::LoopInfo &LI)
+      : InstPool(InstPool), PSSA(PSSA), RI(RI), LIT(LIT),
+        TheMatcher(TheMatcher), DL(DL), SE(SE), LI(LI) {}
   TinyPtrVector<Pack *> getProducers(llvm::ArrayRef<llvm::Value *>);
 };
 
@@ -71,10 +82,12 @@ class BottomUpHeuristic {
   InstructionCost getCost(Pack *);
 
 public:
-  BottomUpHeuristic(PredicatedSSA &PSSA, const llvm::DataLayout &DL,
-                    llvm::ScalarEvolution &SE, llvm::LoopInfo &LI,
-                    TargetTransformInfo &TTI)
-      : Pkr(PSSA, DL, SE, LI), TTI(TTI) {}
+  BottomUpHeuristic(ArrayRef<InstructionDescriptor> InstPool,
+                    PredicatedSSA &PSSA, ReductionInfo &RI,
+                    LooseInstructionTable &LIT, Matcher &TheMatcher,
+                    const llvm::DataLayout &DL, llvm::ScalarEvolution &SE,
+                    llvm::LoopInfo &LI, TargetTransformInfo &TTI)
+      : Pkr(InstPool, PSSA, RI, LIT, TheMatcher, DL, SE, LI), TTI(TTI) {}
   Pack *getProducer(ArrayRef<Value *> Values) { return solve(Values).P; }
 };
 
@@ -102,30 +115,77 @@ public:
 
 } // namespace
 
+VLoop *getLoopFor(Instruction *I, PredicatedSSA &PSSA,
+                  LooseInstructionTable &LIT) {
+  if (auto *Rdx = dyn_cast<Reduction>(I))
+    return Rdx->getParentLoop();
+  if (LIT.isLoose(I))
+    return LIT.getLoopForInst(I);
+  return PSSA.getLoopForInst(I);
+}
+
 static unsigned getLoopDepth(PredicatedSSA &PSSA, VLoop *VL) {
   if (!VL->isLoop())
     return 0;
   return PSSA.getOrigLoop(VL)->getLoopDepth();
 }
 
-static unsigned getLoopDepth(PredicatedSSA &PSSA, Instruction *I) {
-  return getLoopDepth(PSSA, PSSA.getLoopForInst(I));
+static unsigned getLoopDepth(PredicatedSSA &PSSA, Instruction *I,
+                             LooseInstructionTable &LIT) {
+  return getLoopDepth(PSSA, getLoopFor(I, PSSA, LIT));
+}
+
+Pack *decomposeAndPack(PredicatedSSA &PSSA, ReductionInfo &RI,
+                       LooseInstructionTable &LIT,
+                       ArrayRef<Instruction *> Insts) {
+  auto *Rdx0 = dyn_cast<Reduction>(Insts.front());
+  if (!Rdx0)
+    return nullptr;
+
+  auto *PN0 = RI.unwrapCondition(Rdx0, LIT);
+  // See if we can unwrap the whole pack of instructions
+  SmallVector<Instruction *, 4> PNs = {PN0};
+  for (auto *I : drop_begin(Insts)) {
+    auto *Rdx = dyn_cast<Reduction>(I);
+    if (!Rdx)
+      return nullptr;
+    auto *PN = RI.unwrapCondition(Rdx, LIT);
+    if (!PN)
+      continue;
+    PNs.push_back(PN);
+  }
+  if (PNs.size() == Insts.size())
+    return BlendPack::create(PNs, true /*is one-hot*/, PSSA);
+
+  SmallVector<Instruction *, 4> Reducers;
+  for (auto *I : Insts) {
+    auto *Rdx = dyn_cast<Reduction>(I);
+    if (!Rdx)
+      return nullptr;
+    auto *R = RI.decomposeWithBinary(Rdx, LIT);
+    if (!R)
+      return nullptr;
+    Reducers.push_back(R);
+  }
+  return SIMDPack::tryPack(Reducers);
 }
 
 // FIXME: make sure that the packed instructions are independent
 // FIXME: make sure we are packing instructions that have the same nesting depth
 TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
   SmallVector<Instruction *, 8> Insts;
+  SmallPtrSet<Instruction *, 8> Seen;
   for (auto *V : Values) {
     auto *I = dyn_cast_or_null<Instruction>(V);
     if (!I)
       return {};
-    Insts.push_back(I);
+    if (Seen.insert(I).second)
+      Insts.push_back(I);
   }
 
-  unsigned Depth = getLoopDepth(PSSA, Insts.front());
+  unsigned Depth = getLoopDepth(PSSA, Insts.front(), LIT);
   for (auto *I : drop_begin(Insts))
-    if (getLoopDepth(PSSA, I) != Depth)
+    if (getLoopDepth(PSSA, I, LIT) != Depth)
       return {};
 
   if (auto *P = LoadPack::tryPack(Insts, DL, SE, LI, PSSA)) {
@@ -152,9 +212,38 @@ TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
   if (auto *P = IntrinsicPack::tryPack(Insts))
     return {P};
 
-
   TinyPtrVector<Pack *> Producers;
   if (auto *P = SIMDPack::tryPack(Insts))
+    Producers.push_back(P);
+
+  for (auto &InstDesc : InstPool) {
+    if (auto *P = GeneralPack::tryPack(InstDesc, Insts, TheMatcher)) {
+      Producers.push_back(P);
+      continue;
+    }
+    // If we are packing reductions, check if we can reassociate the top-level
+    // reductions to enable using some of the instructions
+    SmallVector<Value *, 8> AuxRdxs;
+    for (auto [I, BoundOp] : llvm::zip(Insts, InstDesc.getOperations())) {
+      auto *Rdx = dyn_cast<Reduction>(I);
+      if (!Rdx)
+        Rdx = RI.getReductionFor(I);
+      if (!Rdx)
+        break;
+      auto Res = TheMatcher.match(BoundOp.Op, Rdx);
+      auto *AuxRdx = Res.dyn_cast<Reduction *>();
+      if (!AuxRdx)
+        break;
+      AuxRdxs.push_back(AuxRdx);
+    }
+    if (AuxRdxs.size() == Insts.size()) {
+      for (auto *P : getProducers(AuxRdxs))
+        Producers.push_back(P);
+    }
+  }
+
+  // Pack reduction with SIMD instructions
+  if (auto *P = decomposeAndPack(PSSA, RI, LIT, Insts))
     Producers.push_back(P);
 
   return Producers;
@@ -202,8 +291,10 @@ BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
   }
 
   Solution Soln(nullptr, ScalarCost);
-  for (auto *P : Pkr.getProducers(Values))
+  for (auto *P : Pkr.getProducers(Values)) {
+    assert(P);
     Soln.update(P, getCost(P));
+  }
 
   SolutionView Ret = Soln;
   Solutions.find_as(Values)->second = std::move(Soln);
@@ -218,6 +309,9 @@ InstructionCost BottomUpHeuristic::getCost(Pack *P) {
 }
 
 static InstructionCost getScalarCost(Instruction *I, TargetTransformInfo &TTI) {
+  if (auto *Rdx = dyn_cast<Reduction>(I))
+    return Rdx->size() - 1;
+
   if (isa<PHINode>(I))
     return 0;
   return TTI.getInstructionCost(I, TTI::TCK_RecipThroughput);
@@ -240,40 +334,150 @@ InstructionCost BottomUpHeuristic::getCost(Value *V) {
   return ScalarCosts[I] = Cost;
 }
 
-// FIXME: INISH
-static InstructionCost getSaving(const PackSet &Packs,
-                                 TargetTransformInfo &TTI) {
+// Mark instructions that are always presumed to be live:
+//   * those may have side effects
+//   * return instruction
+// Ignore predicates because they are tricky
+static SmallVector<Instruction *> findRootLiveInsts(PredicatedSSA &PSSA) {
+  SmallVector<Instruction *> Roots;
+
+  SmallVector<Item> Worklist{&PSSA.getTopLevel()};
+  while (!Worklist.empty()) {
+    auto It = Worklist.pop_back_val();
+    if (auto *VL = It.asLoop()) {
+      Worklist.append(VL->item_begin(), VL->item_end());
+      continue;
+    }
+
+    auto *I = It.asInstruction();
+    assert(I);
+    if (isa<ReturnInst>(I) || I->mayHaveSideEffects())
+      Roots.push_back(I);
+  }
+  return Roots;
+}
+
+namespace {
+// Utility to tell us whether an instruction will be replace by another one
+// (given a packing decision)
+class NewInstructionTracker {
+  ReductionInfo &RI;
+  DenseMap<Reduction *, Instruction *> RdxToInstMap;
+
+public:
+  NewInstructionTracker(const PackSet &Packs, ReductionInfo &RI,
+                        LooseInstructionTable &LIT)
+      : RI(RI) {
+    // Figure out the loose reducers required by packs
+    SmallVector<Instruction *> LooseInsts;
+    for (auto *P : Packs)
+      P->getLooseInsts(LooseInsts, LIT);
+
+    // Figure out the reductions produced by the loose reducers
+    DenseMap<Reduction *, Instruction *> RdxToInstMap;
+    for (auto *I : LooseInsts)
+      if (auto *Rdx = LIT.getReductionFor(I))
+        RdxToInstMap.try_emplace(Rdx, I);
+  }
+
+  Instruction *getNewInstruction(Instruction *I) const {
+    auto It = RdxToInstMap.find(getReductionFor(I));
+    if (It != RdxToInstMap.end()) {
+      assert(It->first && "mapping null rdx");
+      return It->second;
+    }
+    return I;
+  }
+
+  Reduction *getReductionFor(Instruction *I) const {
+    auto *Rdx = dyn_cast<Reduction>(I);
+    if (!Rdx)
+      return Rdx;
+    return RI.getReductionFor(I);
+  }
+};
+} // namespace
+
+static DenseSet<Instruction *>
+findLiveInstructions(PredicatedSSA &PSSA, const PackSet &Packs,
+                     const NewInstructionTracker &NewInstTracker) {
+  SmallVector<Instruction *> Worklist = findRootLiveInsts(PSSA);
+  DenseSet<Instruction *> LiveInsts, Visited;
+  while (!Worklist.empty()) {
+    auto *I = Worklist.pop_back_val();
+    if (!Visited.insert(I).second)
+      continue;
+
+    I = NewInstTracker.getNewInstruction(I);
+
+    // Don't count I as live if it's packed
+    auto *P = Packs.getPackForValue(I);
+    if (P) {
+      // Still want to process the operands of P though
+      for (const OperandPack &OP : P->getOperands())
+        for (auto *O : OP)
+          if (auto *OI = dyn_cast<Instruction>(O))
+            Worklist.push_back(OI);
+      continue;
+    }
+
+    LiveInsts.insert(I);
+    for (auto *O : I->operand_values())
+      if (auto *OI = dyn_cast<Instruction>(O))
+        Worklist.push_back(OI);
+  }
+  return LiveInsts;
+}
+
+static InstructionCost getTotalCost(PredicatedSSA &PSSA, const PackSet &Packs,
+                                    ReductionInfo &RI,
+                                    LooseInstructionTable &LIT,
+                                    TargetTransformInfo &TTI) {
   DenseSet<OperandPack, VectorHashInfo<OperandPack>> ShuffledOps;
-  InstructionCost Saving = 0;
-  auto IsPacked = [&Packs](Value *V) { return Packs.isPacked(V); };
+  NewInstructionTracker NewInstTracker(Packs, RI, LIT);
+  // Figure out the live instructions
+  DenseSet<Instruction *> LiveInsts =
+      findLiveInstructions(PSSA, Packs, NewInstTracker);
+
+  auto IsPackedOrDead = [&](Value *V) {
+    auto *I = dyn_cast<Instruction>(V);
+    if (!I)
+      return true;
+    if (Packs.isPacked(I))
+      return true;
+    return !I || Packs.isPacked(I) || !LiveInsts.count(I);
+  };
+  InstructionCost Cost = 0;
+
+  // Add up the cost for the instructions still live
+  for (auto *I : LiveInsts)
+    Cost += getScalarCost(I, TTI);
+
   for (auto *P : Packs) {
     Type *VecTy = nullptr;
     if (!isa<StorePack>(P))
       VecTy = getVectorType(P->values());
 
     // Cost from running the vector inst.
-    Saving -= P->getCost();
+    Cost += P->getCost();
+
     for (auto X : enumerate(P->values())) {
       Instruction *I = X.value();
-      // FIXME: take into account of complex operation like FMA
-      // Saving from killing the scalar instruction
-      Saving += getScalarCost(I, TTI);
-
 #if 1
       // Figure out if we need to extract for scalar use
       // FIXME: this doesn't take into account that some users are killed things
       // like FMA
-      if (!all_of(I->users(), IsPacked)) {
-        Saving -= TTI.getVectorInstrCost(Instruction::ExtractElement, VecTy,
-                                         X.index());
+      if (!all_of(I->users(), IsPackedOrDead)) {
+        Cost -= TTI.getVectorInstrCost(Instruction::ExtractElement, VecTy,
+                                       X.index());
       }
 #else
       for (auto *U : I->users()) {
-        if (!IsPacked(U)) {
+        if (!IsPackedOrDead(U)) {
           errs() << "??? paying extract cost for use of " << *I
                  << ", user = " << *U << '\n';
-          Saving -= TTI.getVectorInstrCost(Instruction::ExtractElement, VecTy,
-                                           X.index());
+          Cost -= TTI.getVectorInstrCost(Instruction::ExtractElement, VecTy,
+                                         X.index());
           break;
         }
       }
@@ -289,9 +493,8 @@ static InstructionCost getSaving(const PackSet &Packs,
         continue;
 
       // We can build the vector by broadcast
-      if (!IsPacked(O.front()) && is_splat(O)) {
-        Saving -=
-            TTI.getShuffleCost(TargetTransformInfo::SK_Broadcast, OpVecTy);
+      if (!IsPackedOrDead(O.front()) && is_splat(O)) {
+        Cost -= TTI.getShuffleCost(TargetTransformInfo::SK_Broadcast, OpVecTy);
         continue;
       }
 
@@ -303,8 +506,8 @@ static InstructionCost getSaving(const PackSet &Packs,
           SrcPacks.insert(P2);
         } else if (!isa<Constant>(V)) {
           // Pay the insertion cost
-          Saving -= TTI.getVectorInstrCost(Instruction::InsertElement, OpVecTy,
-                                           X.index());
+          Cost -= TTI.getVectorInstrCost(Instruction::InsertElement, OpVecTy,
+                                         X.index());
         }
       }
 
@@ -318,8 +521,8 @@ static InstructionCost getSaving(const PackSet &Packs,
                        [](auto *V1, auto *V2) { return V1 == V2; }))
           continue;
 
-        Saving -= TTI.getShuffleCost(TargetTransformInfo::SK_PermuteSingleSrc,
-                                     OpVecTy);
+        Cost -= TTI.getShuffleCost(TargetTransformInfo::SK_PermuteSingleSrc,
+                                   OpVecTy);
         continue;
       }
 
@@ -327,18 +530,19 @@ static InstructionCost getSaving(const PackSet &Packs,
       auto ShflCost =
           TTI.getShuffleCost(TargetTransformInfo::SK_PermuteTwoSrc, OpVecTy);
       unsigned NumShfls = SrcPacks.size() - 1;
-      Saving -= ShflCost * NumShfls;
+      Cost -= ShflCost * NumShfls;
     }
   }
-  return Saving;
+  return Cost;
 }
 
 // FIXME: also pack stuff required by masking
 static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
-                        PredicatedSSA &PSSA, ScalarEvolution &SE,
+                        PredicatedSSA &PSSA, LooseInstructionTable &LIT,
+                        ScalarEvolution &SE,
 
                         PackSet &Packs) {
-  auto IsPacked = [&Packs](auto *V) { return Packs.isPacked(V); };
+  auto IsPacked = [&Packs](Value *V) { return Packs.isPacked(V); };
 
   DenseSet<OperandPack, VectorHashInfo<OperandPack>> Visited;
   SmallVector<OperandPack> Worklist{Root};
@@ -390,6 +594,7 @@ static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
     auto Values = Worklist.pop_back_val();
     if (any_of(Values, IsPacked) || !Visited.insert(Values).second)
       continue;
+
     auto *P = Heuristic.getProducer(Values);
     if (!P)
       continue;
@@ -399,7 +604,7 @@ static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
       ProcessMaskOperands(M);
     LoopBundle Loops;
     for (auto *I : P->values())
-      Loops.push_back(PSSA.getLoopForInst(I));
+      Loops.push_back(getLoopFor(I, PSSA, LIT));
     ProcessLoopBundle(Loops);
   }
 }
@@ -489,26 +694,28 @@ static void partitionStores(ArrayRef<Instruction *> Stores,
   }
 }
 
-std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
-                                 ScalarEvolution &SE, LoopInfo &LI,
-                                 AAResults &AA, DependenceInfo &DI,
-                                 TargetTransformInfo &TTI) {
+std::vector<Pack *>
+packBottomUp(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
+             ReductionInfo &RI, LooseInstructionTable &LIT, Matcher &TheMatcher,
+             const DataLayout &DL, ScalarEvolution &SE, LoopInfo &LI,
+             AAResults &AA, DependenceInfo &DI, TargetTransformInfo &TTI) {
   StoreGrouper::ObjToInstMapTy ObjToStoreMap;
   visitWith<StoreGrouper>(PSSA, ObjToStoreMap);
 
   DependenceChecker DepChecker(PSSA, DI, AA, LI);
 
-  BottomUpHeuristic Heuristic(PSSA, DL, SE, LI, TTI);
+  BottomUpHeuristic Heuristic(InstPool, PSSA, RI, LIT, TheMatcher, DL, SE, LI,
+                              TTI);
   PackSet Packs;
-  auto PrevSaving = getSaving(Packs, TTI);
+  auto PrevCost = getTotalCost(PSSA, Packs, RI, LIT, TTI);
 
   auto VectorizeStoreChain = [&](ArrayRef<Instruction *> Stores) {
     if (Stores.size() <= 1)
       return;
 
-    unsigned Depth = getLoopDepth(PSSA, Stores.front());
+    unsigned Depth = getLoopDepth(PSSA, Stores.front(), LIT);
     for (auto *I : drop_begin(Stores))
-      if (getLoopDepth(PSSA, I) != Depth)
+      if (getLoopDepth(PSSA, I, LIT) != Depth)
         return;
 
     SmallVector<Instruction *> SortedStores;
@@ -534,13 +741,12 @@ std::vector<Pack *> packBottomUp(PredicatedSSA &PSSA, const DataLayout &DL,
     PackSet Scratch = Packs;
     Scratch.add(StoreP);
     auto Operands = StoreP->getOperands();
-    runBottomUp(Operands.front(), Heuristic, PSSA, SE, Scratch);
-    auto NewSaving = getSaving(Scratch, TTI);
+    runBottomUp(Operands.front(), Heuristic, PSSA, LIT, SE, Scratch);
+    auto NewCost = getTotalCost(PSSA, Scratch, RI, LIT, TTI);
     // FIXME: need to check for dep cycle
-    errs() << "Prev saving: " << PrevSaving << ", new saving " << NewSaving
-           << '\n';
-    if (NewSaving >= PrevSaving) {
-      PrevSaving = NewSaving;
+    errs() << "Prev saving: " << PrevCost << ", new saving " << NewCost << '\n';
+    if (NewCost < PrevCost) {
+      PrevCost = NewCost;
       Packs = std::move(Scratch);
     }
   };

@@ -303,6 +303,7 @@ public:
   Pack *clone() const override {
     return new GeneralPack(InstDesc, values(), Matches);
   }
+  void print(llvm::raw_ostream &) const override;
   void getKilledInsts(llvm::SmallVectorImpl<llvm::Instruction *> &) const override;
 };
 

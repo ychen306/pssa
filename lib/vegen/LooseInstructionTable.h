@@ -174,6 +174,8 @@ public:
       To = OrigRdx;
     AuxReductionMap[From] = To;
   }
+
+  VLoop *getLoopForInst(llvm::Instruction *) const;
 };
 
 #endif // END VEGEN_LOOSEINSTRUCTIONTABLE_H

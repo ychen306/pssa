@@ -748,6 +748,22 @@ void GeneralPack::getKilledInsts(SmallVectorImpl<Instruction *> &Killed) const {
     Killed.append(M->LooseInsts.begin(), M->LooseInsts.end());
 }
 
+void GeneralPack::print(raw_ostream &OS) const {
+  OS << InstDesc.getName() << " [";
+  for (auto *I : values()) {
+    if (!I)
+      OS << "dont_care";
+    else if (auto *R = dyn_cast<Reducer>(I))
+      R->dump(OS);
+    else if (I->hasName())
+      OS << I->getName();
+    else
+      OS << *I;
+    OS << "; ";
+  }
+  OS << ']';
+}
+
 raw_ostream &operator<<(raw_ostream &OS, Pack &P) {
   P.print(OS);
   return OS;
@@ -755,8 +771,10 @@ raw_ostream &operator<<(raw_ostream &OS, Pack &P) {
 
 raw_ostream &operator<<(raw_ostream &OS, OperandPack &O) {
   OS << '[';
-  for (auto &V : O) {
-    if (V->hasName())
+  for (auto *V : O) {
+    if (auto *Rdx = dyn_cast<Reduction>(V))
+      OS << *Rdx;
+    else if (V->hasName())
       OS << V->getName();
     else
       OS << *V;

@@ -1,4 +1,5 @@
 #include "DependenceChecker.h"
+#include "Heuristics.h"
 #include "InstructionDescriptor.h"
 #include "LooseInstructionTable.h"
 #include "Matcher.h"
@@ -209,44 +210,6 @@ ArrayRef<InstructionDescriptor> getTestInsts() {
   return TestInsts;
 }
 
-// Decompose a list of reductions with "real" instructions and pack those
-// instructions
-template <typename InstType>
-static Pack *decomposeAndPack(PredicatedSSA &PSSA, ReductionInfo &RI,
-                              LooseInstructionTable &LIT,
-                              ArrayRef<InstType *> Insts) {
-  auto *Rdx0 = dyn_cast<Reduction>(Insts.front());
-  if (!Rdx0)
-    return nullptr;
-
-  auto *PN0 = RI.unwrapCondition(Rdx0, LIT);
-  // See if we can unwrap the whole pack of instructions
-  SmallVector<Instruction *, 4> PNs = {PN0};
-  for (auto *I : drop_begin(Insts)) {
-    auto *Rdx = dyn_cast<Reduction>(I);
-    if (!Rdx)
-      return nullptr;
-    auto *PN = RI.unwrapCondition(Rdx, LIT);
-    if (!PN)
-      continue;
-    PNs.push_back(PN);
-  }
-  if (PNs.size() == Insts.size())
-    return BlendPack::create(PNs, true /*is one-hot*/, PSSA);
-
-  SmallVector<Instruction *, 4> Reducers;
-  for (auto *I : Insts) {
-    auto *Rdx = dyn_cast<Reduction>(I);
-    if (!Rdx)
-      return nullptr;
-    auto *R = RI.decomposeWithBinary(Rdx, LIT);
-    if (!R)
-      return nullptr;
-    Reducers.push_back(R);
-  }
-  return SIMDPack::tryPack(Reducers);
-}
-
 // FIXME: move this into util
 template <typename SourceTy, typename DestTy>
 static Optional<SmallVector<DestTy *>> cast_many(ArrayRef<SourceTy *> Xs) {
@@ -303,7 +266,8 @@ static void packReductions(ArrayRef<Reduction *> Rdxs,
         }
 
         if (!P)
-          P = decomposeAndPack(PSSA, RI, LIT, Rdxs);
+          P = decomposeAndPack(PSSA, RI, LIT,
+                               *cast_many<Reduction, Instruction>(Rdxs));
         if (P)
           Packs.push_back(P);
         else

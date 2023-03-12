@@ -34,6 +34,13 @@ void LooseInstructionTable::addLoose(Reducer *R, VLoop *VL,
   InstToReductionMap.try_emplace(R, R->getResult());
 }
 
+VLoop *LooseInstructionTable::getLoopForInst(Instruction *I) const {
+  if (isLooseMu(I))
+    return LooseMus.lookup(cast<PHINode>(I));
+  assert(LooseInsts.count(I));
+  return LooseInsts.find(I)->second.VL;
+}
+
 Instruction *LooseInstructionTable::getProducer(Reduction *Rdx) const {
   if (auto *I = ReductionToInstMap.lookup(Rdx))
     return I;
