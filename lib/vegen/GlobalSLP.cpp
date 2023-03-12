@@ -1,7 +1,7 @@
 #include "vegen/GlobalSLP.h"
 #include "pssa/Lower.h"
 #include "pssa/PSSA.h"
-#include "vegen/Heuristics.h"
+#include "Heuristics.h"
 #include "vegen/Lower.h"
 #include "vegen/Pack.h"
 #include "llvm/Analysis/AliasAnalysis.h"
