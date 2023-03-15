@@ -10,9 +10,12 @@ void LooseInstructionTable::addLoose(Reducer *R) {
   if (LooseInsts.count(R))
     return;
   auto *Rdx = R->getResult();
+  auto It = AuxReductionMap.find(Rdx);
+  if (It != AuxReductionMap.end())
+    Rdx = It->second;
   LooseInsts.try_emplace(R,
                          Location{Rdx->getParentLoop(), Rdx->getParentCond()});
-  InstToReductionMap.try_emplace(R, R->getResult());
+  InstToReductionMap.try_emplace(R, Rdx);
 }
 
 void LooseInstructionTable::addLoose(Reducer *R, VLoop *VL,
@@ -145,8 +148,6 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
       return;
     // Rewrite use of reductions to instructions
     if (auto *Rdx = InstToReductionMap.lookup(I)) {
-      if (auto *OrigRdx = AuxReductionMap.lookup(Rdx))
-        Rdx = OrigRdx;
       replaceUsesOfReductionWith(Rdx, I, RI);
       ReductionToInstMap.try_emplace(Rdx, I);
     }
