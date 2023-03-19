@@ -103,6 +103,8 @@ class LooseInstructionTable {
                                      llvm::ArrayRef<llvm::Value *> Elts,
                                      VLoop *VL, const ControlCondition *C);
 
+  VLoop *getLoopForLooseInst(llvm::Instruction *I) const;
+
 public:
   void destroy();
 

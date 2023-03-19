@@ -18,6 +18,14 @@ void LooseInstructionTable::addLoose(Reducer *R) {
   InstToReductionMap.try_emplace(R, Rdx);
 }
 
+VLoop *LooseInstructionTable::getLoopForLooseInst(Instruction *I) const {
+  assert(isLoose(I));
+  auto *PN = dyn_cast<PHINode>(I);
+  if (auto *VL = LooseMus.lookup(PN))
+    return VL;
+  return LooseInsts.find(I)->second.VL;
+}
+
 void LooseInstructionTable::addLoose(Reducer *R, VLoop *VL,
                                      const ControlCondition *C) {
   if (LooseInsts.count(R))
@@ -184,11 +192,20 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
     // this is where we will *try* to insert the instruction
     Optional<Item> Earliest;
     for (auto *U : I->users()) {
-      if (isLoose(U) || VL->isMu(U))
+      if (VL->isMu(U))
         continue;
 
       auto *UI = cast<Instruction>(U);
-      auto *UserVL = PSSA.getLoopForInst(UI);
+      VLoop *UserVL = nullptr;
+      if (isLoose(U)) {
+        UserVL = getLoopForLooseInst(UI);
+        // Ignore loose instruction within this loop
+        if (UserVL == VL)
+          continue;
+      } else {
+        UserVL = PSSA.getLoopForInst(UI);
+      }
+
       // ignore out-of-loop user
       if (!VL->contains(UserVL))
         continue;
@@ -266,7 +283,10 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
     auto *I = It.asInstruction();
     assert(I);
     for (Use &U : I->operands()) {
-      auto *Rdx = dyn_cast<Reduction>(U.get());
+      Value *V = U.get();
+      auto *Rdx = RI.getReductionFor(V);
+      if (!Rdx)
+        Rdx = dyn_cast<Reduction>(V);
       if (!Rdx)
         continue;
       auto *InnerRdx = InnerReductions.lookup(Rdx);

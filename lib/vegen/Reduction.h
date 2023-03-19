@@ -178,9 +178,9 @@ class Inserter;
 llvm::Value *emitBinaryReduction(llvm::RecurKind, llvm::Value *A,
                                  llvm::Value *B, Inserter &);
 
-// Convenience wrapper around RAUW to replace uses of Rdx to I
-// (assuming I produces Rdx)
-void replaceUsesOfReductionWith(Reduction *Rdx, llvm::Instruction *I,
+// Convenience wrapper around RAUW to replace uses of Rdx to V
+// (assuming V produces Rdx)
+void replaceUsesOfReductionWith(Reduction *Rdx, llvm::Value *V,
                                 ReductionInfo &RI);
 
 class DependenceChecker;

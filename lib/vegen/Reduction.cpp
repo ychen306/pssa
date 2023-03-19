@@ -34,17 +34,17 @@ StringRef getReductionName(RecurKind Kind) {
   case RecurKind::SMax:
     return "smax";
   case RecurKind::UMin:
-    return "smin";
+    return "umin";
   case RecurKind::UMax:
-    return "smax";
+    return "umax";
   case RecurKind::FAdd:
     return "fadd";
   case RecurKind::FMul:
     return "fmul";
   case RecurKind::FMin:
-    return "smin";
+    return "fmin";
   case RecurKind::FMax:
-    return "smax";
+    return "fmax";
   default:
     llvm_unreachable("unexpected recurrence type");
   }
@@ -175,12 +175,14 @@ Optional<std::vector<ReductionElement>> getDifference(Reduction *A,
   for (auto &Elt : A->Elements) {
     if (Elt.Val == Identity)
       continue;
-    AElts[Elt]++;
+    if (++AElts[Elt] > 1)
+      return None;
   }
   for (auto &Elt : B->Elements) {
     if (Elt.Val == Identity)
       continue;
-    BElts[Elt]++;
+    if (++BElts[Elt] > 1)
+      return None;
   }
 
   // Check that B contains A
@@ -200,12 +202,12 @@ Optional<std::vector<ReductionElement>> getDifference(Reduction *A,
 
 // Detect the case where Init is one of Rdx's reduction element and return the
 // difference
-Optional<std::vector<ReductionElement>>
-getDifference(Value *Init, const ControlCondition *C, Reduction *Rdx) {
-  ReductionElement Elt0(Init, C);
+Optional<std::vector<ReductionElement>> getDifference(Value *Init,
+                                                      Reduction *Rdx) {
+  ReductionElement Elt0(Init, nullptr);
   std::set<ReductionElement> Elts(Rdx->Elements.begin(), Rdx->Elements.end());
   auto *Identity = Rdx->identity();
-  if (!isa<UndefValue>(Init) && Init != Identity && !Elts.count(Elt0))
+  if (!isa<UndefValue>(Init) && Init != Identity && Elts.count(Elt0) != 1)
     return None;
   std::vector<ReductionElement> Diff;
   for (auto &Elt : Rdx->Elements) {
@@ -243,14 +245,14 @@ void ReductionInfo::processLoop(VLoop *VL) {
     const ControlCondition *C = VL->getPhiCondition(PN, B);
     if (!Rdx2)
       return nullptr;
-    // TODO: detect even when rdx1 and rdx2 are swapped
-    auto Diff = Rdx1 ? getDifference(Rdx1, Rdx2)
-                     : getDifference(PN->getIncomingValue(A),
-                                     VL->getPhiCondition(PN, B), Rdx2);
 
+    auto Diff = Rdx1 ? getDifference(Rdx1, Rdx2)
+                     : getDifference(PN->getIncomingValue(A), Rdx2);
     if (!Diff)
       return nullptr;
+
     auto *Merged = copyReduction(Rdx2);
+    bool IsUndef = isa<UndefValue>(PN->getIncomingValue(A));
     for (auto &Elt : Merged->Elements) {
       if (!llvm::count(*Diff, Elt)) {
         // in the case the A is not a reduction
@@ -264,7 +266,8 @@ void ReductionInfo::processLoop(VLoop *VL) {
       // Strengthen the reduction condition based on the phi
       // but skip if the condition happens to be the condition of the outermost
       // loop that we are reducing over (in which case it's redundant)
-      if (Elt.Loops.empty() || Elt.Loops.back()->getLoopCond() != C) {
+      if (!IsUndef &&
+          (Elt.Loops.empty() || Elt.Loops.back()->getLoopCond() != C)) {
         // FIXME: it's possible that this creates cyclic control dependences
         // maybe only do this transformation if one of C and Elt.C implies the
         // other
@@ -289,8 +292,8 @@ void ReductionInfo::processLoop(VLoop *VL) {
           if (auto *Rdx = ValueToReductionMap.lookup(Val)) {
             if (LiveOutRdxs.count(Val)) {
               auto [LiveOutRdx, ProducerVL] = LiveOutRdxs[Val];
-              // TODO: generalize this to deal with loop exits that cross
-              // multiple loop bounaries Ensure that this is indeed a LCSSA Phi
+              //  TODO: generalize this to deal with loop exits that cross
+              //  multiple loop bounaries Ensure that this is indeed a LCSSA Phi
               if (!ProducerVL->contains(PN) && ProducerVL->getParent() == VL) {
                 auto *Rdx = copyReduction(LiveOutRdx);
                 Rdx->ParentCond = VL->getInstCond(PN);
@@ -393,10 +396,7 @@ static bool isSimpleReduction(Reduction *Rdx) {
 
   auto &A = Rdx->Elements[0];
   auto &B = Rdx->Elements[1];
-  if (!A.Loops.empty() || !B.Loops.empty())
-    return false;
-
-  return A.C == Rdx->ParentCond && B.C == Rdx->ParentCond;
+  return A.Loops.empty() && B.Loops.empty() && !A.C && !B.C;
 }
 
 ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
@@ -481,7 +481,7 @@ Reducer *ReductionInfo::decompose(Reduction *Rdx, unsigned N,
   }
 
   assert(Args.size() == N);
-  return LIT.getOrCreateReducer(Rdx, Args, "binary-reducer" /*name*/);
+  return LIT.getOrCreateReducer(Rdx, Args, "reducer" /*name*/);
 }
 
 // FIXME: check with dependence analysis and only unwrap when loops are
@@ -505,6 +505,9 @@ Reduction *ReductionInfo::unwrapLoop(Reduction *Rdx,
 }
 
 void ReductionInfo::setReductionFor(Value *V, Reduction *Rdx) {
+  for (auto &Elt : Rdx->Elements)
+    if (isImplied(Elt.C, Rdx->getParentCond()))
+      Elt.C = nullptr;
   ValueToReductionMap[V] = Rdx;
   ReductionToValuesMap[Rdx].push_back(V);
 }
@@ -657,11 +660,10 @@ public:
 
 } // namespace
 
-void replaceUsesOfReductionWith(Reduction *Rdx, Instruction *I,
-                                ReductionInfo &RI) {
-  for (auto *V : RI.getValuesForReduction(Rdx))
-    V->replaceAllUsesWith(I);
-  Rdx->replaceAllUsesWith(I);
+void replaceUsesOfReductionWith(Reduction *Rdx, Value *V, ReductionInfo &RI) {
+  for (auto *V2 : RI.getValuesForReduction(Rdx))
+    V2->replaceAllUsesWith(V);
+  Rdx->replaceAllUsesWith(V);
 }
 
 void lowerReductions(ReductionInfo &RI, PredicatedSSA &PSSA,
@@ -677,12 +679,17 @@ void lowerReductions(ReductionInfo &RI, PredicatedSSA &PSSA,
   SmallVector<Instruction *> LooseInsts;
   // Some Reductions are already produced,
   // remember them and rewire their uses later
-  DenseMap<Reduction *, Instruction *> RdxToPatch;
+  DenseMap<Reduction *, Value *> RdxToPatch;
 
   while (!Worklist.empty()) {
     auto *Rdx = Worklist.pop_back_val();
     if (!Lowered.insert(Rdx).second)
       continue;
+
+    if (auto *V = Rdx->getSingleElement()) {
+      RdxToPatch[Rdx] = V;
+      continue;
+    }
 
     if (auto *I = LIT.getProducer(Rdx)) {
       auto *Rdx2 = LIT.getReductionFor(I);
@@ -725,8 +732,8 @@ void lowerReductions(ReductionInfo &RI, PredicatedSSA &PSSA,
 
   // Some of the intermediate reductions are produced by instructions inserted
   // previously, rewire their uses.
-  for (auto [Rdx, I] : RdxToPatch)
-    replaceUsesOfReductionWith(Rdx, I, RI);
+  for (auto [Rdx, V] : RdxToPatch)
+    replaceUsesOfReductionWith(Rdx, V, RI);
 
   // Insert the new instructions
   LIT.insertInto(LooseInsts, PSSA, DepChecker, RI);
