@@ -133,12 +133,24 @@ public:
   Reduction *getReductionFor(llvm::Value *V) const {
     return ValueToReductionMap.lookup(V);
   }
+
   // Split a reduction into sub redutions evenly
   // Examples:
   //    (+ a b c d) by 4 -> a, b, c, d
   //    (+ a b c d) by 2 -> (+ a c), (+ b d)
+  template <typename ValT>
   void split(const Reduction *Rdx, unsigned Parts,
-             llvm::SmallVectorImpl<Reduction *> &SubRdxs);
+             llvm::SmallVectorImpl<ValT *> &SubRdxs) {
+    unsigned N = Rdx->size();
+    assert(N % Parts == 0);
+    for (unsigned i = 0; i < Parts; i++) {
+      auto *SubRdx = copyReduction(Rdx);
+      SubRdx->Elements.clear();
+      for (unsigned j = i; j < N; j += Parts)
+        SubRdx->Elements.push_back(Rdx->Elements[j]);
+      SubRdxs.push_back(dedup(SubRdx));
+    }
+  }
 
   // Decompose a reduction into sub redutions with a binary reducer
   llvm::Reducer *decomposeWithBinary(Reduction *Rdx,

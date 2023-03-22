@@ -14,6 +14,8 @@
 
 using namespace llvm;
 
+void Pack::dump() const { print(errs()); }
+
 Value *Pack::emit(ArrayRef<Value *>, Inserter &) const {
   llvm_unreachable("Pack::emit is not supported for arbitrary packs");
   return nullptr;
@@ -216,8 +218,10 @@ void Pack::print(raw_ostream &OS) const {
       R->dump(OS);
     else if (I->hasName())
       OS << I->getName();
-    else
+    else if (!isa<PHINode>(I))
       OS << *I;
+    else
+      OS << "phi";
     OS << "; ";
   }
   OS << ']';
@@ -360,11 +364,18 @@ Value *GatherPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   return Insert.createMaskedGather(VecTy, Ptrs, Alignment, Mask);
 }
 
-PHIPack *PHIPack::tryPack(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA) {
+static bool isMu(PHINode *PN, PredicatedSSA &PSSA, LooseInstructionTable *LIT) {
+  if (LIT && LIT->isLoose(PN))
+    return LIT->isLooseMu(PN);
+  return PSSA.isMu(PN);
+}
+
+PHIPack *PHIPack::tryPack(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
+                          LooseInstructionTable *LIT) {
   SmallVector<PHINode *, 8> Phis;
   for (auto *I : Insts) {
     auto *PN = dyn_cast<PHINode>(I);
-    if (!PN || PSSA.isMu(PN))
+    if (!PN || isMu(PN, PSSA, LIT))
       return nullptr;
     Phis.push_back(PN);
   }
@@ -398,21 +409,22 @@ SmallVector<OperandPack, 2> PHIPack::getOperands() const {
   return Operands;
 }
 
-MuPack *MuPack::tryPack(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA) {
+MuPack *MuPack::tryPack(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
+                        LooseInstructionTable *LIT) {
   for (auto *I : Insts) {
     auto *PN = dyn_cast<PHINode>(I);
-    if (!PN || !PSSA.isMu(PN))
+    if (!PN || !isMu(PN, PSSA, LIT))
       return nullptr;
   }
   return new MuPack(Insts);
 }
 
 BlendPack *BlendPack::tryPack(ArrayRef<Instruction *> Insts,
-                              PredicatedSSA &PSSA) {
+                              PredicatedSSA &PSSA, LooseInstructionTable *LIT) {
   SmallVector<PHINode *, 8> Phis;
   for (auto *I : Insts) {
     auto *PN = dyn_cast<PHINode>(I);
-    if (!PN || !PSSA.isGatedPhi(PN))
+    if (!PN || isMu(PN, PSSA, LIT))
       return nullptr;
     Phis.push_back(PN);
   }
@@ -427,7 +439,7 @@ BlendPack *BlendPack::tryPack(ArrayRef<Instruction *> Insts,
       return nullptr;
   }
 
-  return new BlendPack(Insts, IsOneHot, PSSA);
+  return new BlendPack(Insts, IsOneHot, PSSA, LIT);
 }
 
 SmallVector<VectorMask, 2> BlendPack::masks() const {
@@ -436,8 +448,13 @@ SmallVector<VectorMask, 2> BlendPack::masks() const {
   SmallVector<VectorMask, 2> Masks(N);
   for (auto *I : Insts) {
     auto *PN = cast<PHINode>(I);
-    for (auto X : enumerate(PSSA.getPhiConditions(PN)))
-      Masks[X.index()].push_back(X.value());
+    if (!LIT || !LIT->isLooseOneHotPhi(PN)) {
+      for (auto X : enumerate(PSSA.getPhiConditions(PN)))
+        Masks[X.index()].push_back(X.value());
+    } else {
+      Masks[0].push_back(nullptr);
+      Masks[1].push_back(LIT->getOneHotCond(PN));
+    }
   }
 
   return Masks;
@@ -613,18 +630,19 @@ Value *AndPack::emit(ArrayRef<Value *> ReifiedMasks, ArrayRef<Value *> Operands,
   return Insert.CreateBinOp(BinaryOperator::And, ReifiedMasks.front(), Operand);
 }
 
-ReductionPack::ReductionPack(Reducer *Root)
-    : Pack({Root}, PK_Reduction), Root(Root) {}
+ReductionPack::ReductionPack(Reducer *Root, unsigned N)
+    : Pack({Root}, PK_Reduction), Root(Root), N(N) {}
 
 SmallVector<OperandPack, 2> ReductionPack::getOperands() const {
-  return {OperandPack(Root->value_op_begin(), Root->value_op_end())};
+  unsigned NumElts = Root->getNumOperands();
+  assert(N <= NumElts);
+  return {
+      OperandPack(Root->value_op_begin() + NumElts - N, Root->value_op_end())};
 }
 
-Value *ReductionPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
-  assert(Operands.size() == 1 &&
-         "reduction pack expects exactly one vector argument");
-  Value *Src = Operands.front();
-  switch (Root->getKind()) {
+static Value *emitVectorReduction(RecurKind Kind, Value *Src,
+                                  Inserter &Insert) {
+  switch (Kind) {
   case RecurKind::Add:
     return Insert.createAddReduce(Src);
   case RecurKind::Mul:
@@ -656,17 +674,40 @@ Value *ReductionPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   }
 }
 
+static Value *emitScalarReduction(RecurKind Kind, ArrayRef<Value *> Args,
+                                  Inserter &Insert) {
+  Value *Acc = Args.front();
+  for (auto *V : llvm::drop_begin(Args))
+    Acc = emitBinaryReduction(Kind, Acc, V, Insert);
+  return Acc;
+}
+
+Value *ReductionPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
+  assert(Operands.size() == 1 &&
+         "reduction pack expects exactly one vector argument");
+  unsigned NumElts = Root->getNumOperands();
+  SmallVector<Value *> Args(Root->value_op_begin(),
+                            Root->value_op_begin() + NumElts - N);
+  Args.push_back(
+      emitVectorReduction(Root->getKind(), Operands.front(), Insert));
+  return emitScalarReduction(Root->getKind(), Args, Insert);
+}
+
 void ReductionPack::print(raw_ostream &OS) const {
   OS << "reduce { ";
-  for (Value *V : Root->operand_values())
-    OS << *V << ", ";
+  for (Value *V : Root->operand_values()) {
+    if (auto *Rdx = dyn_cast<Reduction>(V))
+      OS << *Rdx << ", ";
+    else
+      OS << *V << ", ";
+  }
   OS << "}";
 }
 
 Pack *ReductionPack::clone() const {
   assert(Insts.size() == 1 &&
          "reduction pack should produce exactly one value");
-  return new ReductionPack(Root);
+  return new ReductionPack(Root, N);
 }
 
 GeneralPack *GeneralPack::tryPack(const InstructionDescriptor &InstDesc,
@@ -714,7 +755,8 @@ Value *GeneralPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
     auto *A = Operands[1];
     auto *B = Operands[2];
     auto *Ty = Src->getType();
-    // A and B are supposed to be 16-bit vectors, but the intrinsics' signature uses 32-bit
+    // A and B are supposed to be 16-bit vectors, but the intrinsics' signature
+    // uses 32-bit
     A = Insert.make<BitCastInst>(A, Ty);
     B = Insert.make<BitCastInst>(B, Ty);
     return Insert.createIntrinsicCall(Intrinsic::x86_avx512_vpdpwssd_128,
@@ -725,7 +767,8 @@ Value *GeneralPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
     auto *A = Operands[1];
     auto *B = Operands[2];
     auto *Ty = Src->getType();
-    // A and B are supposed to be 16-bit vectors, but the intrinsics' signature uses 32-bit
+    // A and B are supposed to be 16-bit vectors, but the intrinsics' signature
+    // uses 32-bit
     A = Insert.make<BitCastInst>(A, Ty);
     B = Insert.make<BitCastInst>(B, Ty);
     return Insert.createIntrinsicCall(Intrinsic::x86_avx512_vpdpbusd_128,
@@ -757,27 +800,31 @@ void GeneralPack::print(raw_ostream &OS) const {
       R->dump(OS);
     else if (I->hasName())
       OS << I->getName();
-    else
+    else if (!isa<PHINode>(I))
       OS << *I;
+    else
+      OS << "phi";
     OS << "; ";
   }
   OS << ']';
 }
 
-raw_ostream &operator<<(raw_ostream &OS, Pack &P) {
+raw_ostream &operator<<(raw_ostream &OS, const Pack &P) {
   P.print(OS);
   return OS;
 }
 
-raw_ostream &operator<<(raw_ostream &OS, OperandPack &O) {
+raw_ostream &operator<<(raw_ostream &OS, const OperandPack &O) {
   OS << '[';
   for (auto *V : O) {
     if (auto *Rdx = dyn_cast<Reduction>(V))
       OS << *Rdx;
     else if (V->hasName())
       OS << V->getName();
-    else
+    else if (!isa<PHINode>(V))
       OS << *V;
+    else
+      OS << "phi";
     OS << "; ";
   }
   OS << ']';

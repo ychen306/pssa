@@ -113,10 +113,17 @@ public:
                                     const llvm::Twine &Name = "");
 
   // Return the instruction that produces Rdx or null
-  llvm::Instruction *getProducer(Reduction *Rdx) const;
+  llvm::Instruction *getProducer(Reduction *Rdx) const {
+    return ReductionToInstMap.lookup(Rdx);
+  }
 
   Reduction *getReductionFor(llvm::Instruction *I) const {
     return InstToReductionMap.lookup(I);
+  }
+
+  const ControlCondition *getOneHotCond(llvm::PHINode *PN) const { 
+    assert(OneHotConds.count(PN));
+    return OneHotConds.lookup(PN);
   }
 
   // Create (or reuse an existing) reducer with a customized context
@@ -176,6 +183,10 @@ public:
   }
 
   VLoop *getLoopForInst(llvm::Instruction *) const;
+
+  Reduction *getInnerReduction(Reduction *Rdx) const {
+    return InnerReductions.lookup(Rdx);
+  }
 };
 
 #endif // END VEGEN_LOOSEINSTRUCTIONTABLE_H

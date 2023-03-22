@@ -11,6 +11,7 @@
 #include "pssa/Visitor.h"
 #include "vegen/Lower.h"
 #include "vegen/Pack.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
@@ -32,6 +33,13 @@ class Packer {
   ScalarEvolution &SE;
   llvm::LoopInfo &LI;
 
+  // Get the reduction that I computes or null
+  Reduction *getReduction(Instruction *I) const {
+    if (auto *Rdx = dyn_cast<Reduction>(I))
+      return Rdx;
+    return RI.getReductionFor(I);
+  }
+
 public:
   Packer(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
          ReductionInfo &RI, LooseInstructionTable &LIT, Matcher &TheMatcher,
@@ -43,6 +51,8 @@ public:
 };
 
 class BottomUpHeuristic {
+  PredicatedSSA &PSSA;
+  LooseInstructionTable &LIT;
   Packer Pkr;
   TargetTransformInfo &TTI;
 
@@ -78,8 +88,11 @@ class BottomUpHeuristic {
 
   // Get the cost of producing a value as scalar
   DenseMap<Instruction *, InstructionCost> ScalarCosts;
-  InstructionCost getCost(Value *);
   InstructionCost getCost(Pack *);
+
+  // Return a bogus trip count (maybe based on profile information in the
+  // future) for the cost model
+  int getTripCount(VLoop *) const { return 4; }
 
 public:
   BottomUpHeuristic(ArrayRef<InstructionDescriptor> InstPool,
@@ -87,8 +100,29 @@ public:
                     LooseInstructionTable &LIT, Matcher &TheMatcher,
                     const llvm::DataLayout &DL, llvm::ScalarEvolution &SE,
                     llvm::LoopInfo &LI, TargetTransformInfo &TTI)
-      : Pkr(InstPool, PSSA, RI, LIT, TheMatcher, DL, SE, LI), TTI(TTI) {}
+      : PSSA(PSSA), LIT(LIT),
+        Pkr(InstPool, PSSA, RI, LIT, TheMatcher, DL, SE, LI), TTI(TTI) {}
   Pack *getProducer(ArrayRef<Value *> Values) { return solve(Values).P; }
+  InstructionCost getCost(ArrayRef<Value *> Values) {
+    return solve(Values).Cost;
+  }
+  InstructionCost getCost(Value *);
+
+  // Estimate how many times this instruction is executed
+  int getTripCount(Instruction *I) const;
+
+  int getTripCount(Value *V) const {
+    if (auto *I = dyn_cast_or_null<Instruction>(V))
+      return getTripCount(I);
+    return 0;
+  }
+
+  template <typename ValueT> int getTripCount(ArrayRef<ValueT *> Values) const {
+    int Count = 1;
+    for (auto *V : Values)
+      Count = std::max<int>(Count, getTripCount(V));
+    return Count;
+  }
 };
 
 // Group stores by their underlying objects
@@ -142,20 +176,27 @@ Pack *decomposeAndPack(PredicatedSSA &PSSA, ReductionInfo &RI,
   if (!Rdx0)
     return nullptr;
 
-  auto *PN0 = RI.unwrapCondition(Rdx0, LIT);
-  // See if we can unwrap the whole pack of instructions
-  SmallVector<Instruction *, 4> PNs = {PN0};
-  for (auto *I : drop_begin(Insts)) {
-    auto *Rdx = dyn_cast<Reduction>(I);
-    if (!Rdx)
-      return nullptr;
-    auto *PN = RI.unwrapCondition(Rdx, LIT);
-    if (!PN)
-      continue;
-    PNs.push_back(PN);
+  if (auto *PN0 = RI.unwrapCondition(Rdx0, LIT)) {
+    // See if we can unwrap the whole pack of instructions
+    SmallVector<Instruction *, 4> PNs = {PN0};
+    SmallVector<const ControlCondition *, 4> Conds{LIT.getOneHotCond(PN0)};
+    for (auto *I : drop_begin(Insts)) {
+      auto *Rdx = dyn_cast<Reduction>(I);
+      if (!Rdx)
+        return nullptr;
+      auto *PN = RI.unwrapCondition(Rdx, LIT);
+      if (!PN)
+        continue;
+      PNs.push_back(PN);
+      Conds.push_back(LIT.getOneHotCond(PN));
+    }
+    if (PNs.size() == Insts.size()) {
+      if (llvm::is_splat(Conds))
+        return PHIPack::create(PNs);
+      else
+        return BlendPack::create(PNs, true /*is one-hot*/, PSSA, &LIT);
+    }
   }
-  if (PNs.size() == Insts.size())
-    return BlendPack::create(PNs, true /*is one-hot*/, PSSA);
 
   SmallVector<Instruction *, 4> Reducers;
   for (auto *I : Insts) {
@@ -199,11 +240,11 @@ TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
       return {P};
   }
 
-  if (auto *P = PHIPack::tryPack(Insts, PSSA))
+  if (auto *P = PHIPack::tryPack(Insts, PSSA, &LIT))
     return {P};
-  if (auto *P = BlendPack::tryPack(Insts, PSSA))
+  if (auto *P = BlendPack::tryPack(Insts, PSSA, &LIT))
     return {P};
-  if (auto *P = MuPack::tryPack(Insts, PSSA))
+  if (auto *P = MuPack::tryPack(Insts, PSSA, &LIT))
     return {P};
   if (auto *P = GEPPack::tryPack(Insts))
     return {P};
@@ -225,9 +266,7 @@ TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
     // reductions to enable using some of the instructions
     SmallVector<Value *, 8> AuxRdxs;
     for (auto [I, BoundOp] : llvm::zip(Insts, InstDesc.getOperations())) {
-      auto *Rdx = dyn_cast<Reduction>(I);
-      if (!Rdx)
-        Rdx = RI.getReductionFor(I);
+      auto *Rdx = getReduction(I);
       if (!Rdx)
         break;
       auto Res = TheMatcher.match(BoundOp.Op, Rdx);
@@ -246,6 +285,22 @@ TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
   if (auto *P = decomposeAndPack(PSSA, RI, LIT, Insts))
     Producers.push_back(P);
 
+  // Try to unfold recurrent reductions
+  SmallVector<Value *> InnerRdxs;
+  for (auto *I : Insts) {
+    auto *Rdx = getReduction(I);
+    if (!Rdx)
+      break;
+    auto *InnerRdx = RI.unwrapLoop(Rdx, LIT);
+    if (!InnerRdx)
+      break;
+    InnerRdxs.push_back(InnerRdx);
+  }
+  if (InnerRdxs.size() == Insts.size()) {
+    for (auto *P : getProducers(InnerRdxs))
+      Producers.push_back(P);
+  }
+
   return Producers;
 }
 
@@ -256,9 +311,43 @@ FixedVectorType *getVectorType(const ValuesT &Values) {
 
 static bool isUndefOrConstant(Value *V) { return !V || isa<Constant>(V); }
 
+__attribute__((unused)) static void dumpBottomUpTree(BottomUpHeuristic &H,
+                                                     ArrayRef<Value *> Values) {
+  OperandPack Root(Values.begin(), Values.end());
+  SmallVector<OperandPack> Worklist{Root};
+  DenseSet<OperandPack, VectorHashInfo<OperandPack>> Visited;
+  while (!Worklist.empty()) {
+    auto Operand = Worklist.pop_back_val();
+    if (!Visited.insert(Operand).second)
+      continue;
+    if (auto *P = H.getProducer(Operand)) {
+      errs() << "\t Producing " << Operand << " with " << *P
+             << ", cost = " << P->getCost() << '\n';
+      for (auto X : enumerate(P->getOperands()))
+        errs() << "\t\t operand " << X.index() << " = " << X.value() << '\n';
+      Worklist.append(P->getOperands());
+    } else {
+      errs() << "\t Producing " << Operand << " as scalar\n";
+    }
+    errs() << "\t\t estimated sub tree cost = " << H.getCost(Operand) << '\n';
+  }
+}
+
+int BottomUpHeuristic::getTripCount(Instruction *I) const {
+  auto *VL = getLoopFor(I, PSSA, LIT);
+  int Count = 1;
+  while (VL->isLoop()) {
+    Count *= getTripCount(VL);
+    VL = VL->getParent();
+  }
+  return Count;
+}
+
 BottomUpHeuristic::SolutionView
 BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
   auto *VecTy = getVectorType(Values);
+
+  auto TripCount = getTripCount(Values);
 
   // No cost for constant/undef vector
   if (all_of(Values, isUndefOrConstant))
@@ -270,7 +359,7 @@ BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
         getCost(Values.front()) +
         TTI.getShuffleCost(TTI::SK_Broadcast, VecTy, /*Mask=*/None, /*Index=*/0,
                            /*SubTy*/ nullptr, /*Args=*/Values.front());
-    return Solution(nullptr, Cost);
+    return Solution(nullptr, Cost * TripCount);
   }
 
   if (auto It = Solutions.find_as(Values); It != Solutions.end())
@@ -287,7 +376,8 @@ BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
 
     ScalarCost += getCost(V);
     ScalarCost +=
-        TTI.getVectorInstrCost(Instruction::InsertElement, VecTy, X.index());
+        TTI.getVectorInstrCost(Instruction::InsertElement, VecTy, X.index()) *
+        TripCount;
   }
 
   Solution Soln(nullptr, ScalarCost);
@@ -302,18 +392,20 @@ BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
 }
 
 InstructionCost BottomUpHeuristic::getCost(Pack *P) {
-  auto Cost = P->getCost();
+  auto TripCount = getTripCount(P->values());
+  auto Cost = P->getCost() * TripCount;
   for (auto &O : P->getOperands())
     Cost += solve(O).Cost;
   return Cost;
 }
 
 static InstructionCost getScalarCost(Instruction *I, TargetTransformInfo &TTI) {
-  if (auto *Rdx = dyn_cast<Reduction>(I))
-    return Rdx->size() - 1;
-
   if (isa<PHINode>(I))
     return 0;
+  if (auto *Rdx = dyn_cast<Reduction>(I))
+    return Rdx->size() - 1;
+  if (auto *R = dyn_cast<Reducer>(I))
+    return R->getNumOperands() - 1;
   return TTI.getInstructionCost(I, TTI::TCK_RecipThroughput);
 }
 
@@ -323,12 +415,22 @@ InstructionCost BottomUpHeuristic::getCost(Value *V) {
   if (!I)
     return 0;
 
+  auto TripCount = getTripCount(V);
+
+  if (auto *Rdx = dyn_cast<Reduction>(I)) {
+    // TODO: query TTI to figure out the cost of a binary reduction operator
+    InstructionCost Cost = (Rdx->size() - 1) * TripCount;
+    for (auto &Elt : Rdx->Elements)
+      Cost += getCost(Elt.Val);
+    return ScalarCosts[I] = Cost;
+  }
+
   if (auto It = ScalarCosts.find(I); It != ScalarCosts.end())
     return It->second;
 
   ScalarCosts[I] = 0;
 
-  auto Cost = getScalarCost(I, TTI);
+  auto Cost = getScalarCost(I, TTI) * TripCount;
   for (auto *O : I->operand_values())
     Cost += getCost(O);
   return ScalarCosts[I] = Cost;
@@ -363,25 +465,28 @@ namespace {
 class NewInstructionTracker {
   ReductionInfo &RI;
   DenseMap<Reduction *, Instruction *> RdxToInstMap;
+  LooseInstructionTable &LIT;
 
 public:
   NewInstructionTracker(const PackSet &Packs, ReductionInfo &RI,
                         LooseInstructionTable &LIT)
-      : RI(RI) {
+      : RI(RI), LIT(LIT) {
     // Figure out the loose reducers required by packs
     SmallVector<Instruction *> LooseInsts;
     for (auto *P : Packs)
       P->getLooseInsts(LooseInsts, LIT);
 
-    // Figure out the reductions produced by the loose reducers
-    DenseMap<Reduction *, Instruction *> RdxToInstMap;
     for (auto *I : LooseInsts)
       if (auto *Rdx = LIT.getReductionFor(I))
         RdxToInstMap.try_emplace(Rdx, I);
   }
 
   Instruction *getNewInstruction(Instruction *I) const {
-    auto It = RdxToInstMap.find(getReductionFor(I));
+    auto *Rdx = getReductionFor(I);
+    if (auto *InnerRdx = LIT.getInnerReduction(Rdx))
+      Rdx = InnerRdx;
+
+    auto It = RdxToInstMap.find(Rdx);
     if (It != RdxToInstMap.end()) {
       assert(It->first && "mapping null rdx");
       return It->second;
@@ -389,9 +494,16 @@ public:
     return I;
   }
 
+  Value *getNewValue(Value *V) const {
+    auto *I = dyn_cast<Instruction>(V);
+    if (!I)
+      return V;
+    return getNewInstruction(I);
+  }
+
   Reduction *getReductionFor(Instruction *I) const {
     auto *Rdx = dyn_cast<Reduction>(I);
-    if (!Rdx)
+    if (Rdx)
       return Rdx;
     return RI.getReductionFor(I);
   }
@@ -453,6 +565,7 @@ static InstructionCost getTotalCost(PredicatedSSA &PSSA, const PackSet &Packs,
   for (auto *I : LiveInsts)
     Cost += getScalarCost(I, TTI);
 
+  DenseSet<OperandPack, VectorHashInfo<OperandPack>> Processed;
   for (auto *P : Packs) {
     Type *VecTy = nullptr;
     if (!isa<StorePack>(P))
@@ -463,50 +576,41 @@ static InstructionCost getTotalCost(PredicatedSSA &PSSA, const PackSet &Packs,
 
     for (auto X : enumerate(P->values())) {
       Instruction *I = X.value();
-#if 1
-      // Figure out if we need to extract for scalar use
-      // FIXME: this doesn't take into account that some users are killed things
-      // like FMA
       if (!all_of(I->users(), IsPackedOrDead)) {
-        Cost -= TTI.getVectorInstrCost(Instruction::ExtractElement, VecTy,
+        Cost += TTI.getVectorInstrCost(Instruction::ExtractElement, VecTy,
                                        X.index());
       }
-#else
-      for (auto *U : I->users()) {
-        if (!IsPackedOrDead(U)) {
-          errs() << "??? paying extract cost for use of " << *I
-                 << ", user = " << *U << '\n';
-          Cost -= TTI.getVectorInstrCost(Instruction::ExtractElement, VecTy,
-                                         X.index());
-          break;
-        }
-      }
-#endif
     }
 
     // Figure out cost of shuffling the required operands
     for (const OperandPack &O : P->getOperands()) {
       auto *OpVecTy = getVectorType(O);
 
+      // We only need to gather each operand once.
+      if (!Processed.insert(O).second)
+        continue;
+
       // No shuffling cost for constant vector
       if (all_of(O, isUndefOrConstant))
         continue;
 
       // We can build the vector by broadcast
-      if (!IsPackedOrDead(O.front()) && is_splat(O)) {
-        Cost -= TTI.getShuffleCost(TargetTransformInfo::SK_Broadcast, OpVecTy);
+      if (is_splat(O)) {
+        Cost += TTI.getShuffleCost(TargetTransformInfo::SK_Broadcast, OpVecTy);
         continue;
       }
 
       SmallPtrSet<Pack *, 2> SrcPacks;
+      SmallVector<Value *, 4> ReplacedInsts;
       for (auto X : enumerate(O)) {
-        Value *V = X.value();
+        Value *V = NewInstTracker.getNewValue(X.value());
+        ReplacedInsts.push_back(V);
+
         // Remember the vectors that we need to shuffle from
         if (auto *P2 = Packs.getPackForValue(V)) {
           SrcPacks.insert(P2);
         } else if (!isa<Constant>(V)) {
-          // Pay the insertion cost
-          Cost -= TTI.getVectorInstrCost(Instruction::InsertElement, OpVecTy,
+          Cost += TTI.getVectorInstrCost(Instruction::InsertElement, OpVecTy,
                                          X.index());
         }
       }
@@ -517,11 +621,11 @@ static InstructionCost getTotalCost(PredicatedSSA &PSSA, const PackSet &Packs,
       if (SrcPacks.size() == 1) {
         auto *SrcP = *SrcPacks.begin();
         // No shuffle cost if O is produced exactly by some other pack
-        if (all_of_zip(SrcP->values(), O,
+        if (all_of_zip(SrcP->values(), ReplacedInsts,
                        [](auto *V1, auto *V2) { return V1 == V2; }))
           continue;
 
-        Cost -= TTI.getShuffleCost(TargetTransformInfo::SK_PermuteSingleSrc,
+        Cost += TTI.getShuffleCost(TargetTransformInfo::SK_PermuteSingleSrc,
                                    OpVecTy);
         continue;
       }
@@ -530,7 +634,7 @@ static InstructionCost getTotalCost(PredicatedSSA &PSSA, const PackSet &Packs,
       auto ShflCost =
           TTI.getShuffleCost(TargetTransformInfo::SK_PermuteTwoSrc, OpVecTy);
       unsigned NumShfls = SrcPacks.size() - 1;
-      Cost -= ShflCost * NumShfls;
+      Cost += ShflCost * NumShfls;
     }
   }
   return Cost;
@@ -694,6 +798,95 @@ static void partitionStores(ArrayRef<Instruction *> Stores,
   }
 }
 
+// Estimate the cost saving from horizontally vectorizing a list of values
+// This is basically the bottom-up heuristic, except we want to consider reuses
+// of vector values. Similar to the bottom-up heuristic, we still don't
+// calculate extraction cost.
+static InstructionCost getReductionSaving(BottomUpHeuristic &H,
+                                          ArrayRef<Value *> Values) {
+  OperandPack Root(Values.begin(), Values.end());
+  SmallVector<OperandPack> Worklist{Root};
+  DenseSet<OperandPack, VectorHashInfo<OperandPack>> Visited;
+  InstructionCost VectorCost = 0;
+  while (!Worklist.empty()) {
+    auto Operand = Worklist.pop_back_val();
+    if (!Visited.insert(Operand).second)
+      continue;
+    if (auto *P = H.getProducer(Operand)) {
+      Worklist.append(P->getOperands());
+      VectorCost += P->getCost() * H.getTripCount(P->values());
+    } else {
+      VectorCost += H.getCost(Operand);
+    }
+  }
+  auto TripCount = H.getTripCount(Values);
+  unsigned Rounds = Log2_32_Ceil(Values.size());
+  // Include cost of doing horizontal reduction
+  // Every round we have to do one shuffle and add/mul/etc
+  // And finally we have to pay an extract cost.
+  auto RdxCost = Rounds * 2 + 1;
+  VectorCost += RdxCost * TripCount;
+
+  InstructionCost ScalarCost = 0;
+  for (auto *V : Values)
+    ScalarCost += H.getCost(V);
+  return ScalarCost - VectorCost;
+}
+
+// Find list of reduction elements that are profitable to pack together
+// Also return their saving estimate
+static void findPackableReductions(
+    SmallVectorImpl<std::pair<Pack *, InstructionCost>> &Seeds,
+    PredicatedSSA &PSSA, ReductionInfo &RI, LooseInstructionTable &LIT,
+    BottomUpHeuristic &Heuristic) {
+  class ReductionFinder : public PSSAVisitor<ReductionFinder> {
+    ReductionInfo &RI;
+    SetVector<Reduction *> &Rdxs;
+
+  public:
+    ReductionFinder(ReductionInfo &RI, SetVector<Reduction *> &Rdxs)
+        : RI(RI), Rdxs(Rdxs) {}
+
+    void visitInstruction(Instruction *I) {
+      auto *Rdx = RI.getReductionFor(I);
+      if (Rdx)
+        Rdxs.insert(Rdx);
+    }
+  };
+
+  // FIXME: find a better way to configure the available vector width
+  SmallVector<unsigned> VectorLengths{2, 4, 8, 16};
+
+  SetVector<Reduction *> Rdxs;
+  visitWith<ReductionFinder>(PSSA, RI, Rdxs);
+
+  for (auto *Rdx : Rdxs) {
+    // Find out the elements that we are reducing over
+    SmallVector<Value *> Elements;
+    // for (auto &Elt : Rdx->Elements)
+    //   Elements.push_back(Elt.Val);
+    unsigned N = Rdx->size();
+    RI.split(Rdx, Rdx->size(), Elements);
+
+    // Slide over the elements and check if they are profitable to pack
+    for (unsigned VL : VectorLengths) {
+      for (unsigned Begin = 0; Begin + VL <= N; Begin++) {
+        auto Seed = ArrayRef<Value *>(Elements).slice(Begin, VL);
+        if (auto *P = Heuristic.getProducer(Seed)) {
+          SmallVector<Value *> Args;
+          for (auto X : llvm::enumerate(Elements))
+            if (X.index() < Begin || X.index() >= Begin + VL)
+              Args.push_back(X.value());
+          Args.append(Seed.begin(), Seed.end());
+          auto *R = LIT.getOrCreateReducer(Rdx, Args);
+          auto Saving = getReductionSaving(Heuristic, Seed);
+          Seeds.emplace_back(new ReductionPack(R, Seed.size()), Saving);
+        }
+      }
+    }
+  }
+}
+
 std::vector<Pack *>
 packBottomUp(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
              ReductionInfo &RI, LooseInstructionTable &LIT, Matcher &TheMatcher,
@@ -744,7 +937,7 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
     runBottomUp(Operands.front(), Heuristic, PSSA, LIT, SE, Scratch);
     auto NewCost = getTotalCost(PSSA, Scratch, RI, LIT, TTI);
     // FIXME: need to check for dep cycle
-    errs() << "Prev saving: " << PrevCost << ", new saving " << NewCost << '\n';
+    errs() << "Prev cost: " << PrevCost << ", new cost: " << NewCost << '\n';
     if (NewCost < PrevCost) {
       PrevCost = NewCost;
       Packs = std::move(Scratch);
@@ -756,6 +949,35 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
     partitionStores(Stores, StoreGroups, DL, SE, LI);
     for_each(make_second_range(StoreGroups), VectorizeStoreChain);
   }
+
+  auto VectorizeReduction = [&](Pack *Seed) {
+    PackSet Scratch = Packs;
+    assert(isa<ReductionPack>(Seed));
+
+    // Pack the horizontal reduction
+    Scratch.add(Seed);
+    // Run bottom-up on the elements
+    assert(Seed->getOperands().size() == 1);
+    runBottomUp(Seed->getOperands()[0], Heuristic, PSSA, LIT, SE, Scratch);
+    auto NewCost = getTotalCost(PSSA, Scratch, RI, LIT, TTI);
+    // FIXME: need to check for dep cycle
+    errs() << "Prev cost: " << PrevCost << ", new cost: " << NewCost << '\n';
+    if (NewCost < PrevCost) {
+      PrevCost = NewCost;
+      Packs = std::move(Scratch);
+    }
+  };
+
+  SmallVector<std::pair<Pack *, InstructionCost>> RdxSeeds;
+  findPackableReductions(RdxSeeds, PSSA, RI, LIT, Heuristic);
+
+  if (!RdxSeeds.empty()) {
+    llvm::stable_sort(RdxSeeds, [](const auto &A, const auto &B) {
+      return A.second > B.second;
+    });
+    VectorizeReduction(RdxSeeds.front().first);
+  }
+
   for (auto *P : Packs)
     errs() << "pack " << *P << '\n';
 

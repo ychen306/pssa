@@ -41,49 +41,6 @@ VLoop *LooseInstructionTable::getLoopForInst(Instruction *I) const {
   return LooseInsts.find(I)->second.VL;
 }
 
-Instruction *LooseInstructionTable::getProducer(Reduction *Rdx) const {
-  if (auto *I = ReductionToInstMap.lookup(Rdx))
-    return I;
-
-  // Sometimes we have a reduction that's produced at a stronger condition
-  // but is still reusable.
-  // Consider the reduction `(+ a @ c) : c2`.
-  // Suppose c2 is a necessary condition for c and the reduction is produced by
-  // I. Now, suppose we want `(+ a @ c) : c3`, if we can just produce the
-  // reduction with
-  //    phi [c2 : I], [_: 0].
-  // This works because c2 is a necessary condition for `a` to be accumulated,
-  // which means that if `c2` is not true than nothing would be accumulated (the
-  // _:0 part).
-  //
-  // FIXME: do this more efficiently
-  for (auto [Rdx2, I] : ReductionToInstMap) {
-    if (Rdx2->size() != Rdx->size())
-      continue;
-    if (Rdx2->getParentLoop() != Rdx->getParentLoop())
-      continue;
-    bool Usable = true;
-    auto *C = Rdx2->getParentCond();
-    for (auto [E2, E] : llvm::zip(Rdx2->Elements, Rdx->Elements)) {
-      if (E2 != E) {
-        Usable = false;
-        break;
-      }
-      // Check that C is a necessary condition to including E2
-      bool IsNecessary = (E2.reducedByLoop() &&
-                          isImplied(C, E2.Loops.back()->getLoopCond())) ||
-                         (!E2.reducedByLoop() && isImplied(C, E2.C));
-      if (!IsNecessary) {
-        Usable = false;
-        break;
-      }
-    }
-    if (Usable)
-      return I;
-  }
-  return nullptr;
-}
-
 void UniqueReducer::Profile(FoldingSetNodeID &ID) const {
   ID.AddPointer(Rdx);
   ID.AddPointer(VL);
@@ -236,7 +193,6 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
       assert(OneHotConds.count(PN) && "unexpected loose phi-node");
       // We assume all loose phi conds are
       auto *GateC = OneHotConds.lookup(PN);
-      assert(GateC);
       assert(LooseInsts.count(I));
       auto Loc = LooseInsts[I];
       VL->insert(PN, {Loc.C, GateC}, Loc.C, VL->item_end());
@@ -300,6 +256,8 @@ bool LooseInstructionTable::insertInto(ArrayRef<Instruction *> Insts,
       if (!InnerRdx)
         continue;
       auto *I2 = getProducer(InnerRdx);
+      if (!I2)
+        continue;
       if (PSSA.getInstCond(I2) != InnerRdx->getParentCond())
         continue;
       auto *VL = PSSA.getLoopForInst(I);

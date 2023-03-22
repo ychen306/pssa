@@ -60,12 +60,16 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   DependenceChecker DepChecker(PSSA, DI, AA, LI);
   for (auto *P : Packs)
     P->getLooseInsts(LooseInsts, LIT);
-  bool Ok = LIT.insertInto(LooseInsts, PSSA, DepChecker, RI);
-  LIT.destroy();
+
   // FIXME: LIT may alter the IR; backup the IR and restore if somehow LIT finds
   // circular deps
-  if (!Ok)
+  bool Ok = LIT.insertInto(LooseInsts, PSSA, DepChecker, RI);
+  if (!Ok) {
+    LIT.destroy();
     return PreservedAnalyses::none();
+  }
+  lowerReductions(RI, PSSA, LIT, DepChecker, false/*replace insts*/);
+  LIT.destroy();
 
   if (!lower(Packs, PSSA, DI, AA, LI))
     return PreservedAnalyses::all();

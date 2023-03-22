@@ -8,6 +8,7 @@
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/ADT/SetVector.h"
 
 using namespace llvm;
 using namespace PatternMatch;
@@ -64,8 +65,10 @@ raw_ostream &operator<<(raw_ostream &OS, const Reduction &Rdx) {
     Value *V = Elt.Val;
     if (V->hasName())
       OS << " " << V->getName();
-    else
+    else if (!isa<PHINode>(V))
       OS << " (" << *V << ')';
+    else
+      OS << " phi";
     bool IsFirst = true;
     for (auto *VL : Elt.Loops) {
       if (IsFirst) {
@@ -446,21 +449,6 @@ ReductionInfo::ReductionInfo(PredicatedSSA &PSSA) {
   ReductionToValuesMap = std::move(NewRdxToValsMap);
 }
 
-void ReductionInfo::split(const Reduction *Rdx, unsigned Parts,
-                          SmallVectorImpl<Reduction *> &SubRdxs) {
-  unsigned N = Rdx->size();
-  assert(isPowerOf2_32(Parts));
-  assert(isPowerOf2_32(N));
-  assert(N % Parts == 0);
-  for (unsigned i = 0; i < Parts; i++) {
-    auto *SubRdx = copyReduction(Rdx);
-    SubRdx->Elements.clear();
-    for (unsigned j = i; j < N; j += Parts)
-      SubRdx->Elements.push_back(Rdx->Elements[j]);
-    SubRdxs.push_back(dedup(SubRdx));
-  }
-}
-
 Reducer *ReductionInfo::decompose(Reduction *Rdx, unsigned N,
                                   LooseInstructionTable &LIT) {
   if (Rdx->size() < N)
@@ -620,7 +608,7 @@ namespace {
 
 // Utility to find all reduction used in a given function
 class ReductionFinder : public PSSAVisitor<ReductionFinder> {
-  DenseSet<Reduction *> &Rdxs;
+  SetVector<Reduction *> &Rdxs;
   ReductionInfo &RI;
   LooseInstructionTable &LIT;
   bool ReplaceInsts;
@@ -645,15 +633,26 @@ class ReductionFinder : public PSSAVisitor<ReductionFinder> {
     return false;
   }
 
+  void add(Value *V) {
+    if (!ReplaceInsts) {
+      if (auto *Rdx = dyn_cast<Reduction>(V))
+        Rdxs.insert(Rdx);
+      return;
+    }
+
+    if (auto *Rdx = RI.getReductionFor(V))
+      Rdxs.insert(Rdx);
+  }
+
 public:
-  ReductionFinder(DenseSet<Reduction *> &Rdxs, ReductionInfo &RI,
+  ReductionFinder(SetVector<Reduction *> &Rdxs, ReductionInfo &RI,
                   LooseInstructionTable &LIT, bool ReplaceInsts)
       : Rdxs(Rdxs), RI(RI), LIT(LIT), ReplaceInsts(ReplaceInsts) {}
   void visitInstruction(Instruction *I) {
     if (addIfNotProduced(I))
       return;
     for (Value *V : I->operand_values()) {
-      addIfNotProduced(V);
+      add(V);
     }
   }
 };
@@ -669,18 +668,16 @@ void replaceUsesOfReductionWith(Reduction *Rdx, Value *V, ReductionInfo &RI) {
 void lowerReductions(ReductionInfo &RI, PredicatedSSA &PSSA,
                      LooseInstructionTable &LIT, DependenceChecker &DepChecker,
                      bool ReplaceInsts) {
-  // Find out all reduction we haven't lowered yet
-  DenseSet<Reduction *> Rdxs;
+  SetVector<Reduction *> Rdxs;
   visitWith<ReductionFinder>(PSSA, Rdxs, RI, LIT, ReplaceInsts);
 
-  // Decompose those reductions into reducers and phis
-  SmallVector<Reduction *> Worklist(Rdxs.begin(), Rdxs.end());
   DenseSet<Reduction *> Lowered;
   SmallVector<Instruction *> LooseInsts;
   // Some Reductions are already produced,
   // remember them and rewire their uses later
   DenseMap<Reduction *, Value *> RdxToPatch;
 
+  SmallVector<Reduction *> Worklist(Rdxs.begin(), Rdxs.end());
   while (!Worklist.empty()) {
     auto *Rdx = Worklist.pop_back_val();
     if (!Lowered.insert(Rdx).second)
@@ -695,19 +692,8 @@ void lowerReductions(ReductionInfo &RI, PredicatedSSA &PSSA,
       auto *Rdx2 = LIT.getReductionFor(I);
       if (Rdx2 == Rdx) {
         RdxToPatch[Rdx] = I;
-      } else {
-        // This must be a case of Rdx being produced at a stronger condition C
-        // but can be reused because C is a necessary condition for all the
-        // elements.
-        assert(Rdx->size() == Rdx2->size());
-        assert(Rdx->getParentLoop() == Rdx2->getParentLoop());
-        auto *NewInst = LIT.createOneHotPhi(
-            Rdx->getParentLoop(), Rdx2->getParentCond() /* gating condition*/,
-            I /*if true*/, Rdx->identity() /*if false*/, Rdx->getParentCond(),
-            Rdx);
-        LooseInsts.push_back(NewInst);
+        continue;
       }
-      continue;
     }
 
     Instruction *NewInst = nullptr;
@@ -721,6 +707,7 @@ void lowerReductions(ReductionInfo &RI, PredicatedSSA &PSSA,
       Worklist.push_back(InnerRdx);
       continue;
     }
+
     assert(NewInst && "don't know how to decompose reduction");
     // FIXME: this doesn't work for recurrent decomposition, which emits a mu +
     // a reducer
@@ -736,7 +723,14 @@ void lowerReductions(ReductionInfo &RI, PredicatedSSA &PSSA,
     replaceUsesOfReductionWith(Rdx, V, RI);
 
   // Insert the new instructions
-  LIT.insertInto(LooseInsts, PSSA, DepChecker, RI);
+  bool Ok = LIT.insertInto(LooseInsts, PSSA, DepChecker, RI);
+  assert(Ok);
+  (void)Ok;
+
+#ifndef NDEBUG
+  for (auto *I : LooseInsts)
+    assert(PSSA.contains(I));
+#endif
 
   // Replace all of the reducers with actual llvm compute instructions
   for (auto *I : LooseInsts) {

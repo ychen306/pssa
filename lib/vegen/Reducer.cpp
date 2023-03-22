@@ -25,8 +25,11 @@ Reducer::Reducer(Reduction *Result, ArrayRef<Value *> OrigElements)
 
 void Reducer::dump(raw_ostream &OS) {
   OS << '(' << getReductionName(getKind());
-  OS << *getOperand(0);
-  for (auto *O : drop_begin(operand_values()))
-    OS << ' ' << *O;
+  for (auto *O : operand_values()) {
+    if (!isa<PHINode>(O))
+      OS << ' ' << *O;
+    else
+      OS << " phi";
+  }
   OS << ')';
 }

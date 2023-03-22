@@ -68,8 +68,10 @@ public:
   virtual void getLooseInsts(llvm::SmallVectorImpl<llvm::Instruction *> &,
                              LooseInstructionTable &) const;
   // Return instructions immediately killed by using this pack
-  virtual void getKilledInsts(llvm::SmallVectorImpl<llvm::Instruction *> &) const;
+  virtual void
+  getKilledInsts(llvm::SmallVectorImpl<llvm::Instruction *> &) const;
   virtual Pack *clone() const = 0;
+  void dump() const;
 };
 
 // This models a vector operation that *reifies*
@@ -182,34 +184,46 @@ class PHIPack : public Pack {
 
 public:
   static PHIPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
-                          PredicatedSSA &PSSA);
+                          PredicatedSSA &PSSA,
+                          LooseInstructionTable *LIT = nullptr);
+  // Only use this if you are sue that
+  // the instructions are convergent gated-phis and packable
+  static PHIPack *create(llvm::ArrayRef<llvm::Instruction *> Insts) {
+    return new PHIPack(Insts);
+  }
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
   // No generic ::emit for PHIPack
   static bool classof(const Pack *P) { return P->getKind() == PK_PHI; }
   Pack *clone() const override { return new PHIPack(Insts); }
+  llvm::InstructionCost getCost() const override { return 0; }
 };
 
 // A pack of *divergent * phi
 class BlendPack : public Pack {
   bool IsOneHot;
   PredicatedSSA &PSSA;
+  LooseInstructionTable *LIT;
   BlendPack(llvm::ArrayRef<llvm::Instruction *> Insts, bool IsOneHot,
-            PredicatedSSA &PSSA)
-      : Pack(Insts, PK_Blend), IsOneHot(IsOneHot), PSSA(PSSA) {}
+            PredicatedSSA &PSSA, LooseInstructionTable *LIT)
+      : Pack(Insts, PK_Blend), IsOneHot(IsOneHot), PSSA(PSSA), LIT(LIT) {}
 
 public:
   static BlendPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
-                            PredicatedSSA &PSSA);
+                            PredicatedSSA &PSSA,
+                            LooseInstructionTable *LIT = nullptr);
   // Only use this if you are sue that
   // the instructions are gated-phis and packable
   static BlendPack *create(llvm::ArrayRef<llvm::Instruction *> Insts,
-                           bool IsOneHot, PredicatedSSA &PSSA) {
-    return new BlendPack(Insts, IsOneHot, PSSA);
+                           bool IsOneHot, PredicatedSSA &PSSA,
+                           LooseInstructionTable *LIT = nullptr) {
+    return new BlendPack(Insts, IsOneHot, PSSA, LIT);
   }
   llvm::SmallVector<VectorMask, 2> masks() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_Blend; }
-  Pack *clone() const override { return new BlendPack(Insts, IsOneHot, PSSA); }
+  Pack *clone() const override {
+    return new BlendPack(Insts, IsOneHot, PSSA, LIT);
+  }
 };
 
 // A pack of mu (header phi)
@@ -222,10 +236,12 @@ public:
     return new MuPack(Mus);
   }
   static MuPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
-                         PredicatedSSA &PSSA);
+                         PredicatedSSA &PSSA,
+                         LooseInstructionTable *LIT = nullptr);
   // No generic ::emit for MuPack
   static bool classof(const Pack *P) { return P->getKind() == PK_Mu; }
   Pack *clone() const override { return new MuPack(Insts); }
+  llvm::InstructionCost getCost() const override { return 0; }
 };
 
 // A pack of GEPs
@@ -266,11 +282,12 @@ public:
 
 class ReductionPack : public Pack {
   // We will implement this reducer by horizontally adding up all of its
-  // operands
+  // operands; With the last N done with vector reduction
   llvm::Reducer *Root;
+  unsigned N;
 
 public:
-  ReductionPack(llvm::Reducer *Root);
+  ReductionPack(llvm::Reducer *Root, unsigned N);
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   void print(llvm::raw_ostream &OS) const override;
@@ -304,10 +321,11 @@ public:
     return new GeneralPack(InstDesc, values(), Matches);
   }
   void print(llvm::raw_ostream &) const override;
-  void getKilledInsts(llvm::SmallVectorImpl<llvm::Instruction *> &) const override;
+  void
+  getKilledInsts(llvm::SmallVectorImpl<llvm::Instruction *> &) const override;
 };
 
-llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, Pack &);
-llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, OperandPack &);
+llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, const Pack &);
+llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, const OperandPack &);
 
 #endif
