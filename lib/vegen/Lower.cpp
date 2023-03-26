@@ -697,7 +697,7 @@ Value *VectorGen::gatherValues(ArrayRef<ValueType> Values,
   };
 
   // Mapping vector -> subset of its elements that we are gathering
-  SmallDenseMap<Value *, SmallVector<GatherEdge, 4>> SrcPacks;
+  MapVector<Value *, SmallVector<GatherEdge, 4>> SrcPacks;
   // Mapping scalar -> index that we need to insert into
   SmallVector<std::pair<Value *, unsigned>, 8> SrcScalars;
 

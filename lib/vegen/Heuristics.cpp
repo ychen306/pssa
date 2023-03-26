@@ -16,6 +16,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h" // getUnderlyingObject
+#include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/IR/Instructions.h"
 
 using namespace llvm;
@@ -48,6 +49,8 @@ public:
       : InstPool(InstPool), PSSA(PSSA), RI(RI), LIT(LIT),
         TheMatcher(TheMatcher), DL(DL), SE(SE), LI(LI) {}
   TinyPtrVector<Pack *> getProducers(llvm::ArrayRef<llvm::Value *>);
+  // The values are all loads, try to split them up into several load packs
+  SmallVector<Pack *> getLoadPacks(ArrayRef<llvm::Value *>);
 };
 
 class BottomUpHeuristic {
@@ -57,10 +60,13 @@ class BottomUpHeuristic {
   TargetTransformInfo &TTI;
 
   struct Solution {
-    std::unique_ptr<Pack> P;
+    SmallVector<std::unique_ptr<Pack>, 1> Packs;
     InstructionCost Cost;
 
-    Solution(Pack *P, InstructionCost Cost) : P(P), Cost(Cost) {}
+    Solution(Pack *P, InstructionCost Cost) : Cost(Cost) {
+      if (P)
+        Packs.emplace_back(P);
+    }
     Solution(Solution &&) = default;
     Solution &operator=(Solution &&) = default;
 
@@ -71,14 +77,31 @@ class BottomUpHeuristic {
       }
 
       Cost = Cost2;
-      P.reset(P2);
+      Packs.clear();
+      Packs.emplace_back(P2);
+    }
+
+    void update(ArrayRef<Pack *> Packs2, InstructionCost Cost2) {
+      if (Cost < Cost2) {
+        for (auto *P : Packs2)
+          delete P;
+        return;
+      }
+
+      Cost = Cost2;
+      Packs.clear();
+      for (auto *P : Packs2)
+        Packs.emplace_back(P);
     }
   };
 
   struct SolutionView {
-    Pack *P;
+    TinyPtrVector<Pack *> Packs;
     InstructionCost Cost;
-    SolutionView(const Solution &Soln) : P(Soln.P.get()), Cost(Soln.Cost) {}
+    SolutionView(const Solution &Soln) : Cost(Soln.Cost) {
+      for (auto &P : Soln.Packs)
+        Packs.push_back(P.get());
+    }
   };
 
   using ValueVector = SmallVector<Value *, 8>;
@@ -102,7 +125,15 @@ public:
                     llvm::LoopInfo &LI, TargetTransformInfo &TTI)
       : PSSA(PSSA), LIT(LIT),
         Pkr(InstPool, PSSA, RI, LIT, TheMatcher, DL, SE, LI), TTI(TTI) {}
-  Pack *getProducer(ArrayRef<Value *> Values) { return solve(Values).P; }
+  TinyPtrVector<Pack *> getProducer(ArrayRef<Value *> Values) {
+    return solve(Values).Packs;
+  }
+  Pack *getSingleProducer(ArrayRef<Value *> Values) {
+    auto Packs = getProducer(Values);
+    if (Packs.size() == 1)
+      return Packs.front();
+    return nullptr;
+  }
   InstructionCost getCost(ArrayRef<Value *> Values) {
     return solve(Values).Cost;
   }
@@ -123,6 +154,8 @@ public:
       Count = std::max<int>(Count, getTripCount(V));
     return Count;
   }
+
+  void dumpBottomUpTree(ArrayRef<Value *> Values);
 };
 
 // Group stores by their underlying objects
@@ -304,6 +337,34 @@ TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
   return Producers;
 }
 
+SmallVector<Pack *> Packer::getLoadPacks(ArrayRef<Value *> Values) {
+  // Loads within the same class are within a constant offset with each other
+  EquivalenceClasses<LoadInst *> EC;
+  for (auto *V1 : Values) {
+    auto *L1 = cast<LoadInst>(V1);
+    for (auto *V2 : Values) {
+      if (V1 == V2)
+        continue;
+      auto *L2 = cast<LoadInst>(V2);
+      if (diffPointers(L1->getType(), L1->getPointerOperand(), L2->getType(),
+                       L2->getPointerOperand(), DL, SE, LI)) {
+        EC.unionSets(L1, L2);
+        break;
+      }
+    }
+  }
+
+  SmallVector<Pack *> LoadPacks;
+  for (auto I = EC.begin(), E = EC.end(); I != E; ++I) {
+    SmallVector<Instruction *> Insts(EC.member_begin(I), EC.member_end());
+    if (!llvm::isPowerOf2_32(Insts.size()))
+      continue;
+    if (auto *P = LoadPack::tryPack(Insts, DL, SE, LI, PSSA))
+      LoadPacks.push_back(P);
+  }
+  return LoadPacks;
+}
+
 template <typename ValuesT>
 FixedVectorType *getVectorType(const ValuesT &Values) {
   return FixedVectorType::get(Values.front()->getType(), Values.size());
@@ -311,8 +372,7 @@ FixedVectorType *getVectorType(const ValuesT &Values) {
 
 static bool isUndefOrConstant(Value *V) { return !V || isa<Constant>(V); }
 
-__attribute__((unused)) static void dumpBottomUpTree(BottomUpHeuristic &H,
-                                                     ArrayRef<Value *> Values) {
+void BottomUpHeuristic::dumpBottomUpTree(ArrayRef<Value *> Values) {
   OperandPack Root(Values.begin(), Values.end());
   SmallVector<OperandPack> Worklist{Root};
   DenseSet<OperandPack, VectorHashInfo<OperandPack>> Visited;
@@ -320,16 +380,19 @@ __attribute__((unused)) static void dumpBottomUpTree(BottomUpHeuristic &H,
     auto Operand = Worklist.pop_back_val();
     if (!Visited.insert(Operand).second)
       continue;
-    if (auto *P = H.getProducer(Operand)) {
-      errs() << "\t Producing " << Operand << " with " << *P
-             << ", cost = " << P->getCost() << '\n';
-      for (auto X : enumerate(P->getOperands()))
-        errs() << "\t\t operand " << X.index() << " = " << X.value() << '\n';
-      Worklist.append(P->getOperands());
+    auto Packs = getProducer(Operand);
+    if (!Packs.empty()) {
+      for (auto *P : Packs) {
+        errs() << "\t Producing " << Operand << " with " << *P
+               << ", cost = " << P->getCost() << '\n';
+        for (auto X : enumerate(P->getOperands()))
+          errs() << "\t\t operand " << X.index() << " = " << X.value() << '\n';
+        Worklist.append(P->getOperands());
+      }
     } else {
       errs() << "\t Producing " << Operand << " as scalar\n";
     }
-    errs() << "\t\t estimated sub tree cost = " << H.getCost(Operand) << '\n';
+    errs() << "\t\t estimated sub tree cost = " << getCost(Operand) << '\n';
   }
 }
 
@@ -384,6 +447,18 @@ BottomUpHeuristic::solve(ArrayRef<Value *> Values) {
   for (auto *P : Pkr.getProducers(Values)) {
     assert(P);
     Soln.update(P, getCost(P));
+  }
+
+  if (all_of(Values, [&](Value *V) { return isa<LoadInst>(V); })) {
+    auto LoadPacks = Pkr.getLoadPacks(Values);
+    if (!LoadPacks.empty()) {
+      InstructionCost ShflCost = TTI.getShuffleCost(
+          TargetTransformInfo::SK_PermuteTwoSrc, getVectorType(Values));
+      InstructionCost Cost = (LoadPacks.size() - 1) * ShflCost * TripCount;
+      for (auto *P : LoadPacks)
+        Cost += getCost(P);
+      Soln.update(LoadPacks, Cost);
+    }
   }
 
   SolutionView Ret = Soln;
@@ -699,17 +774,18 @@ static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
     if (any_of(Values, IsPacked) || !Visited.insert(Values).second)
       continue;
 
-    auto *P = Heuristic.getProducer(Values);
-    if (!P)
-      continue;
-    Packs.add(P);
-    Worklist.append(P->getOperands());
-    for (auto &M : P->masks())
-      ProcessMaskOperands(M);
-    LoopBundle Loops;
-    for (auto *I : P->values())
-      Loops.push_back(getLoopFor(I, PSSA, LIT));
-    ProcessLoopBundle(Loops);
+    for (auto *P : Heuristic.getProducer(Values)) {
+      if (!P)
+        continue;
+      Packs.add(P);
+      Worklist.append(P->getOperands());
+      for (auto &M : P->masks())
+        ProcessMaskOperands(M);
+      LoopBundle Loops;
+      for (auto *I : P->values())
+        Loops.push_back(getLoopFor(I, PSSA, LIT));
+      ProcessLoopBundle(Loops);
+    }
   }
 }
 
@@ -812,9 +888,12 @@ static InstructionCost getReductionSaving(BottomUpHeuristic &H,
     auto Operand = Worklist.pop_back_val();
     if (!Visited.insert(Operand).second)
       continue;
-    if (auto *P = H.getProducer(Operand)) {
-      Worklist.append(P->getOperands());
-      VectorCost += P->getCost() * H.getTripCount(P->values());
+    auto Packs = H.getProducer(Operand);
+    if (!Packs.empty()) {
+      for (auto *P : Packs) {
+        Worklist.append(P->getOperands());
+        VectorCost += P->getCost() * H.getTripCount(P->values());
+      }
     } else {
       VectorCost += H.getCost(Operand);
     }
@@ -872,7 +951,7 @@ static void findPackableReductions(
     for (unsigned VL : VectorLengths) {
       for (unsigned Begin = 0; Begin + VL <= N; Begin++) {
         auto Seed = ArrayRef<Value *>(Elements).slice(Begin, VL);
-        if (auto *P = Heuristic.getProducer(Seed)) {
+        if (auto *P = Heuristic.getSingleProducer(Seed)) {
           SmallVector<Value *> Args;
           for (auto X : llvm::enumerate(Elements))
             if (X.index() < Begin || X.index() >= Begin + VL)

@@ -176,6 +176,8 @@ public:
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_Store; }
   Pack *clone() const override { return new GatherPack(Insts, PSSA); }
+  // FIXME: query TTI
+  llvm::InstructionCost getCost() const override { return 10; }
 };
 
 // A pack of *convergent* phi
