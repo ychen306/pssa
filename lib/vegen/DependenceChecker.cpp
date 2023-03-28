@@ -108,9 +108,13 @@ bool DependenceChecker::hasDependency(Instruction *I1, Instruction *I2) {
   if (L1 == L2) {
     auto Loc1 = getLocation(I1);
     auto Loc2 = getLocation(I2);
-    if (Loc1.Ptr && Loc2.Ptr)
-      return AA.alias(Loc1, Loc2);
-    return true;
+    if (Loc1.Ptr && Loc2.Ptr) {
+      // In case AA reports MayAlias, check DependenceInfo again
+      if (!AA.alias(Loc1, Loc2))
+        return false;
+    } else {
+      return true;
+    }
   }
 
   auto Dep = DI.depends(I1, I2, true);
