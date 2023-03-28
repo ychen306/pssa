@@ -11,7 +11,9 @@ set(LIB_VEGEN_SRC
     Reducer.cpp
     LooseInstructionTable.cpp
     Matcher.cpp
-    TestVectorGen.cpp)
+    TestVectorGen.cpp
+    LoopUnrolling.cpp
+    UnrollFactor.cpp)
 
 if (APPLE)
   add_library(VeGen STATIC ${LIB_VEGEN_SRC})
