@@ -10,6 +10,7 @@ namespace llvm {
 class DependenceInfo;
 class Instruction;
 class AAResults;
+class ScalarEvolution;
 class LoopInfo;
 } // namespace llvm
 
@@ -27,6 +28,7 @@ class DependenceChecker {
   llvm::DependenceInfo &DI;
   llvm::AAResults &AA;
   llvm::LoopInfo &LI;
+  llvm::ScalarEvolution &SE;
 
   const llvm::DenseSet<llvm::Instruction *> *DeadInsts;
 
@@ -47,8 +49,9 @@ public:
   // DeadInsts is an optional set of instructions known to be dead
   DependenceChecker(PredicatedSSA &PSSA, llvm::DependenceInfo &DI,
                     llvm::AAResults &AA, llvm::LoopInfo &LI,
+                    llvm::ScalarEvolution &SE,
                     llvm::DenseSet<llvm::Instruction *> *DeadInsts = nullptr)
-      : PSSA(PSSA), DI(DI), AA(AA), LI(LI), DeadInsts(DeadInsts) {}
+      : PSSA(PSSA), DI(DI), AA(AA), LI(LI), SE(SE), DeadInsts(DeadInsts) {}
 
   void invalidate(VLoop *VL) { Summaries.erase(VL); }
 

@@ -411,7 +411,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     Packs.push_back(new ReductionPack(RootR, SubRdxs.size()));
   }
 
-  DependenceChecker DepChecker(PSSA, DI, AA, LI, &DeadInsts);
+  DependenceChecker DepChecker(PSSA, DI, AA, LI, SE, &DeadInsts);
   // Insert all of the loose instructions resulting from
   // matching and packing the reductions
   SmallVector<Instruction *> LooseInsts;
@@ -427,7 +427,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
 
   LIT.destroy();
 
-  Ok = lower(Packs, PSSA, DI, AA, LI);
+  Ok = lower(Packs, PSSA, DI, AA, LI, SE);
   assert(Ok && "can't lower due to circular dep");
   lowerPSSAToLLVM(&F, PSSA);
 

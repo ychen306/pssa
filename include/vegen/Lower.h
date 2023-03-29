@@ -10,6 +10,7 @@ class AAResults;
 class LoopInfo;
 class Instruction;
 class Value;
+class ScalarEvolution;
 } // namespace llvm
 
 class Pack;
@@ -20,7 +21,7 @@ class ControlCondition;
 // May bail out due to circular deps introduced by the packs.
 // Return true if succeeded.
 bool lower(llvm::ArrayRef<Pack *>, PredicatedSSA &, llvm::DependenceInfo &,
-           llvm::AAResults &, llvm::LoopInfo &);
+           llvm::AAResults &, llvm::LoopInfo &, llvm::ScalarEvolution &);
 
 const ControlCondition *
 findSpeculativeCond(llvm::Instruction *I,

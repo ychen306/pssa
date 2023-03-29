@@ -973,7 +973,7 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
   StoreGrouper::ObjToInstMapTy ObjToStoreMap;
   visitWith<StoreGrouper>(PSSA, ObjToStoreMap);
 
-  DependenceChecker DepChecker(PSSA, DI, AA, LI);
+  DependenceChecker DepChecker(PSSA, DI, AA, LI, SE);
 
   BottomUpHeuristic Heuristic(InstPool, PSSA, RI, LIT, TheMatcher, DL, SE, LI,
                               TTI);

@@ -152,7 +152,7 @@ PreservedAnalyses ReductionLowering::run(Function &F,
   ReductionInfo RI(PSSA);
 
   auto DeadInsts = findDeadInsts(RI, PSSA);
-  DependenceChecker DepChecker(PSSA, DI, AA, LI, &DeadInsts);
+  DependenceChecker DepChecker(PSSA, DI, AA, LI, SE, &DeadInsts);
   removeDeadInsts(&PSSA.getTopLevel(), DeadInsts);
   LooseInstructionTable LIT;
   lowerReductions(RI, PSSA, LIT, DepChecker, true /*ReplaceInsts*/);

@@ -74,7 +74,7 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   SmallVector<Instruction *> LooseInsts;
   // FIXME: track dead instructions and remove them to remove false dependences
   // due to reductions
-  DependenceChecker DepChecker(PSSA, DI, AA, LI);
+  DependenceChecker DepChecker(PSSA, DI, AA, LI, SE);
   for (auto *P : Packs)
     P->getLooseInsts(LooseInsts, LIT);
 
@@ -88,7 +88,7 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   lowerReductions(RI, PSSA, LIT, DepChecker, false /*replace insts*/);
   LIT.destroy();
 
-  if (!lower(Packs, PSSA, DI, AA, LI)) {
+  if (!lower(Packs, PSSA, DI, AA, LI, SE)) {
     llvm_unreachable("failed to lower to pssa");
     return PreservedAnalyses::all();
   }
