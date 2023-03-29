@@ -303,6 +303,8 @@ public:
 
   llvm::Loop *getOrigLoop(VLoop *VL) { return VLoopToLoopMap.lookup(VL); }
   llvm::ScalarEvolution *getSE() { return SE; }
+
+  unsigned getLoopDepth(VLoop *VL);
 };
 
 bool isConvertibleToPSSA(llvm::Function &, llvm::LoopInfo &, llvm::DominatorTree &);

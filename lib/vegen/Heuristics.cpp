@@ -11,16 +11,20 @@
 #include "pssa/Visitor.h"
 #include "vegen/Lower.h"
 #include "vegen/Pack.h"
+#include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h" // getUnderlyingObject
-#include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/IR/Instructions.h"
 
 using namespace llvm;
 namespace {
+
+cl::opt<bool> NoReductionPacking("no-reduction-packing",
+                                 cl::desc("Don't pack reductions horizontally"),
+                                 cl::init(false));
 
 // A class that enumerates a list of packs
 // that can produce a given vector
@@ -191,15 +195,9 @@ VLoop *getLoopFor(Instruction *I, PredicatedSSA &PSSA,
   return PSSA.getLoopForInst(I);
 }
 
-static unsigned getLoopDepth(PredicatedSSA &PSSA, VLoop *VL) {
-  if (!VL->isLoop())
-    return 0;
-  return PSSA.getOrigLoop(VL)->getLoopDepth();
-}
-
 static unsigned getLoopDepth(PredicatedSSA &PSSA, Instruction *I,
                              LooseInstructionTable &LIT) {
-  return getLoopDepth(PSSA, getLoopFor(I, PSSA, LIT));
+  return PSSA.getLoopDepth(getLoopFor(I, PSSA, LIT));
 }
 
 Pack *decomposeAndPack(PredicatedSSA &PSSA, ReductionInfo &RI,
@@ -951,6 +949,7 @@ static void findPackableReductions(
     for (unsigned VL : VectorLengths) {
       for (unsigned Begin = 0; Begin + VL <= N; Begin++) {
         auto Seed = ArrayRef<Value *>(Elements).slice(Begin, VL);
+
         if (auto *P = Heuristic.getSingleProducer(Seed)) {
           SmallVector<Value *> Args;
           for (auto X : llvm::enumerate(Elements))
@@ -1047,14 +1046,16 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
     }
   };
 
-  SmallVector<std::pair<Pack *, InstructionCost>> RdxSeeds;
-  findPackableReductions(RdxSeeds, PSSA, RI, LIT, Heuristic);
+  if (!NoReductionPacking) {
+    SmallVector<std::pair<Pack *, InstructionCost>> RdxSeeds;
+    findPackableReductions(RdxSeeds, PSSA, RI, LIT, Heuristic);
 
-  if (!RdxSeeds.empty()) {
-    llvm::stable_sort(RdxSeeds, [](const auto &A, const auto &B) {
-      return A.second > B.second;
-    });
-    VectorizeReduction(RdxSeeds.front().first);
+    if (!RdxSeeds.empty()) {
+      llvm::stable_sort(RdxSeeds, [](const auto &A, const auto &B) {
+        return A.second > B.second;
+      });
+      VectorizeReduction(RdxSeeds.front().first);
+    }
   }
 
   for (auto *P : Packs)

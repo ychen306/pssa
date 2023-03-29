@@ -860,7 +860,7 @@ const ControlCondition *findSpeculativeCond(Instruction *I,
   for (auto *UserI : Users) {
     // Easy case the defs and uses in the same loop
     auto *UserVL = PSSA.getLoopForInst(UserI);
-    if (UserVL == VL) {
+    if (UserVL == VL || PSSA.getLoopDepth(UserVL) == PSSA.getLoopDepth(VL)) {
       Conds.push_back(PSSA.getInstCond(UserI));
       continue;
     }

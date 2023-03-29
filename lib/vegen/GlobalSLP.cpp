@@ -88,8 +88,10 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   lowerReductions(RI, PSSA, LIT, DepChecker, false /*replace insts*/);
   LIT.destroy();
 
-  if (!lower(Packs, PSSA, DI, AA, LI))
+  if (!lower(Packs, PSSA, DI, AA, LI)) {
+    llvm_unreachable("failed to lower to pssa");
     return PreservedAnalyses::all();
+  }
 
   for (auto *P : Packs)
     delete P;

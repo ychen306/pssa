@@ -287,3 +287,9 @@ bool isConvertibleToPSSA(Function &F, LoopInfo &LI, DominatorTree &DT) {
 
   return true;
 }
+
+unsigned PredicatedSSA::getLoopDepth(VLoop *VL) {
+  if (!VL->isLoop())
+    return 0;
+  return getOrigLoop(VL)->getLoopDepth();
+}
