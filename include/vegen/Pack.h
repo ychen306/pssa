@@ -287,9 +287,10 @@ class ReductionPack : public Pack {
   // operands; With the last N done with vector reduction
   llvm::Reducer *Root;
   unsigned N;
+  unsigned VecLen; // <= N and power of two
 
 public:
-  ReductionPack(llvm::Reducer *Root, unsigned N);
+  ReductionPack(llvm::Reducer *Root, unsigned N, unsigned VecLen);
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   void print(llvm::raw_ostream &OS) const override;

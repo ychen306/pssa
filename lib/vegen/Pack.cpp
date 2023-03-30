@@ -630,18 +630,26 @@ Value *AndPack::emit(ArrayRef<Value *> ReifiedMasks, ArrayRef<Value *> Operands,
   return Insert.CreateBinOp(BinaryOperator::And, ReifiedMasks.front(), Operand);
 }
 
-ReductionPack::ReductionPack(Reducer *Root, unsigned N)
-    : Pack({Root}, PK_Reduction), Root(Root), N(N) {}
+ReductionPack::ReductionPack(Reducer *Root, unsigned N, unsigned VecLen)
+    : Pack({Root}, PK_Reduction), Root(Root), N(N), VecLen(VecLen) {}
 
 SmallVector<OperandPack, 2> ReductionPack::getOperands() const {
   unsigned NumElts = Root->getNumOperands();
   assert(N <= NumElts);
-  return {
-      OperandPack(Root->value_op_begin() + NumElts - N, Root->value_op_end())};
+  // Elements that we will reduce horizontally
+  SmallVector<Value *> VecElts(Root->value_op_begin() + NumElts - N,
+                               Root->value_op_end());
+  assert(N % VecLen == 0);
+  SmallVector<OperandPack, 2> Operands;
+  // Split up the elements into chunks of vector length
+  for (unsigned Begin = 0; Begin < N; Begin += VecLen)
+    Operands.emplace_back(VecElts.begin() + Begin,
+                          VecElts.begin() + Begin + VecLen);
+  return Operands;
 }
 
-static Value *emitVectorReduction(RecurKind Kind, Value *Src,
-                                  Inserter &Insert) {
+static Value *emitHorizontalReduction(RecurKind Kind, Value *Src,
+                                      Inserter &Insert) {
   switch (Kind) {
   case RecurKind::Add:
     return Insert.createAddReduce(Src);
@@ -674,8 +682,8 @@ static Value *emitVectorReduction(RecurKind Kind, Value *Src,
   }
 }
 
-static Value *emitScalarReduction(RecurKind Kind, ArrayRef<Value *> Args,
-                                  Inserter &Insert) {
+static Value *emitReduction(RecurKind Kind, ArrayRef<Value *> Args,
+                            Inserter &Insert) {
   Value *Acc = Args.front();
   for (auto *V : llvm::drop_begin(Args))
     Acc = emitBinaryReduction(Kind, Acc, V, Insert);
@@ -683,14 +691,18 @@ static Value *emitScalarReduction(RecurKind Kind, ArrayRef<Value *> Args,
 }
 
 Value *ReductionPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
-  assert(Operands.size() == 1 &&
-         "reduction pack expects exactly one vector argument");
+  assert(Operands.size() == N / VecLen &&
+         "Unexpected number of vector reduction operands");
   unsigned NumElts = Root->getNumOperands();
+  // Collect the scalar elements
   SmallVector<Value *> Args(Root->value_op_begin(),
                             Root->value_op_begin() + NumElts - N);
-  Args.push_back(
-      emitVectorReduction(Root->getKind(), Operands.front(), Insert));
-  return emitScalarReduction(Root->getKind(), Args, Insert);
+  auto RdxKind = Root->getKind();
+  // Add up all of the vector operands
+  auto *Vec = emitReduction(RdxKind, Operands, Insert);
+  // Horizontally reduce the vector before combine with the scalars
+  Args.push_back(emitHorizontalReduction(Root->getKind(), Vec, Insert));
+  return emitReduction(RdxKind, Args, Insert);
 }
 
 void ReductionPack::print(raw_ostream &OS) const {
@@ -707,7 +719,7 @@ void ReductionPack::print(raw_ostream &OS) const {
 Pack *ReductionPack::clone() const {
   assert(Insts.size() == 1 &&
          "reduction pack should produce exactly one value");
-  return new ReductionPack(Root, N);
+  return new ReductionPack(Root, N, VecLen);
 }
 
 GeneralPack *GeneralPack::tryPack(const InstructionDescriptor &InstDesc,

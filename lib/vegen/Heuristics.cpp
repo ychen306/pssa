@@ -915,7 +915,8 @@ static InstructionCost getReductionSaving(BottomUpHeuristic &H,
 static void findPackableReductions(
     SmallVectorImpl<std::pair<Pack *, InstructionCost>> &Seeds,
     PredicatedSSA &PSSA, ReductionInfo &RI, LooseInstructionTable &LIT,
-    BottomUpHeuristic &Heuristic) {
+    BottomUpHeuristic &Heuristic, TargetTransformInfo &TTI) {
+  unsigned MaxVecWidth = TTI.getLoadStoreVecRegBitWidth(0/*address space*/);
   class ReductionFinder : public PSSAVisitor<ReductionFinder> {
     ReductionInfo &RI;
     SetVector<Reduction *> &Rdxs;
@@ -939,27 +940,44 @@ static void findPackableReductions(
 
   for (auto *Rdx : Rdxs) {
     // Find out the elements that we are reducing over
+    // FIXME: rename this sub reduction
     SmallVector<Value *> Elements;
-    // for (auto &Elt : Rdx->Elements)
-    //   Elements.push_back(Elt.Val);
-    unsigned N = Rdx->size();
     RI.split(Rdx, Rdx->size(), Elements);
 
-    // Slide over the elements and check if they are profitable to pack
-    for (unsigned VL : VectorLengths) {
-      for (unsigned Begin = 0; Begin + VL <= N; Begin++) {
-        auto Seed = ArrayRef<Value *>(Elements).slice(Begin, VL);
+    // Mapping <inner loops> -> <sub reductions they are involved>
+    std::map<VLoop *, SmallVector<Value *>> LoopToReductionsMap;
+    for (auto *V : Elements) {
+      auto *SubRdx = cast<Reduction>(V);
+      assert(SubRdx->size() == 1);
+      auto &Elt = SubRdx->Elements.front();
+      // If the this is now a loop reduction, we will use the null loop
+      VLoop *VL = nullptr;
+      if (!Elt.Loops.empty())
+        VL = Elt.Loops.front();
+      LoopToReductionsMap[VL].push_back(V);
+    }
 
-        if (auto *P = Heuristic.getSingleProducer(Seed)) {
-          SmallVector<Value *> Args;
-          for (auto X : llvm::enumerate(Elements))
-            if (X.index() < Begin || X.index() >= Begin + VL)
-              Args.push_back(X.value());
-          Args.append(Seed.begin(), Seed.end());
-          auto *R = LIT.getOrCreateReducer(Rdx, Args);
-          auto Saving = getReductionSaving(Heuristic, Seed);
-          Seeds.emplace_back(new ReductionPack(R, Seed.size()), Saving);
-        }
+    unsigned MaxVecLen = MaxVecWidth / Rdx->getType()->getScalarSizeInBits();
+
+    for (auto SubRdxs : make_second_range(LoopToReductionsMap)) {
+      if (SubRdxs.size() < 2)
+        continue;
+
+      // Round the number of reduction elements to even and use as the seed
+      ArrayRef<Value *> Seed(SubRdxs.data(), SubRdxs.size() / 2 * 2);
+
+      if (auto *P = Heuristic.getSingleProducer(Seed)) {
+        SmallVector<Value *> Args;
+        for (auto X : llvm::enumerate(Elements))
+          if (!llvm::count(Seed, X.value()))
+            Args.push_back(X.value());
+        Args.append(Seed.begin(), Seed.end());
+        auto *R = LIT.getOrCreateReducer(Rdx, Args);
+        auto Saving = getReductionSaving(Heuristic, Seed);
+        unsigned VecLen = MaxVecLen;
+        if (Seed.size() < VecLen)
+          VecLen = Seed.size();
+        Seeds.emplace_back(new ReductionPack(R, Seed.size(), VecLen), Saving);
       }
     }
   }
@@ -1035,8 +1053,9 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
     // Pack the horizontal reduction
     Scratch.add(Seed);
     // Run bottom-up on the elements
-    assert(Seed->getOperands().size() == 1);
-    runBottomUp(Seed->getOperands()[0], Heuristic, PSSA, LIT, SE, Scratch);
+    for (auto &O : Seed->getOperands())
+      runBottomUp(O, Heuristic, PSSA, LIT, SE, Scratch);
+
     auto NewCost = getTotalCost(PSSA, Scratch, RI, LIT, TTI);
     // FIXME: need to check for dep cycle
     errs() << "Prev cost: " << PrevCost << ", new cost: " << NewCost << '\n';
@@ -1048,7 +1067,7 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
 
   if (!NoReductionPacking) {
     SmallVector<std::pair<Pack *, InstructionCost>> RdxSeeds;
-    findPackableReductions(RdxSeeds, PSSA, RI, LIT, Heuristic);
+    findPackableReductions(RdxSeeds, PSSA, RI, LIT, Heuristic, TTI);
 
     if (!RdxSeeds.empty()) {
       llvm::stable_sort(RdxSeeds, [](const auto &A, const auto &B) {

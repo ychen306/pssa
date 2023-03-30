@@ -4,11 +4,11 @@
 #include "pssa/Inserter.h"
 #include "pssa/PSSA.h"
 #include "pssa/Visitor.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/ADT/SetVector.h"
 
 using namespace llvm;
 using namespace PatternMatch;
@@ -269,8 +269,8 @@ void ReductionInfo::processLoop(VLoop *VL) {
       // Strengthen the reduction condition based on the phi
       // but skip if the condition happens to be the condition of the outermost
       // loop that we are reducing over (in which case it's redundant)
-      if (!IsUndef &&
-          (Elt.Loops.empty() || Elt.Loops.back()->getLoopCond() != C)) {
+      if (!IsUndef && (Elt.Loops.empty() ||
+                       !isImplied(C, Elt.Loops.back()->getLoopCond()))) {
         // FIXME: it's possible that this creates cyclic control dependences
         // maybe only do this transformation if one of C and Elt.C implies the
         // other
