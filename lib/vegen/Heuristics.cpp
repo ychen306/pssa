@@ -713,80 +713,6 @@ static InstructionCost getTotalCost(PredicatedSSA &PSSA, const PackSet &Packs,
   return Cost;
 }
 
-// FIXME: also pack stuff required by masking
-static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
-                        PredicatedSSA &PSSA, LooseInstructionTable &LIT,
-                        ScalarEvolution &SE,
-
-                        PackSet &Packs) {
-  auto IsPacked = [&Packs](Value *V) { return Packs.isPacked(V); };
-
-  DenseSet<OperandPack, VectorHashInfo<OperandPack>> Visited;
-  SmallVector<OperandPack> Worklist{Root};
-
-  using LoopBundle = SmallVector<VLoop *, 8>;
-
-  DenseSet<VectorMask, VectorHashInfo<VectorMask>> VisitedMasks;
-  // Add mask operands to Worklist
-  std::function<void(const VectorMask &)> ProcessMaskOperands =
-      [&](const VectorMask &Mask) {
-        // Ignore all true mask
-        if (!Mask.front() && is_splat(Mask))
-          return;
-        if (!VisitedMasks.insert(Mask).second)
-          return;
-        if (all_of(Mask, [](auto *C) { return C && isa<ConditionAnd>(C); })) {
-          Worklist.emplace_back(map_range(
-              Mask, [](auto *C) { return cast<ConditionAnd>(C)->Cond; }));
-          VectorMask Parents(map_range(
-              Mask, [](auto *C) { return cast<ConditionAnd>(C)->Parent; }));
-          ProcessMaskOperands(Parents);
-        }
-      };
-
-  DenseSet<LoopBundle, VectorHashInfo<LoopBundle>> VisitedLoopBundles;
-  // Pack divergent control conditions from disjoint loops
-  std::function<void(const LoopBundle &)> ProcessLoopBundle = [&](auto &Loops) {
-    // Don't need to do anything when packing instructions from the same loop
-    if (is_splat(Loops))
-      return;
-    if (!VisitedLoopBundles.insert(Loops).second)
-      return;
-    LoopBundle Parents;
-    for (auto *VL : Loops)
-      Parents.push_back(VL->getParent());
-    auto *L0 = PSSA.getOrigLoop(Loops.front());
-    if (any_of(Loops, [&](auto *VL) {
-          return !haveIdenticalTripCounts(L0, PSSA.getOrigLoop(VL), SE);
-        })) {
-      ProcessMaskOperands(VectorMask(
-          map_range(Loops, [](auto *VL) { return VL->getLoopCond(); })));
-      ProcessMaskOperands(VectorMask(
-          map_range(Loops, [](auto *VL) { return VL->getBackEdgeCond(); })));
-    }
-    ProcessLoopBundle(Parents);
-  };
-
-  while (!Worklist.empty()) {
-    auto Values = Worklist.pop_back_val();
-    if (any_of(Values, IsPacked) || !Visited.insert(Values).second)
-      continue;
-
-    for (auto *P : Heuristic.getProducer(Values)) {
-      if (!P)
-        continue;
-      Packs.add(P);
-      Worklist.append(P->getOperands());
-      for (auto &M : P->masks())
-        ProcessMaskOperands(M);
-      LoopBundle Loops;
-      for (auto *I : P->values())
-        Loops.push_back(getLoopFor(I, PSSA, LIT));
-      ProcessLoopBundle(Loops);
-    }
-  }
-}
-
 static bool haveSameParent(ArrayRef<VLoop *> Loops) {
   if (Loops.empty())
     return true;
@@ -844,6 +770,88 @@ static bool isIndependent(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
     if (ItemSet.count(Dep))
       return false;
   return true;
+}
+
+// FIXME: also pack stuff required by masking
+static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
+                        PredicatedSSA &PSSA, LooseInstructionTable &LIT,
+                        ScalarEvolution &SE, DependenceChecker &DepChecker,
+                        PackSet &Packs) {
+  auto IsPacked = [&Packs](Value *V) { return Packs.isPacked(V); };
+
+  DenseSet<OperandPack, VectorHashInfo<OperandPack>> Visited;
+  SmallVector<OperandPack> Worklist{Root};
+
+  using LoopBundle = SmallVector<VLoop *, 8>;
+
+  DenseSet<VectorMask, VectorHashInfo<VectorMask>> VisitedMasks;
+  // Add mask operands to Worklist
+  std::function<void(const VectorMask &)> ProcessMaskOperands =
+      [&](const VectorMask &Mask) {
+        // Ignore all true mask
+        if (!Mask.front() && is_splat(Mask))
+          return;
+        if (!VisitedMasks.insert(Mask).second)
+          return;
+        if (all_of(Mask, [](auto *C) { return C && isa<ConditionAnd>(C); })) {
+          Worklist.emplace_back(map_range(
+              Mask, [](auto *C) { return cast<ConditionAnd>(C)->Cond; }));
+          VectorMask Parents(map_range(
+              Mask, [](auto *C) { return cast<ConditionAnd>(C)->Parent; }));
+          ProcessMaskOperands(Parents);
+        }
+      };
+
+  DenseSet<LoopBundle, VectorHashInfo<LoopBundle>> VisitedLoopBundles;
+  // Pack divergent control conditions from disjoint loops
+  std::function<void(const LoopBundle &)> ProcessLoopBundle = [&](auto &Loops) {
+    // Don't need to do anything when packing instructions from the same loop
+    if (is_splat(Loops))
+      return;
+    if (!VisitedLoopBundles.insert(Loops).second)
+      return;
+    LoopBundle Parents;
+    for (auto *VL : Loops)
+      Parents.push_back(VL->getParent());
+    auto *L0 = PSSA.getOrigLoop(Loops.front());
+    if (any_of(Loops, [&](auto *VL) {
+          return !haveIdenticalTripCounts(L0, PSSA.getOrigLoop(VL), SE);
+        })) {
+      ProcessMaskOperands(VectorMask(
+          map_range(Loops, [](auto *VL) { return VL->getLoopCond(); })));
+      ProcessMaskOperands(VectorMask(
+          map_range(Loops, [](auto *VL) { return VL->getBackEdgeCond(); })));
+    }
+    ProcessLoopBundle(Parents);
+  };
+
+  while (!Worklist.empty()) {
+    auto Values = Worklist.pop_back_val();
+    if (any_of(Values, IsPacked) || !Visited.insert(Values).second)
+      continue;
+
+    for (auto *P : Heuristic.getProducer(Values)) {
+      if (!P)
+        continue;
+
+      // Check the independence of all packed, non-loose insts
+      SmallVector<Instruction *> Insts;
+      for (auto *I : P->values())
+        if (!LIT.isLoose(I))
+          Insts.push_back(I);
+      if (!Insts.empty() && !isIndependent(Insts, PSSA, DepChecker))
+        continue;
+
+      Packs.add(P);
+      Worklist.append(P->getOperands());
+      for (auto &M : P->masks())
+        ProcessMaskOperands(M);
+      LoopBundle Loops;
+      for (auto *I : P->values())
+        Loops.push_back(getLoopFor(I, PSSA, LIT));
+      ProcessLoopBundle(Loops);
+    }
+  }
 }
 
 using StoreGroupType = std::map<Instruction *, SmallVector<Instruction *, 8>>;
@@ -916,7 +924,7 @@ static void findPackableReductions(
     SmallVectorImpl<std::pair<Pack *, InstructionCost>> &Seeds,
     PredicatedSSA &PSSA, ReductionInfo &RI, LooseInstructionTable &LIT,
     BottomUpHeuristic &Heuristic, TargetTransformInfo &TTI) {
-  unsigned MaxVecWidth = TTI.getLoadStoreVecRegBitWidth(0/*address space*/);
+  unsigned MaxVecWidth = TTI.getLoadStoreVecRegBitWidth(0 /*address space*/);
   class ReductionFinder : public PSSAVisitor<ReductionFinder> {
     ReductionInfo &RI;
     SetVector<Reduction *> &Rdxs;
@@ -1019,6 +1027,7 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
         return;
     }
 
+    // Make sure that the stores are independent
     if (!isIndependent(Stores, PSSA, DepChecker))
       return;
 
@@ -1030,7 +1039,8 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
     PackSet Scratch = Packs;
     Scratch.add(StoreP);
     auto Operands = StoreP->getOperands();
-    runBottomUp(Operands.front(), Heuristic, PSSA, LIT, SE, Scratch);
+    runBottomUp(Operands.front(), Heuristic, PSSA, LIT, SE, DepChecker,
+                Scratch);
     auto NewCost = getTotalCost(PSSA, Scratch, RI, LIT, TTI);
     // FIXME: need to check for dep cycle
     errs() << "Prev cost: " << PrevCost << ", new cost: " << NewCost << '\n';
@@ -1054,7 +1064,7 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
     Scratch.add(Seed);
     // Run bottom-up on the elements
     for (auto &O : Seed->getOperands())
-      runBottomUp(O, Heuristic, PSSA, LIT, SE, Scratch);
+      runBottomUp(O, Heuristic, PSSA, LIT, SE, DepChecker, Scratch);
 
     auto NewCost = getTotalCost(PSSA, Scratch, RI, LIT, TTI);
     // FIXME: need to check for dep cycle

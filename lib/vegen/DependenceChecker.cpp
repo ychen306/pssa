@@ -352,9 +352,8 @@ void DependencesFinder::visit(Item It, bool AddDep) {
       if (!mayReadOrWriteMemory(*I))
         continue;
       for (auto &It2 : Coupled)
-        if (VL->comesBefore(*I, It2) && DepChecker.depends(*I, It2)) {
+        if (VL->comesBefore(*I, It2) && DepChecker.depends(*I, It2))
           visit(*I, true);
-        }
     }
   }
 
