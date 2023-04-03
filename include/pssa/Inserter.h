@@ -40,6 +40,8 @@ public:
                                llvm::Value *IfTrue, llvm::Value *IfFalse) const;
   llvm::Value *createMaskedStore(llvm::Value *Val, llvm::Value *Ptr,
                                  llvm::Align, llvm::Value *Mask) const;
+  llvm::Value *createMaskedLoad(llvm::Type *Ty, llvm::Value *Ptr, llvm::Align,
+                                llvm::Value *Mask) const;
   llvm::Value *createMaskedGather(llvm::Type *Ty, llvm::Value *Ptrs,
                                   llvm::Align, llvm::Value *Mask) const;
   llvm::Value *createVectorSplat(unsigned NumElems, llvm::Value *V) const;

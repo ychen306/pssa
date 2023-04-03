@@ -99,6 +99,19 @@ Value *Inserter::createMaskedGather(Type *Ty, Value *Ptrs, Align Alignment,
                                OverloadedTypes);
 }
 
+// Copied from llvm::IRBuilderBase::CreateMaskedLoad
+Value *Inserter::createMaskedLoad(Type *Ty, Value *Ptr, Align Alignment,
+                                  Value *Mask) const {
+  auto *PtrTy = cast<PointerType>(Ptr->getType());
+  assert(Ty->isVectorTy() && "Type should be vector");
+  assert(PtrTy->isOpaqueOrPointeeTypeMatches(Ty) && "Wrong element type");
+  assert(Mask && "Mask should not be all-ones (null)");
+  Type *OverloadedTypes[] = {Ty, PtrTy};
+  Value *Ops[] = {Ptr, getInt32(Alignment.value()), Mask, UndefValue::get(Ty)};
+  Module *M = VL->getPSSA()->getFunction()->getParent();
+  return createMaskedIntrinsic(M, Intrinsic::masked_load, Ops, OverloadedTypes);
+}
+
 Value *Inserter::CreateInsertElement(Value *Vec, Value *Elt, Value *Idx) const {
   if (auto *V = Folder.FoldInsertElement(Vec, Elt, Idx))
     return V;

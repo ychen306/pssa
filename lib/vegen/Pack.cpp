@@ -251,18 +251,26 @@ LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
       return nullptr;
   }
 
-  if (!isControlFlowEquivalent(Insts, PSSA))
-    return nullptr;
-
   SmallVector<Instruction *, 8> SortedLoads;
   if (!sortByPointers(Insts, Ptrs, SortedLoads, DL, SE, LI))
     return nullptr;
 
-  return new LoadPack(SortedLoads);
+  return new LoadPack(SortedLoads, PSSA);
+}
+
+SmallVector<VectorMask, 2> LoadPack::masks() const {
+  VectorMask Conds(
+      map_range(Insts, [this](auto *I) { return PSSA.getInstCond(I); }));
+  auto *C = Conds.front();
+  if (all_of(drop_begin(Conds),
+             [&](auto *C2) { return PSSA.isEquivalent(C, C2); }))
+    return {};
+  return {Conds};
 }
 
 Value *LoadPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
-  assert(Operands.size() == 0);
+  bool Masking = Operands.size() == 1;
+  assert(Masking || Operands.size() == 0);
 
   auto *Load = cast<LoadInst>(Insts.front());
   auto *VecTy = FixedVectorType::get(Load->getType(), Insts.size());
@@ -272,8 +280,11 @@ Value *LoadPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
     Ptr = Insert.make<BitCastInst>(
         Ptr, PointerType::get(VecTy, Load->getPointerAddressSpace()));
   }
-  return Insert.make<LoadInst>(VecTy, Ptr, Load->getName() + ".vec",
-                               false /*is volatile*/, Load->getAlign());
+  if (!Masking)
+    return Insert.make<LoadInst>(VecTy, Ptr, Load->getName() + ".vec",
+                                 false /*is volatile*/, Load->getAlign());
+  return Insert.createMaskedLoad(VecTy, Ptr, Load->getAlign(),
+                                 Operands.front());
 }
 
 StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,

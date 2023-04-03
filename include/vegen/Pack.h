@@ -136,16 +136,19 @@ public:
 };
 
 class LoadPack : public Pack {
-  LoadPack(llvm::ArrayRef<llvm::Instruction *> Insts) : Pack(Insts, PK_Load) {}
+  PredicatedSSA &PSSA;
+  LoadPack(llvm::ArrayRef<llvm::Instruction *> Insts, PredicatedSSA &PSSA)
+    : Pack(Insts, PK_Load), PSSA(PSSA) {}
 
 public:
   static LoadPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                            const llvm::DataLayout &, llvm::ScalarEvolution &,
                            llvm::LoopInfo &, PredicatedSSA &);
   llvm::SmallVector<OperandPack, 2> getOperands() const override { return {}; }
+  llvm::SmallVector<VectorMask, 2> masks() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_Load; }
-  Pack *clone() const override { return new LoadPack(Insts); }
+  Pack *clone() const override { return new LoadPack(Insts, PSSA); }
 };
 
 class StorePack : public Pack {
