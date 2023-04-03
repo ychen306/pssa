@@ -773,14 +773,14 @@ static bool isIndependent(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
 }
 
 // FIXME: also pack stuff required by masking
-static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
+static void runBottomUp(Pack *P, BottomUpHeuristic &Heuristic,
                         PredicatedSSA &PSSA, LooseInstructionTable &LIT,
                         ScalarEvolution &SE, DependenceChecker &DepChecker,
                         PackSet &Packs) {
   auto IsPacked = [&Packs](Value *V) { return Packs.isPacked(V); };
 
   DenseSet<OperandPack, VectorHashInfo<OperandPack>> Visited;
-  SmallVector<OperandPack> Worklist{Root};
+  SmallVector<OperandPack> Worklist;
 
   using LoopBundle = SmallVector<VLoop *, 8>;
 
@@ -825,32 +825,35 @@ static void runBottomUp(OperandPack Root, BottomUpHeuristic &Heuristic,
     ProcessLoopBundle(Parents);
   };
 
+  auto ProcessNewPack = [&](Pack *P) {
+    if (!P)
+      return;
+    // Check the independence of all packed, non-loose insts
+    SmallVector<Instruction *> Insts;
+    for (auto *I : P->values())
+      if (!LIT.isLoose(I))
+        Insts.push_back(I);
+    if (!Insts.empty() && !isIndependent(Insts, PSSA, DepChecker))
+      return;
+
+    Packs.add(P);
+    Worklist.append(P->getOperands());
+    for (auto &M : P->masks())
+      ProcessMaskOperands(M);
+    LoopBundle Loops;
+    for (auto *I : P->values())
+      Loops.push_back(getLoopFor(I, PSSA, LIT));
+    ProcessLoopBundle(Loops);
+  };
+
+  ProcessNewPack(P);
+
   while (!Worklist.empty()) {
     auto Values = Worklist.pop_back_val();
     if (any_of(Values, IsPacked) || !Visited.insert(Values).second)
       continue;
 
-    for (auto *P : Heuristic.getProducer(Values)) {
-      if (!P)
-        continue;
-
-      // Check the independence of all packed, non-loose insts
-      SmallVector<Instruction *> Insts;
-      for (auto *I : P->values())
-        if (!LIT.isLoose(I))
-          Insts.push_back(I);
-      if (!Insts.empty() && !isIndependent(Insts, PSSA, DepChecker))
-        continue;
-
-      Packs.add(P);
-      Worklist.append(P->getOperands());
-      for (auto &M : P->masks())
-        ProcessMaskOperands(M);
-      LoopBundle Loops;
-      for (auto *I : P->values())
-        Loops.push_back(getLoopFor(I, PSSA, LIT));
-      ProcessLoopBundle(Loops);
-    }
+    llvm::for_each(Heuristic.getProducer(Values), ProcessNewPack);
   }
 }
 
@@ -1027,19 +1030,13 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
         return;
     }
 
-    // Make sure that the stores are independent
-    if (!isIndependent(Stores, PSSA, DepChecker))
-      return;
-
     auto *StoreP = StorePack::tryPack(SortedStores, DL, SE, LI, PSSA);
     if (!StoreP)
       return;
 
     errs() << "Found seed store pack: " << *StoreP << '\n';
     PackSet Scratch = Packs;
-    Scratch.add(StoreP);
-    auto Operands = StoreP->getOperands();
-    runBottomUp(Operands.front(), Heuristic, PSSA, LIT, SE, DepChecker,
+    runBottomUp(StoreP, Heuristic, PSSA, LIT, SE, DepChecker,
                 Scratch);
     auto NewCost = getTotalCost(PSSA, Scratch, RI, LIT, TTI);
     // FIXME: need to check for dep cycle
@@ -1061,10 +1058,7 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
     assert(isa<ReductionPack>(Seed));
 
     // Pack the horizontal reduction
-    Scratch.add(Seed);
-    // Run bottom-up on the elements
-    for (auto &O : Seed->getOperands())
-      runBottomUp(O, Heuristic, PSSA, LIT, SE, DepChecker, Scratch);
+    runBottomUp(Seed, Heuristic, PSSA, LIT, SE, DepChecker, Scratch);
 
     auto NewCost = getTotalCost(PSSA, Scratch, RI, LIT, TTI);
     // FIXME: need to check for dep cycle
