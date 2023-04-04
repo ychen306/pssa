@@ -1,80 +1,81 @@
-; RUN: %opt -passes=test-vector-codegen,verify -p needle.020,needle12.023 -p i.019,i17.022 -p cmp218,cmp1921 -p idxprom,idxprom22 -p arrayidx,arrayidx23 -p i,i24 -p cmp5,cmp24 -p inc,inc28 -p cmp2,cmp19 -p inc7,inc33 -p cmp,cmp14 -p idx.2,idx.5 -p storeOf:idx.2,storeOf:idx.5 %s -S | FileCheck %s
-
-; CHECK:  entry:
-; CHECK-NEXT:    br label %[[HEADER:.*]]
-; CHECK:       [[HEADER]]:
-; CHECK-DAG:    [[CMP24_GUARD_VEC_MEM_0:%.*]] = phi <2 x i1> [ undef, [[ENTRY:%.*]] ], [ [[CMP24_GUARD_VEC_MEM_1:%.*]], %[[LATCH:.*]] ]
-; CHECK-DAG:    [[I17_022_GUARD_VEC_MEM_0:%.*]] = phi <2 x i32> [ undef, [[ENTRY]] ], [ [[I17_022_GUARD_VEC_MEM_1:%.*]], %[[LATCH]] ]
-; CHECK-DAG:    [[NEEDLE12_023_MU_VEC:%.*]] = phi <2 x i32> [ <i32 0, i32 42>, [[ENTRY]] ], [ [[INC7_VEC:%.*]], %[[LATCH]] ]
-; CHECK-DAG:    [[ACTIVE_MU_VEC:%.*]] = phi <2 x i1> [ <i1 true, i1 true>, [[ENTRY]] ], [ [[TMP23:%.*]], %[[LATCH]] ]
-; CHECK-DAG:    [[CMP218_GUARD_MU_VEC:%.*]] = phi <2 x i1> [ undef, [[ENTRY]] ], [ [[CMP1921_GUARD_VEC:%.*]], %[[LATCH]] ]
-; CHECK-NEXT:    [[TMP0:%.*]] = insertelement <2 x i32> undef, i32 [[N:%.*]], i64 0
-; CHECK-NEXT:    [[TMP1:%.*]] = insertelement <2 x i32> [[TMP0]], i32 [[N]], i64 1
-; CHECK-NEXT:    [[CMP218_VEC:%.*]] = icmp sgt <2 x i32> [[TMP1]], zeroinitializer
-; CHECK-NEXT:    [[CMP1921_GUARD_VEC]] = select <2 x i1> [[ACTIVE_MU_VEC]], <2 x i1> [[CMP218_VEC]], <2 x i1> [[CMP218_GUARD_MU_VEC]]
-; CHECK-NEXT:    [[TMP2:%.*]] = and <2 x i1> [[CMP218_VEC]], [[ACTIVE_MU_VEC]]
-; CHECK-NEXT:    [[TMP3:%.*]] = call i1 @llvm.vector.reduce.or.v2i1(<2 x i1> [[TMP2]])
-; CHECK-NEXT:    br i1 [[TMP3]], label %[[TMP9:.*]], label %[[TMP10:.*]]
-; CHECK:       [[LATCH]]:
-; CHECK-NEXT:    br i1 [[TMP24:%.*]], label %[[HEADER]], label %[[EXIT:.*]]
-; CHECK:       [[EXIT]]:
-; CHECK-NEXT:    [[TMP4:%.*]] = and <2 x i1> [[CMP1921_GUARD_VEC]], [[CMP24_GUARD_VEC_MEM_1]]
-; CHECK-NEXT:    [[TMP5:%.*]] = xor <2 x i1> [[CMP1921_GUARD_VEC]], <i1 true, i1 true>
-; CHECK-NEXT:    [[TMP6:%.*]] = xor <2 x i1> [[CMP24_GUARD_VEC_MEM_1]], <i1 true, i1 true>
-; CHECK-NEXT:    [[TMP7:%.*]] = and <2 x i1> [[CMP1921_GUARD_VEC]], [[TMP6]]
-; CHECK-NEXT:    [[TMP8:%.*]] = or <2 x i1> [[TMP5]], [[TMP7]]
-; CHECK-NEXT:    [[IDX_5_VEC:%.*]] = select <2 x i1> [[TMP4]], <2 x i32> [[I17_022_GUARD_VEC_MEM_1]], <2 x i32> <i32 -1, i32 -1>
-; CHECK-NEXT:    [[ARRAYIDX37:%.*]] = getelementptr inbounds i32, ptr [[INDICES:%.*]], i64 1
-; CHECK-NEXT:    store <2 x i32> [[IDX_5_VEC]], ptr [[INDICES]], align 4
-; CHECK-NEXT:    ret void
-; CHECK:       [[TMP9]]:
-; CHECK-NEXT:    br label %[[HEADER1:.*]]
-; CHECK:       [[TMP10]]:
-; CHECK-NEXT:    br label %[[TMP17:.*]]
-; CHECK:       [[HEADER1]]:
-; CHECK-DAG:    [[I17_022_MU_VEC:%.*]] = phi <2 x i32> [ zeroinitializer, %[[TMP9]] ], [ [[INC_VEC:%.*]], %[[LATCH2:.*]] ]
-; CHECK-DAG:    [[I_019_GUARD_MU_VEC:%.*]] = phi <2 x i32> [ undef, %[[TMP9]] ], [ [[I17_022_GUARD_VEC:%.*]], %[[LATCH2]] ]
-; CHECK-DAG:    [[CMP24_GUARD_MU_VEC:%.*]] = phi <2 x i1> [ undef, %[[TMP9]] ], [ [[CMP24_GUARD_VEC:%.*]], %[[LATCH2]] ]
-; CHECK-DAG:    [[ACTIVE_MU_VEC5:%.*]] = phi <2 x i1> [ [[TMP2]], %[[TMP9]] ], [ [[TMP15:%.*]], %[[LATCH2]] ]
-; CHECK-NEXT:    [[IDXPROM_VEC:%.*]] = zext <2 x i32> [[I17_022_MU_VEC]] to <2 x i64>
-; CHECK-NEXT:    [[I17_022_GUARD_VEC]] = select <2 x i1> [[ACTIVE_MU_VEC5]], <2 x i32> [[I17_022_MU_VEC]], <2 x i32> [[I_019_GUARD_MU_VEC]]
-; CHECK-NEXT:    [[ARRAYIDX_VEC:%.*]] = getelementptr i32, ptr [[A:%.*]], <2 x i64> [[IDXPROM_VEC]]
-; CHECK-NEXT:    [[I_VEC:%.*]] = call <2 x i32> @llvm.masked.gather.v2i32.v2p0(<2 x ptr> [[ARRAYIDX_VEC]], i32 4, <2 x i1> [[ACTIVE_MU_VEC5]], <2 x i32> undef)
-; CHECK-NEXT:    [[CMP5_VEC:%.*]] = icmp eq <2 x i32> [[I_VEC]], [[NEEDLE12_023_MU_VEC]]
-; CHECK-NEXT:    [[CMP24_GUARD_VEC]] = select <2 x i1> [[ACTIVE_MU_VEC5]], <2 x i1> [[CMP5_VEC]], <2 x i1> [[CMP24_GUARD_MU_VEC]]
-; CHECK-NEXT:    [[INC_VEC]] = add <2 x i32> [[I17_022_MU_VEC]], <i32 1, i32 1>
-; CHECK-NEXT:    [[TMP11:%.*]] = insertelement <2 x i32> undef, i32 [[N]], i64 0
-; CHECK-NEXT:    [[TMP12:%.*]] = insertelement <2 x i32> [[TMP11]], i32 [[N]], i64 1
-; CHECK-NEXT:    [[CMP2_VEC:%.*]] = icmp slt <2 x i32> [[INC_VEC]], [[TMP12]]
-; CHECK-NEXT:    [[TMP13:%.*]] = xor <2 x i1> [[CMP5_VEC]], <i1 true, i1 true>
-; CHECK-NEXT:    [[TMP14:%.*]] = and <2 x i1> [[TMP13]], [[CMP2_VEC]]
-; CHECK-NEXT:    [[TMP15]] = and <2 x i1> [[TMP14]], [[ACTIVE_MU_VEC5]]
-; CHECK-NEXT:    [[TMP16:%.*]] = call i1 @llvm.vector.reduce.or.v2i1(<2 x i1> [[TMP15]])
-; CHECK-NEXT:    br label %[[LATCH2]]
-; CHECK:       [[LATCH2]]:
-; CHECK-NEXT:    br i1 [[TMP16]], label %[[HEADER1]], label %[[EXIT3:.*]]
-; CHECK:       [[EXIT3]]:
-; CHECK-NEXT:    br label %[[TMP17]]
-; CHECK:       [[TMP17]]:
-; CHECK-DAG:    [[CMP24_GUARD_VEC_MEM_1]] = phi <2 x i1> [ [[CMP24_GUARD_VEC]], %[[EXIT3]] ], [ [[CMP24_GUARD_VEC_MEM_0]], %[[TMP10]] ]
-; CHECK-DAG:    [[I17_022_GUARD_VEC_MEM_1]] = phi <2 x i32> [ [[I17_022_GUARD_VEC]], %[[EXIT3]] ], [ [[I17_022_GUARD_VEC_MEM_0]], %[[TMP10]] ]
-; CHECK-NEXT:    [[INC7_VEC]] = add <2 x i32> [[NEEDLE12_023_MU_VEC]], <i32 1, i32 1>
-; CHECK-NEXT:    [[CMP_VEC:%.*]] = icmp ult <2 x i32> [[NEEDLE12_023_MU_VEC]], <i32 9999, i32 9999>
-; CHECK-NEXT:    [[TMP18:%.*]] = xor <2 x i1> [[CMP218_VEC]], <i1 true, i1 true>
-; CHECK-NEXT:    [[TMP19:%.*]] = xor <2 x i1> [[CMP24_GUARD_VEC_MEM_1]], <i1 true, i1 true>
-; CHECK-NEXT:    [[TMP20:%.*]] = and <2 x i1> [[CMP218_VEC]], [[TMP19]]
-; CHECK-NEXT:    [[TMP21:%.*]] = or <2 x i1> [[TMP18]], [[TMP20]]
-; CHECK-NEXT:    [[TMP22:%.*]] = and <2 x i1> [[TMP21]], [[CMP_VEC]]
-; CHECK-NEXT:    [[TMP23]] = and <2 x i1> [[TMP22]], [[ACTIVE_MU_VEC]]
-; CHECK-NEXT:    [[TMP24]] = call i1 @llvm.vector.reduce.or.v2i1(<2 x i1> [[TMP23]])
-; CHECK-NEXT:    br label %[[LATCH]]
+; NOTE: Assertions have been autogenerated by utils/update_test_checks.py
+; RUN: %opt %s -S -passes=test-vector-codegen,verify -p needle.020,needle12.023 -p i.019,i17.022 -p cmp218,cmp1921 -p idxprom,idxprom22 -p arrayidx,arrayidx23 -p i,i24 -p cmp5,cmp24 -p inc,inc28 -p cmp2,cmp19 -p inc7,inc33 -p cmp,cmp14 -p idx.2,idx.5 -p storeOf:idx.2,storeOf:idx.5 | FileCheck %s
 
 target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"
 
 ; Function Attrs: nounwind ssp uwtable
 define void @find(i32 noundef %n, ptr noalias noundef %a, ptr noalias noundef %b, ptr noalias noundef %indices) #0 {
-
+; CHECK-LABEL: @find(
+; CHECK-NEXT:  entry:
+; CHECK-NEXT:    br label [[HEADER:%.*]]
+; CHECK:       header:
+; CHECK-DAG:    [[I17_022_GUARD_VEC_MEM_0:%.*]] = phi <2 x i32> [ undef, [[ENTRY:%.*]] ], [ [[I17_022_GUARD_VEC_MEM_1:%.*]], [[LATCH:%.*]] ]
+; CHECK-DAG:    [[CMP5_GUARD_VEC_MEM_0:%.*]] = phi <2 x i1> [ undef, [[ENTRY]] ], [ [[CMP5_GUARD_VEC_MEM_1:%.*]], [[LATCH]] ]
+; CHECK-DAG:    [[NEEDLE_020_MU_VEC:%.*]] = phi <2 x i32> [ <i32 0, i32 42>, [[ENTRY]] ], [ [[INC33_VEC:%.*]], [[LATCH]] ]
+; CHECK-DAG:    [[ACTIVE_MU_VEC:%.*]] = phi <2 x i1> [ <i1 true, i1 true>, [[ENTRY]] ], [ [[TMP23:%.*]], [[LATCH]] ]
+; CHECK-DAG:    [[CMP218_GUARD_MU_VEC:%.*]] = phi <2 x i1> [ undef, [[ENTRY]] ], [ [[CMP218_GUARD_VEC:%.*]], [[LATCH]] ]
+; CHECK-NEXT:    [[TMP0:%.*]] = insertelement <2 x i32> undef, i32 [[N:%.*]], i64 0
+; CHECK-NEXT:    [[TMP1:%.*]] = insertelement <2 x i32> [[TMP0]], i32 [[N]], i64 1
+; CHECK-NEXT:    [[CMP1921_VEC:%.*]] = icmp sgt <2 x i32> [[TMP1]], zeroinitializer
+; CHECK-NEXT:    [[CMP218_GUARD_VEC]] = select <2 x i1> [[ACTIVE_MU_VEC]], <2 x i1> [[CMP1921_VEC]], <2 x i1> [[CMP218_GUARD_MU_VEC]]
+; CHECK-NEXT:    [[TMP2:%.*]] = and <2 x i1> [[CMP1921_VEC]], [[ACTIVE_MU_VEC]]
+; CHECK-NEXT:    [[TMP3:%.*]] = call i1 @llvm.vector.reduce.or.v2i1(<2 x i1> [[TMP2]])
+; CHECK-NEXT:    br i1 [[TMP3]], label [[TMP9:%.*]], label [[TMP10:%.*]]
+; CHECK:       latch:
+; CHECK-NEXT:    br i1 [[TMP24:%.*]], label [[HEADER]], label [[EXIT:%.*]]
+; CHECK:       exit:
+; CHECK-NEXT:    [[TMP4:%.*]] = xor <2 x i1> [[CMP218_GUARD_VEC]], <i1 true, i1 true>
+; CHECK-NEXT:    [[TMP5:%.*]] = xor <2 x i1> [[CMP5_GUARD_VEC_MEM_1]], <i1 true, i1 true>
+; CHECK-NEXT:    [[TMP6:%.*]] = and <2 x i1> [[CMP218_GUARD_VEC]], [[TMP5]]
+; CHECK-NEXT:    [[TMP7:%.*]] = or <2 x i1> [[TMP4]], [[TMP6]]
+; CHECK-NEXT:    [[TMP8:%.*]] = and <2 x i1> [[CMP218_GUARD_VEC]], [[CMP5_GUARD_VEC_MEM_1]]
+; CHECK-NEXT:    [[IDX_5_VEC:%.*]] = select <2 x i1> [[TMP7]], <2 x i32> <i32 -1, i32 -1>, <2 x i32> [[I17_022_GUARD_VEC_MEM_1]]
+; CHECK-NEXT:    [[ARRAYIDX37:%.*]] = getelementptr inbounds i32, ptr [[INDICES:%.*]], i64 1
+; CHECK-NEXT:    store <2 x i32> [[IDX_5_VEC]], ptr [[INDICES]], align 4
+; CHECK-NEXT:    ret void
+; CHECK:       9:
+; CHECK-NEXT:    br label [[HEADER1:%.*]]
+; CHECK:       10:
+; CHECK-NEXT:    br label [[TMP17:%.*]]
+; CHECK:       header1:
+; CHECK-DAG:    [[I_019_GUARD_MU_VEC:%.*]] = phi <2 x i32> [ undef, [[TMP9]] ], [ [[I17_022_GUARD_VEC:%.*]], [[LATCH2:%.*]] ]
+; CHECK-DAG:    [[CMP5_GUARD_MU_VEC:%.*]] = phi <2 x i1> [ undef, [[TMP9]] ], [ [[CMP5_GUARD_VEC:%.*]], [[LATCH2]] ]
+; CHECK-DAG:    [[ACTIVE_MU_VEC5:%.*]] = phi <2 x i1> [ [[TMP2]], [[TMP9]] ], [ [[TMP15:%.*]], [[LATCH2]] ]
+; CHECK-DAG:    [[I_019_MU_VEC:%.*]] = phi <2 x i32> [ zeroinitializer, [[TMP9]] ], [ [[INC28_VEC:%.*]], [[LATCH2]] ]
+; CHECK-NEXT:    [[IDXPROM22_VEC:%.*]] = zext <2 x i32> [[I_019_MU_VEC]] to <2 x i64>
+; CHECK-NEXT:    [[I17_022_GUARD_VEC]] = select <2 x i1> [[ACTIVE_MU_VEC5]], <2 x i32> [[I_019_MU_VEC]], <2 x i32> [[I_019_GUARD_MU_VEC]]
+; CHECK-NEXT:    [[ARRAYIDX23_VEC:%.*]] = getelementptr i32, ptr [[A:%.*]], <2 x i64> [[IDXPROM22_VEC]]
+; CHECK-NEXT:    [[I24_VEC:%.*]] = call <2 x i32> @llvm.masked.gather.v2i32.v2p0(<2 x ptr> [[ARRAYIDX23_VEC]], i32 4, <2 x i1> [[ACTIVE_MU_VEC5]], <2 x i32> undef)
+; CHECK-NEXT:    [[CMP24_VEC:%.*]] = icmp eq <2 x i32> [[I24_VEC]], [[NEEDLE_020_MU_VEC]]
+; CHECK-NEXT:    [[CMP5_GUARD_VEC]] = select <2 x i1> [[ACTIVE_MU_VEC5]], <2 x i1> [[CMP24_VEC]], <2 x i1> [[CMP5_GUARD_MU_VEC]]
+; CHECK-NEXT:    [[INC28_VEC]] = add <2 x i32> [[I_019_MU_VEC]], <i32 1, i32 1>
+; CHECK-NEXT:    [[TMP11:%.*]] = insertelement <2 x i32> undef, i32 [[N]], i64 0
+; CHECK-NEXT:    [[TMP12:%.*]] = insertelement <2 x i32> [[TMP11]], i32 [[N]], i64 1
+; CHECK-NEXT:    [[CMP19_VEC:%.*]] = icmp slt <2 x i32> [[INC28_VEC]], [[TMP12]]
+; CHECK-NEXT:    [[TMP13:%.*]] = xor <2 x i1> [[CMP24_VEC]], <i1 true, i1 true>
+; CHECK-NEXT:    [[TMP14:%.*]] = and <2 x i1> [[TMP13]], [[CMP19_VEC]]
+; CHECK-NEXT:    [[TMP15]] = and <2 x i1> [[TMP14]], [[ACTIVE_MU_VEC5]]
+; CHECK-NEXT:    [[TMP16:%.*]] = call i1 @llvm.vector.reduce.or.v2i1(<2 x i1> [[TMP15]])
+; CHECK-NEXT:    br label [[LATCH2]]
+; CHECK:       latch2:
+; CHECK-NEXT:    br i1 [[TMP16]], label [[HEADER1]], label [[EXIT3:%.*]]
+; CHECK:       exit3:
+; CHECK-NEXT:    br label [[TMP17]]
+; CHECK:       17:
+; CHECK-DAG:    [[I17_022_GUARD_VEC_MEM_1]] = phi <2 x i32> [ [[I17_022_GUARD_VEC]], [[EXIT3]] ], [ [[I17_022_GUARD_VEC_MEM_0]], [[TMP10]] ]
+; CHECK-DAG:    [[CMP5_GUARD_VEC_MEM_1]] = phi <2 x i1> [ [[CMP5_GUARD_VEC]], [[EXIT3]] ], [ [[CMP5_GUARD_VEC_MEM_0]], [[TMP10]] ]
+; CHECK-NEXT:    [[INC33_VEC]] = add <2 x i32> [[NEEDLE_020_MU_VEC]], <i32 1, i32 1>
+; CHECK-NEXT:    [[CMP14_VEC:%.*]] = icmp ult <2 x i32> [[NEEDLE_020_MU_VEC]], <i32 9999, i32 9999>
+; CHECK-NEXT:    [[TMP18:%.*]] = xor <2 x i1> [[CMP1921_VEC]], <i1 true, i1 true>
+; CHECK-NEXT:    [[TMP19:%.*]] = xor <2 x i1> [[CMP5_GUARD_VEC_MEM_1]], <i1 true, i1 true>
+; CHECK-NEXT:    [[TMP20:%.*]] = and <2 x i1> [[CMP1921_VEC]], [[TMP19]]
+; CHECK-NEXT:    [[TMP21:%.*]] = or <2 x i1> [[TMP18]], [[TMP20]]
+; CHECK-NEXT:    [[TMP22:%.*]] = and <2 x i1> [[TMP21]], [[CMP14_VEC]]
+; CHECK-NEXT:    [[TMP23]] = and <2 x i1> [[TMP22]], [[ACTIVE_MU_VEC]]
+; CHECK-NEXT:    [[TMP24]] = call i1 @llvm.vector.reduce.or.v2i1(<2 x i1> [[TMP23]])
+; CHECK-NEXT:    br label [[LATCH]]
+;
 entry:
   br label %for.cond1.preheader
 

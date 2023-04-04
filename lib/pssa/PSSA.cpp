@@ -22,10 +22,10 @@ canonicalizeAndGetConditions(PHINode *PN, ControlDependenceAnalysis &CDA) {
     Incomings.push_back(Incoming{C, BB, V});
   }
   // Canonicalize the incoming values by their conditions
-  //llvm::sort(Incomings,
-  //           [](const Incoming &IncomingA, const Incoming &IncomingB) -> bool {
-  //             return IncomingA.C < IncomingB.C;
-  //           });
+  llvm::sort(Incomings,
+             [](const Incoming &IncomingA, const Incoming &IncomingB) -> bool {
+               return IncomingA.C > IncomingB.C;
+             });
   SmallVector<const ControlCondition *, 4> Conds;
   for (unsigned i = 0; i < Incomings.size(); i++) {
     PN->setIncomingValue(i, Incomings[i].V);

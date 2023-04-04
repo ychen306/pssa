@@ -1,6 +1,6 @@
 ; RUN: %opt -passes=print-reductions %s -o /dev/null | FileCheck %s
 
-; CHECK: Reduction for   %s.1.3 = phi i32 [ %add.3, %if.then.3 ], [ %s.1.2, %for.inc.2 ] is (add i1@(cmp1) (i32 42) i3@(cmp1.1) i5@(cmp1.2) i7@(cmp1.3))
+; CHECK: Reduction for %s.1.3 {{.*}} is (add i1@(cmp1) (i32 42) i3@(cmp1.1) i5@(cmp1.2) i7@(cmp1.3))
 
 target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"
