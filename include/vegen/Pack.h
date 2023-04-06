@@ -11,6 +11,7 @@ class Value;
 class raw_ostream;
 class DataLayout;
 class ScalarEvolution;
+class DominatorTree;
 class LoopInfo;
 class Reducer;
 } // namespace llvm
@@ -137,18 +138,24 @@ public:
 
 class LoadPack : public Pack {
   PredicatedSSA &PSSA;
-  LoadPack(llvm::ArrayRef<llvm::Instruction *> Insts, PredicatedSSA &PSSA)
-    : Pack(Insts, PK_Load), PSSA(PSSA) {}
+  bool IsDereferenceable;
+  LoadPack(llvm::ArrayRef<llvm::Instruction *> Insts, PredicatedSSA &PSSA,
+           bool IsDereferenceable)
+      : Pack(Insts, PK_Load), PSSA(PSSA), IsDereferenceable(IsDereferenceable) {
+  }
 
 public:
   static LoadPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
                            const llvm::DataLayout &, llvm::ScalarEvolution &,
-                           llvm::LoopInfo &, PredicatedSSA &);
+                           llvm::DominatorTree &, llvm::LoopInfo &,
+                           PredicatedSSA &);
   llvm::SmallVector<OperandPack, 2> getOperands() const override { return {}; }
   llvm::SmallVector<VectorMask, 2> masks() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_Load; }
-  Pack *clone() const override { return new LoadPack(Insts, PSSA); }
+  Pack *clone() const override {
+    return new LoadPack(Insts, PSSA, IsDereferenceable);
+  }
 };
 
 class StorePack : public Pack {

@@ -15,10 +15,10 @@ define void @vif() local_unnamed_addr #0 {
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[DOTVEC:%.*]] = load <4 x float>, ptr @b, align 16
 ; CHECK-NEXT:    [[CMP1_1_VEC:%.*]] = fcmp ogt <4 x float> [[DOTVEC]], zeroinitializer
-; CHECK-NEXT:    [[TMP0:%.*]] = call <4 x float> @llvm.masked.load.v4f32.p0(ptr @c, i32 16, <4 x i1> [[CMP1_1_VEC]], <4 x float> undef)
-; CHECK-NEXT:    [[MUL_1_VEC:%.*]] = fmul <4 x float> [[TMP0]], [[DOTVEC]]
-; CHECK-NEXT:    [[TMP1:%.*]] = call <4 x float> @llvm.masked.load.v4f32.p0(ptr @a, i32 16, <4 x i1> [[CMP1_1_VEC]], <4 x float> undef)
-; CHECK-NEXT:    [[ADD_1_VEC:%.*]] = fadd <4 x float> [[TMP1]], [[MUL_1_VEC]]
+; CHECK-NEXT:    [[DOTVEC1:%.*]] = load <4 x float>, ptr @c, align 16
+; CHECK-NEXT:    [[MUL_1_VEC:%.*]] = fmul <4 x float> [[DOTVEC1]], [[DOTVEC]]
+; CHECK-NEXT:    [[DOTVEC2:%.*]] = load <4 x float>, ptr @a, align 16
+; CHECK-NEXT:    [[ADD_1_VEC:%.*]] = fadd <4 x float> [[DOTVEC2]], [[MUL_1_VEC]]
 ; CHECK-NEXT:    call void @llvm.masked.store.v4f32.p0(<4 x float> [[ADD_1_VEC]], ptr @a, i32 16, <4 x i1> [[CMP1_1_VEC]])
 ; CHECK-NEXT:    ret void
 ;

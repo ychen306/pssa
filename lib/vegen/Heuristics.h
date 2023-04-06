@@ -20,13 +20,12 @@ class ReductionInfo;
 class Matcher;
 class InstructionDescriptor;
 
-std::vector<Pack *> packBottomUp(llvm::ArrayRef<InstructionDescriptor> InstPool,
-                                 PredicatedSSA &, ReductionInfo &,
-                                 LooseInstructionTable &, Matcher &,
-                                 const llvm::DataLayout &,
-                                 llvm::ScalarEvolution &, llvm::LoopInfo &,
-                                 llvm::AAResults &, llvm::DependenceInfo &,
-                                 llvm::TargetTransformInfo &);
+std::vector<Pack *>
+packBottomUp(llvm::ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &,
+             ReductionInfo &, LooseInstructionTable &, Matcher &,
+             const llvm::DataLayout &, llvm::ScalarEvolution &,
+             llvm::DominatorTree &, llvm::LoopInfo &, llvm::AAResults &,
+             llvm::DependenceInfo &, llvm::TargetTransformInfo &);
 
 // Decompose a list of reductions with reducers and pack those instructions
 Pack *decomposeAndPack(PredicatedSSA &PSSA, ReductionInfo &RI,

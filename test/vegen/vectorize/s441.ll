@@ -21,18 +21,18 @@ define void @s278() local_unnamed_addr #0 {
 ; CHECK-NEXT:    [[TMP0:%.*]] = xor <4 x i1> [[CMP1_1_VEC]], <i1 true, i1 true, i1 true, i1 true>
 ; CHECK-NEXT:    [[TMP1:%.*]] = xor <4 x i1> [[CMP10_1_VEC]], <i1 true, i1 true, i1 true, i1 true>
 ; CHECK-NEXT:    [[TMP2:%.*]] = and <4 x i1> [[TMP0]], [[TMP1]]
-; CHECK-NEXT:    [[TMP3:%.*]] = call <4 x float> @llvm.masked.load.v4f32.p0(ptr @c, i32 16, <4 x i1> [[TMP2]], <4 x float> undef)
-; CHECK-NEXT:    [[MUL25_1_VEC:%.*]] = fmul <4 x float> [[TMP3]], [[TMP3]]
-; CHECK-NEXT:    [[TMP4:%.*]] = and <4 x i1> [[TMP0]], [[CMP10_1_VEC]]
-; CHECK-NEXT:    [[TMP5:%.*]] = call <4 x float> @llvm.masked.load.v4f32.p0(ptr @b, i32 16, <4 x i1> [[TMP4]], <4 x float> undef)
-; CHECK-NEXT:    [[MUL16_1_VEC:%.*]] = fmul <4 x float> [[TMP5]], [[TMP5]]
-; CHECK-NEXT:    [[TMP6:%.*]] = call <4 x float> @llvm.masked.load.v4f32.p0(ptr @b, i32 16, <4 x i1> [[CMP1_1_VEC]], <4 x float> undef)
-; CHECK-NEXT:    [[TMP7:%.*]] = call <4 x float> @llvm.masked.load.v4f32.p0(ptr @c, i32 16, <4 x i1> [[CMP1_1_VEC]], <4 x float> undef)
-; CHECK-NEXT:    [[MUL_1_VEC:%.*]] = fmul <4 x float> [[TMP7]], [[TMP6]]
-; CHECK-NEXT:    [[TMP8:%.*]] = select <4 x i1> [[TMP2]], <4 x float> [[MUL25_1_VEC]], <4 x float> [[MUL_1_VEC]]
-; CHECK-NEXT:    [[MUL_1_SINK_VEC:%.*]] = select <4 x i1> [[TMP4]], <4 x float> [[MUL16_1_VEC]], <4 x float> [[TMP8]]
-; CHECK-NEXT:    [[DOTVEC1:%.*]] = load <4 x float>, ptr @a, align 16
-; CHECK-NEXT:    [[ADD_1_VEC:%.*]] = fadd <4 x float> [[DOTVEC1]], [[MUL_1_SINK_VEC]]
+; CHECK-NEXT:    [[DOTVEC1:%.*]] = load <4 x float>, ptr @c, align 16
+; CHECK-NEXT:    [[MUL25_1_VEC:%.*]] = fmul <4 x float> [[DOTVEC1]], [[DOTVEC1]]
+; CHECK-NEXT:    [[TMP3:%.*]] = and <4 x i1> [[TMP0]], [[CMP10_1_VEC]]
+; CHECK-NEXT:    [[DOTVEC2:%.*]] = load <4 x float>, ptr @b, align 16
+; CHECK-NEXT:    [[MUL16_1_VEC:%.*]] = fmul <4 x float> [[DOTVEC2]], [[DOTVEC2]]
+; CHECK-NEXT:    [[DOTVEC3:%.*]] = load <4 x float>, ptr @b, align 16
+; CHECK-NEXT:    [[DOTVEC4:%.*]] = load <4 x float>, ptr @c, align 16
+; CHECK-NEXT:    [[MUL_1_VEC:%.*]] = fmul <4 x float> [[DOTVEC4]], [[DOTVEC3]]
+; CHECK-NEXT:    [[TMP4:%.*]] = select <4 x i1> [[TMP2]], <4 x float> [[MUL25_1_VEC]], <4 x float> [[MUL_1_VEC]]
+; CHECK-NEXT:    [[MUL_1_SINK_VEC:%.*]] = select <4 x i1> [[TMP3]], <4 x float> [[MUL16_1_VEC]], <4 x float> [[TMP4]]
+; CHECK-NEXT:    [[DOTVEC5:%.*]] = load <4 x float>, ptr @a, align 16
+; CHECK-NEXT:    [[ADD_1_VEC:%.*]] = fadd <4 x float> [[DOTVEC5]], [[MUL_1_SINK_VEC]]
 ; CHECK-NEXT:    store <4 x float> [[ADD_1_VEC]], ptr @a, align 16
 ; CHECK-NEXT:    ret void
 ;

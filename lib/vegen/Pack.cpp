@@ -6,6 +6,10 @@
 #include "Reducer.h"
 #include "pssa/Inserter.h"
 #include "pssa/PSSA.h"
+#include "llvm/Analysis/Loads.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
@@ -240,22 +244,105 @@ static bool isControlFlowEquivalent(ArrayRef<Instruction *> Insts,
   });
 }
 
+// Copied from SCEV AA
+static Value *getBaseValue(const SCEV *S) {
+  if (const SCEVAddRecExpr *AR = dyn_cast<SCEVAddRecExpr>(S)) {
+    // In an addrec, assume that the base will be in the start, rather
+    // than the step.
+    return getBaseValue(AR->getStart());
+  } else if (const SCEVAddExpr *A = dyn_cast<SCEVAddExpr>(S)) {
+    // If there's a pointer operand, it'll be sorted at the end of the list.
+    const SCEV *Last = A->getOperand(A->getNumOperands() - 1);
+    if (Last->getType()->isPointerTy())
+      return getBaseValue(Last);
+  } else if (const SCEVUnknown *U = dyn_cast<SCEVUnknown>(S)) {
+    // This is a leaf node.
+    return U->getValue();
+  }
+  // No Identified object found.
+  return nullptr;
+}
+
+// Adapted from llvm::isDereferenceableAndAlignedInLoop
+bool isDereferenceableInLoop(LoadInst *LI, Loop *L, ScalarEvolution &SE,
+                             DominatorTree &DT) {
+  auto &DL = LI->getModule()->getDataLayout();
+  Value *Ptr = LI->getPointerOperand();
+
+  APInt EltSize(DL.getIndexTypeSizeInBits(Ptr->getType()),
+                DL.getTypeStoreSize(LI->getType()).getFixedSize());
+  const Align Alignment = LI->getAlign();
+
+  Instruction *HeaderFirstNonPHI = L->getHeader()->getFirstNonPHI();
+
+  // If given a uniform (i.e. non-varying) address, see if we can prove the
+  // access is safe within the loop w/o needing predication.
+  if (L->isLoopInvariant(Ptr))
+    return isDereferenceableAndAlignedPointer(Ptr, Alignment, EltSize, DL,
+                                              HeaderFirstNonPHI, &DT);
+
+  // Otherwise, check to see if we have a repeating access pattern where we can
+  // prove that all accesses are well aligned and dereferenceable.
+  auto *AddRec = dyn_cast<SCEVAddRecExpr>(SE.getSCEV(Ptr));
+  if (!AddRec || AddRec->getLoop() != L || !AddRec->isAffine())
+    return false;
+
+  auto *Step = dyn_cast<SCEVConstant>(AddRec->getStepRecurrence(SE));
+  if (!Step)
+    return false;
+
+  auto TC = SE.getSmallConstantMaxTripCount(L);
+  if (!TC)
+    return false;
+
+  APInt AccessSize = TC * EltSize;
+
+  auto *StartS = dyn_cast<SCEVUnknown>(AddRec->getStart());
+  Value *Base;
+  if (StartS) {
+    assert(SE.isLoopInvariant(StartS, L) && "implied by addrec definition");
+    Base = StartS->getValue();
+  } else {
+    Base = getBaseValue(AddRec);
+    auto *Offset = SE.getMinusSCEV(AddRec->getStart(), SE.getSCEV(Base));
+    auto *OffsetC = dyn_cast<SCEVConstant>(Offset);
+    if (!OffsetC)
+      return false;
+    AccessSize += OffsetC->getAPInt();
+  }
+
+  return isDereferenceableAndAlignedPointer(Base, Alignment, AccessSize, DL,
+                                            HeaderFirstNonPHI, &DT);
+}
+
+static bool isDereferenceable(LoadInst *LI, Loop *L, ScalarEvolution &SE,
+                              DominatorTree &DT, const DataLayout &DL) {
+  if (L) {
+    return isDereferenceableInLoop(LI, L, SE, DT);
+  }
+  return isDereferenceablePointer(LI->getPointerOperand(), LI->getType(), DL,
+                                  LI, &DT);
+}
+
 LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
-                            ScalarEvolution &SE, LoopInfo &LI,
-                            PredicatedSSA &PSSA) {
+                            ScalarEvolution &SE, DominatorTree &DT,
+                            LoopInfo &LI, PredicatedSSA &PSSA) {
   SmallVector<Value *, 8> Ptrs;
+  bool IsDereferenceable = true;
   for (auto *I : Insts) {
-    if (auto *LI = dyn_cast<LoadInst>(I))
-      Ptrs.push_back(LI->getPointerOperand());
-    else
+    auto *LI = dyn_cast<LoadInst>(I);
+    if (!LI)
       return nullptr;
+    auto *L = PSSA.getOrigLoop(PSSA.getLoopForInst(LI));
+    IsDereferenceable &= isDereferenceable(LI, L, SE, DT, DL);
+    Ptrs.push_back(LI->getPointerOperand());
   }
 
   SmallVector<Instruction *, 8> SortedLoads;
   if (!sortByPointers(Insts, Ptrs, SortedLoads, DL, SE, LI))
     return nullptr;
 
-  return new LoadPack(SortedLoads, PSSA);
+  return new LoadPack(SortedLoads, PSSA, IsDereferenceable);
 }
 
 SmallVector<VectorMask, 2> LoadPack::masks() const {
@@ -280,7 +367,7 @@ Value *LoadPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
     Ptr = Insert.make<BitCastInst>(
         Ptr, PointerType::get(VecTy, Load->getPointerAddressSpace()));
   }
-  if (!Masking)
+  if (!Masking || IsDereferenceable)
     return Insert.make<LoadInst>(VecTy, Ptr, Load->getName() + ".vec",
                                  false /*is volatile*/, Load->getAlign());
   return Insert.createMaskedLoad(VecTy, Ptr, Load->getAlign(),

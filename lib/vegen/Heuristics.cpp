@@ -36,6 +36,7 @@ class Packer {
   Matcher &TheMatcher;
   const llvm::DataLayout &DL;
   ScalarEvolution &SE;
+  DominatorTree &DT;
   llvm::LoopInfo &LI;
 
   // Get the reduction that I computes or null
@@ -49,9 +50,9 @@ public:
   Packer(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
          ReductionInfo &RI, LooseInstructionTable &LIT, Matcher &TheMatcher,
          const llvm::DataLayout &DL, llvm::ScalarEvolution &SE,
-         llvm::LoopInfo &LI)
+         DominatorTree &DT, llvm::LoopInfo &LI)
       : InstPool(InstPool), PSSA(PSSA), RI(RI), LIT(LIT),
-        TheMatcher(TheMatcher), DL(DL), SE(SE), LI(LI) {}
+        TheMatcher(TheMatcher), DL(DL), SE(SE), DT(DT), LI(LI) {}
   TinyPtrVector<Pack *> getProducers(llvm::ArrayRef<llvm::Value *>);
   // The values are all loads, try to split them up into several load packs
   SmallVector<Pack *> getLoadPacks(ArrayRef<llvm::Value *>);
@@ -126,9 +127,10 @@ public:
                     PredicatedSSA &PSSA, ReductionInfo &RI,
                     LooseInstructionTable &LIT, Matcher &TheMatcher,
                     const llvm::DataLayout &DL, llvm::ScalarEvolution &SE,
-                    llvm::LoopInfo &LI, TargetTransformInfo &TTI)
+                    llvm::DominatorTree &DT, llvm::LoopInfo &LI,
+                    TargetTransformInfo &TTI)
       : PSSA(PSSA), LIT(LIT),
-        Pkr(InstPool, PSSA, RI, LIT, TheMatcher, DL, SE, LI), TTI(TTI) {}
+        Pkr(InstPool, PSSA, RI, LIT, TheMatcher, DL, SE, DT, LI), TTI(TTI) {}
   TinyPtrVector<Pack *> getProducer(ArrayRef<Value *> Values) {
     return solve(Values).Packs;
   }
@@ -260,7 +262,7 @@ TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
     if (getLoopDepth(PSSA, I, LIT) != Depth)
       return {};
 
-  if (auto *P = LoadPack::tryPack(Insts, DL, SE, LI, PSSA)) {
+  if (auto *P = LoadPack::tryPack(Insts, DL, SE, DT, LI, PSSA)) {
     // Make sure when we pack divergent loads we can speculate the address
     auto *Ptr =
         dyn_cast<Instruction>(getLoadStorePointerOperand(P->values().front()));
@@ -357,7 +359,7 @@ SmallVector<Pack *> Packer::getLoadPacks(ArrayRef<Value *> Values) {
     SmallVector<Instruction *> Insts(EC.member_begin(I), EC.member_end());
     if (!llvm::isPowerOf2_32(Insts.size()))
       continue;
-    if (auto *P = LoadPack::tryPack(Insts, DL, SE, LI, PSSA))
+    if (auto *P = LoadPack::tryPack(Insts, DL, SE, DT, LI, PSSA))
       LoadPacks.push_back(P);
   }
   return LoadPacks;
@@ -994,18 +996,20 @@ static void findPackableReductions(
   }
 }
 
-std::vector<Pack *>
-packBottomUp(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
-             ReductionInfo &RI, LooseInstructionTable &LIT, Matcher &TheMatcher,
-             const DataLayout &DL, ScalarEvolution &SE, LoopInfo &LI,
-             AAResults &AA, DependenceInfo &DI, TargetTransformInfo &TTI) {
+std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
+                                 PredicatedSSA &PSSA, ReductionInfo &RI,
+                                 LooseInstructionTable &LIT,
+                                 Matcher &TheMatcher, const DataLayout &DL,
+                                 ScalarEvolution &SE, DominatorTree &DT,
+                                 LoopInfo &LI, AAResults &AA,
+                                 DependenceInfo &DI, TargetTransformInfo &TTI) {
   StoreGrouper::ObjToInstMapTy ObjToStoreMap;
   visitWith<StoreGrouper>(PSSA, ObjToStoreMap);
 
   DependenceChecker DepChecker(PSSA, DI, AA, LI, SE);
 
-  BottomUpHeuristic Heuristic(InstPool, PSSA, RI, LIT, TheMatcher, DL, SE, LI,
-                              TTI);
+  BottomUpHeuristic Heuristic(InstPool, PSSA, RI, LIT, TheMatcher, DL, SE, DT,
+                              LI, TTI);
   PackSet Packs;
   auto PrevCost = getTotalCost(PSSA, Packs, RI, LIT, TTI);
 
@@ -1036,8 +1040,7 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &PSSA,
 
     errs() << "Found seed store pack: " << *StoreP << '\n';
     PackSet Scratch = Packs;
-    runBottomUp(StoreP, Heuristic, PSSA, LIT, SE, DepChecker,
-                Scratch);
+    runBottomUp(StoreP, Heuristic, PSSA, LIT, SE, DepChecker, Scratch);
     auto NewCost = getTotalCost(PSSA, Scratch, RI, LIT, TTI);
     // FIXME: need to check for dep cycle
     errs() << "Prev cost: " << PrevCost << ", new cost: " << NewCost << '\n';
