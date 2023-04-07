@@ -12,6 +12,7 @@
 #include "vegen/Lower.h"
 #include "vegen/Pack.h"
 #include "llvm/ADT/EquivalenceClasses.h"
+#include "llvm/ADT/FoldingSet.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -859,6 +860,60 @@ static void runBottomUp(Pack *P, BottomUpHeuristic &Heuristic,
   }
 }
 
+namespace {
+
+struct Structure : FoldingSetNode {
+  unsigned Opcode;
+  Type *Ty;
+  SmallVector<Structure *, 2> Operands;
+
+  Structure(unsigned Opcode, Type *Ty, ArrayRef<Structure *> Operands)
+      : Opcode(Opcode), Ty(Ty), Operands(Operands.begin(), Operands.end()) {}
+
+  void Profile(FoldingSetNodeID &ID) const {
+    ID.AddInteger(Opcode);
+    ID.AddPointer(Ty);
+    for (auto *O : Operands)
+      ID.AddPointer(O);
+  }
+};
+
+// Expressions with the same computation graph should have the same structure
+class StructureNumbering {
+  BumpPtrAllocator Allocator;
+  FoldingSet<Structure> UniqueStructures;
+  Structure *getUniqueStructure(unsigned Opcode, Type *Ty,
+                                ArrayRef<Structure *> Operands = None) {
+    auto *S = new (Allocator) Structure(Opcode, Ty, Operands);
+    return UniqueStructures.GetOrInsertNode(S);
+  }
+  DenseMap<Instruction *, Structure *> InstToStructMap;
+
+public:
+  Structure *getStructure(Instruction *I) {
+    if (auto It = InstToStructMap.find(I); It != InstToStructMap.end())
+      return It->second;
+
+    // Instructions with side effects are terminal (e.g., loads, actual function
+    // calls). Same for phi nodes
+    if (I->mayReadOrWriteMemory() || isa<PHINode>(I))
+      return InstToStructMap[I] =
+                 getUniqueStructure(I->getOpcode(), I->getType());
+    SmallVector<Structure *> Operands;
+    for (auto *O : I->operand_values())
+      Operands.push_back(getStructure(O));
+    return InstToStructMap[I] =
+               getUniqueStructure(I->getOpcode(), I->getType(), Operands);
+  }
+  Structure *getStructure(Value *V) {
+    if (auto *I = dyn_cast<Instruction>(V))
+      return getStructure(I);
+    return nullptr;
+  }
+};
+
+} // namespace
+
 using StoreGroupType = std::map<Instruction *, SmallVector<Instruction *, 8>>;
 // Partition the stores by whether two stores are comparable.
 // E.g., a[i] and a[j] (assuming we know nothing more about i and j) are not
@@ -866,22 +921,59 @@ using StoreGroupType = std::map<Instruction *, SmallVector<Instruction *, 8>>;
 static void partitionStores(ArrayRef<Instruction *> Stores,
                             StoreGroupType &Groups, const DataLayout &DL,
                             ScalarEvolution &SE, LoopInfo &LI) {
+  std::map<std::pair<Value *, Type *>, SmallVector<Instruction *>>
+      PtrToStoresMap;
   for (auto *Store : Stores) {
     auto *Ty = getLoadStoreType(Store);
     auto *Ptr = getLoadStorePointerOperand(Store);
-    bool Found = false;
-    for (auto &KV : Groups) {
-      auto *Store2 = KV.first;
-      auto *Ty2 = getLoadStoreType(Store2);
-      auto *Ptr2 = getLoadStorePointerOperand(Store2);
-      if (diffPointers(Ty, Ptr, Ty2, Ptr2, DL, SE, LI)) {
-        Found = true;
-        KV.second.push_back(Store);
-        break;
+    PtrToStoresMap[{Ptr, Ty}].push_back(Store);
+  }
+
+  // Set of stores assigned to a group
+  DenseSet<Instruction *> AssignedStores;
+  StructureNumbering SN;
+  while (AssignedStores.size() < Stores.size()) {
+    for (auto [Key, Stores] : PtrToStoresMap) {
+      auto *Ptr = Key.first;
+      auto *Ty = Key.second;
+
+      SmallVector<Instruction *> UnassignedStores;
+      for (auto *Store : Stores)
+        if (!AssignedStores.count(Store))
+          UnassignedStores.push_back(Store);
+      if (UnassignedStores.empty())
+        continue;
+
+      auto HasSamePointer = [Ptr](Instruction *I) {
+        return getLoadStorePointerOperand(I) == Ptr;
+      };
+      bool Found = false;
+      for (auto &KV : Groups) {
+        auto *Store2 = KV.first;
+        auto *Ty2 = getLoadStoreType(Store2);
+        auto *Ptr2 = getLoadStorePointerOperand(Store2);
+
+        if (diffPointers(Ty, Ptr, Ty2, Ptr2, DL, SE, LI) &&
+            !llvm::count_if(KV.second, HasSamePointer)) {
+          Found = true;
+          Instruction *BestStore = UnassignedStores.front();
+          // Now that we find a store group with comparable pointers,
+          // pick from `UnassignedStores` with the same structure, if possible
+          auto *S = SN.getStructure(cast<StoreInst>(Store2)->getValueOperand());
+          for (auto *Store : UnassignedStores)
+            if (S == SN.getStructure(cast<StoreInst>(Store)->getValueOperand()))
+              BestStore = Store;
+          KV.second.push_back(BestStore);
+          AssignedStores.insert(BestStore);
+          break;
+        }
+      }
+      if (!Found) {
+        auto *Store = UnassignedStores.front();
+        AssignedStores.insert(Store);
+        Groups[Store].push_back(Store);
       }
     }
-    if (!Found)
-      Groups[Store].push_back(Store);
   }
 }
 
