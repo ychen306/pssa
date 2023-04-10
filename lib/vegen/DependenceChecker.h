@@ -19,6 +19,55 @@ class PackSet;
 bool mayReadOrWriteMemory(llvm::Instruction *I);
 bool mayReadOrWriteMemory(const Item &It);
 
+enum DepKind { No = 0, Yes, Maybe };
+
+class DepNode {
+  llvm::PointerUnion<llvm::Instruction *, VLoop *, const ControlCondition *>
+      Storage;
+
+public:
+  DepNode() = default;
+  DepNode(const ControlCondition *C) : Storage(C) {}
+  DepNode(Item It) {
+    if (auto *I = It.asInstruction())
+      Storage = I;
+    else
+      Storage = It.asLoop();
+  }
+  DepNode(llvm::Instruction *I) : Storage(I) {}
+  void *getPointer() const { return Storage.getOpaqueValue(); }
+  bool operator==(const DepNode &Other) const {
+    return getPointer() == Other.getPointer();
+  }
+  llvm::Instruction *asInstruction() const {
+    return Storage.dyn_cast<llvm::Instruction *>();
+  }
+  VLoop *asLoop() const {
+    return Storage.dyn_cast<VLoop *>();
+  }
+  const ControlCondition *asCond() const {
+    return Storage.dyn_cast<const ControlCondition *>();
+  }
+};
+
+llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, const DepNode &N);
+
+template <> struct llvm::DenseMapInfo<DepNode> {
+  static DepNode getEmptyKey() { return DepNode(); }
+  static DepNode getTombstoneKey() {
+    return DepNode(llvm::DenseMapInfo<Instruction *>::getTombstoneKey());
+  }
+  static unsigned getHashValue(DepNode N) {
+    return llvm::hash_value(N.getPointer());
+  }
+  static bool isEqual(DepNode N1, DepNode N2) {
+    return N1 == N2;
+  }
+};
+
+// First depends on second
+using DepEdge = std::pair<DepNode, DepNode>;
+
 class DependenceChecker {
   struct LoopSummary {
     llvm::SmallVector<llvm::Instruction *, 8> LiveIns, MemoryInsts;
@@ -43,7 +92,7 @@ class DependenceChecker {
   void processLoop(VLoop *VL);
   llvm::ArrayRef<llvm::Instruction *> getMemoryInsts(VLoop *);
 
-  bool hasDependency(llvm::Instruction *, llvm::Instruction *);
+  DepKind getDepKind(llvm::Instruction *, llvm::Instruction *);
 
 public:
   // DeadInsts is an optional set of instructions known to be dead
@@ -57,13 +106,15 @@ public:
 
   // Check if there's any *memory dependence* from It1 to It2 (assuming It1
   // comes before It2), assuming It1 and It2 have the same parent.
-  bool depends(const Item &It1, const Item &It2);
+  bool depends(const Item &It1, const Item &It2,
+               llvm::DenseMap<DepEdge, DepKind> *DepEdges = nullptr);
 
   llvm::ArrayRef<llvm::Instruction *> getLiveIns(VLoop *VL);
 };
 
 class DependencesFinder {
   llvm::SmallVectorImpl<Item> &Deps;
+  llvm::DenseMap<DepEdge, DepKind> DepEdges;
   bool FoundCycle;
   Item Earliest;
   VLoop *VL;
@@ -72,9 +123,9 @@ class DependencesFinder {
   const PackSet *Packs;
   llvm::DenseSet<Item, ItemHashInfo> Visited, Processing;
   llvm::DenseSet<const ControlCondition *> VisitedConds;
-  void visit(Item, bool AddDep);
-  void visitCond(const ControlCondition *);
-  void visitValue(llvm::Value *V);
+  void visit(Item, bool AddDep, const DepNode &Src);
+  void visitCond(const ControlCondition *, const DepNode &Src);
+  void visitValue(llvm::Value *V, const DepNode &Src);
 
 public:
   // Pass in a pack set `Packs` if you want
@@ -88,8 +139,12 @@ public:
   // Find all dependencies of `It` that occurs *after* `Earliest`.
   // Return if there are dependence cycles
   bool findDep(Item It) {
-    visit(It, false /*don't mark the item itself as a dep*/);
+    visit(It, false /*don't mark the item itself as a dep*/, It);
     return FoundCycle;
+  }
+
+  const llvm::DenseMap<DepEdge, DepKind> &getDepEdges() const {
+    return DepEdges;
   }
 };
 
@@ -99,5 +154,11 @@ bool findInBetweenDeps(llvm::SmallVectorImpl<Item> &Deps,
                        llvm::ArrayRef<Item> Items, VLoop *VL,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker,
                        const PackSet *Packs = nullptr);
+
+// Find conditional dependences that, once removed, will make `Items` independent
+// Return true if it's possible (and false if no such set of deps exists).
+bool findNecessaryDeps(llvm::DenseSet<DepEdge> &DepEdges,
+                       llvm::ArrayRef<Item> Items, VLoop *VL,
+                       PredicatedSSA &PSSA, DependenceChecker &DepChecker);
 
 #endif // VEGEN_DEPENDENCECHECKER_H

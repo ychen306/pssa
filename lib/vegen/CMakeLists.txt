@@ -20,3 +20,6 @@ if (APPLE)
 else()
   add_library(VeGen SHARED ${LIB_VEGEN_SRC})
 endif(APPLE)
+
+find_package(ortools REQUIRED CONFIG)
+target_link_libraries(VeGen PRIVATE ortools::ortools)

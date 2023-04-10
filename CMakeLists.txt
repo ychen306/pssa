@@ -26,6 +26,7 @@ FetchContent_MakeAvailable(googletest)
 find_package(LLVM REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
+message(STATUS "Using ortools in: ${ortools_DIR}")
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(LLVM_BUILD_TOOLS ON)

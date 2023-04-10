@@ -31,6 +31,12 @@ cl::opt<unsigned> ReductionWidth("rdx-width",
                                  cl::desc("<size of the horizontal reduction>"),
                                  cl::init(4));
 
+cl::opt<bool>
+    FindConditionalDeps("find-conditional-deps",
+                        cl::desc("print out the deps that require runtime "
+                                 "checks in order to make each pack"),
+                        cl::init(false));
+
 cl::opt<bool> RemoveDeadInsts(
     "remove-dead-insts",
     cl::desc("remove instructions killed by reductions before lowering"),
@@ -412,6 +418,22 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   }
 
   DependenceChecker DepChecker(PSSA, DI, AA, LI, SE, &DeadInsts);
+
+  if (FindConditionalDeps) {
+    for (auto *P : Packs) {
+      DenseSet<DepEdge> DepEdges;
+      auto Vals = P->values();
+      SmallVector<Item> Items(Vals.begin(), Vals.end());
+      bool CanSpeculate = findNecessaryDeps(
+          DepEdges, Items, &PSSA.getTopLevel(), PSSA, DepChecker);
+      if (CanSpeculate) {
+        for (auto [Src, Dst] : DepEdges)
+          errs() << "Cut edge: " << Src << " -> " << Dst << '\n';
+      }
+    }
+    return PreservedAnalyses::all();
+  }
+
   // Insert all of the loose instructions resulting from
   // matching and packing the reductions
   SmallVector<Instruction *> LooseInsts;
