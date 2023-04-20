@@ -421,13 +421,13 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
 
   if (FindConditionalDeps) {
     for (auto *P : Packs) {
-      DenseSet<DepEdge> DepEdges;
+      DenseMap<DepEdge, DepCondition> DepEdges;
       auto Vals = P->values();
       SmallVector<Item> Items(Vals.begin(), Vals.end());
       bool CanSpeculate = findNecessaryDeps(
           DepEdges, Items, &PSSA.getTopLevel(), PSSA, DepChecker);
       if (CanSpeculate) {
-        for (auto [Src, Dst] : DepEdges)
+        for (auto [Src, Dst] : make_first_range(DepEdges))
           errs() << "Cut edge: " << Src << " -> " << Dst << '\n';
       }
     }
