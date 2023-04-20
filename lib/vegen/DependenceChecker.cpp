@@ -188,18 +188,18 @@ static bool isExclusive(const ControlCondition *C1,
 
 DepKind DependenceChecker::getDepKind(Instruction *I1, Instruction *I2) {
   if (I1 == I2)
-    return No;
+    return None;
 
   assert(mayReadOrWriteMemory(I1) && mayReadOrWriteMemory(I2));
 
   if (!I1->mayWriteToMemory() && !I2->mayWriteToMemory())
-    return No;
+    return None;
 
   auto *C1 = PSSA.getInstCond(I1);
   auto *C2 = PSSA.getInstCond(I2);
   // is C1 and C2 cannot be true simultaneously then there's no dep.
   if (isExclusive(C1, C2))
-    return No;
+    return None;
 
   auto *L1 = LI.getLoopFor(I1->getParent());
   auto *L2 = LI.getLoopFor(I2->getParent());
@@ -210,25 +210,25 @@ DepKind DependenceChecker::getDepKind(Instruction *I1, Instruction *I2) {
     default:
       break;
     case AliasResult::NoAlias:
-      return No;
+      return None;
     case AliasResult::MustAlias:
     case AliasResult::PartialAlias:
-      return Yes;
+      return DepCondition::always();
     }
   }
 
   auto *Ptr1 = getLoadStorePointerOperand(I1);
   auto *Ptr2 = getLoadStorePointerOperand(I2);
   if (!Ptr1 || !Ptr2)
-    return Yes;
+    return DepCondition::always();
 
   auto Dep = DI.depends(I1, I2, true);
   if (Dep && Dep->isOrdered()) {
     if (L1 == L2)
-      return Maybe;
-    return Yes;
+      return DepCondition::ifDisjoint(MemRange(I1), MemRange(I2));
+    return DepCondition::always();
   }
-  return No;
+  return None;
 }
 
 bool DependenceChecker::depends(const Item &It1, const Item &It2,
@@ -239,9 +239,9 @@ bool DependenceChecker::depends(const Item &It1, const Item &It2,
   auto *VL2 = It2.asLoop();
   if (I1 && I2) {
     auto Kind = getDepKind(I1, I2);
-    if (DepEdges && Kind != No)
-      DepEdges->try_emplace({I2, I1}, Kind);
-    return Kind;
+    if (DepEdges && Kind)
+      DepEdges->try_emplace({I2, I1}, *Kind);
+    return Kind.hasValue();
   } else if (VL1 && VL2) {
     processLoop(VL1);
     processLoop(VL2);
@@ -251,7 +251,7 @@ bool DependenceChecker::depends(const Item &It1, const Item &It2,
         // TODO: deal with inter-loop conditional dependences
         if (getDepKind(I1, I2)) {
           if (DepEdges)
-            DepEdges->try_emplace({It2, It1}, Yes);
+            DepEdges->try_emplace({It2, It1}, DepCondition::always());
           return true;
         }
       }
@@ -281,7 +281,7 @@ bool DependenceChecker::depends(const Item &It1, const Item &It2,
     if (getDepKind(I1, I)) {
       // TODO: deal with inter-loop conditional dependences
       if (DepEdges)
-        DepEdges->try_emplace({It2, It1}, Yes);
+        DepEdges->try_emplace({It2, It1}, DepCondition::always());
       return true;
     }
   return false;
@@ -330,7 +330,7 @@ void DependencesFinder::visitCond(const ControlCondition *C,
   if (!VisitedConds.insert(C).second)
     return;
 
-  DepEdges.try_emplace({Src, C /*dst*/}, Yes);
+  DepEdges.try_emplace({Src, C /*dst*/}, DepCondition::always());
 
   if (auto *And = dyn_cast<ConditionAnd>(C)) {
     visitCond(And->Parent, And);
@@ -355,7 +355,7 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
   if (!VL->contains(It))
     return;
 
-  DepEdges.try_emplace({Src, It /*dst*/}, Yes);
+  DepEdges.try_emplace({Src, It /*dst*/}, DepCondition::always());
 
   // Find out the outermost loop of `It` that's contained by `VL`.
   while (ParentVL != VL) {
@@ -431,7 +431,7 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
   return FoundCycle;
 }
 
-bool findNecessaryDeps(DenseSet<DepEdge> &DepEdges, ArrayRef<Item> Items,
+bool findNecessaryDeps(DenseMap<DepEdge, DepCondition> &DepEdges, ArrayRef<Item> Items,
                        VLoop *VL, PredicatedSSA &PSSA,
                        DependenceChecker &DepChecker) {
   assert(all_of(Items,
@@ -466,10 +466,10 @@ bool findNecessaryDeps(DenseSet<DepEdge> &DepEdges, ArrayRef<Item> Items,
   // Assign ids to the nodes and edges
   int NumConditionalDeps = 0;
   for (auto [Edge, Kind] : DepFinder.getDepEdges()) {
-    if (Kind == Maybe)
+    if (Kind->isConditional())
       NumConditionalDeps++;
     auto [Src, Dst] = Edge;
-    assert(Kind != No);
+    assert(Kind.hasValue());
     TrackNode(Src);
     TrackNode(Dst);
   }
@@ -487,7 +487,7 @@ bool findNecessaryDeps(DenseSet<DepEdge> &DepEdges, ArrayRef<Item> Items,
   const int UnconditionalWeight = NumConditionalDeps + 1;
   // Add the dep edges
   for (auto [Edge, Kind] : DepFinder.getDepEdges()) {
-    int Weight = Kind == Maybe ? ConditionalWeight : UnconditionalWeight;
+    int Weight = Kind->isConditional() ? ConditionalWeight : UnconditionalWeight;
     auto [Src, Dst] = Edge;
     int SrcId = NodeToIds.lookup(Src);
     int DstId = NodeToIds.lookup(Dst);
@@ -525,7 +525,10 @@ bool findNecessaryDeps(DenseSet<DepEdge> &DepEdges, ArrayRef<Item> Items,
     bool DstInTCut = TCutSet.count(NodeToIds.lookup(Dst)) ||
                      TCutSet.count(AuxNodeIds.lookup(Dst));
     if (SrcInSCut && DstInTCut) {
-      DepEdges.insert(Edge);
+      // Can't cut an unconditional edge
+      if (Kind->isUnconditional())
+        return false;
+      DepEdges.try_emplace(Edge, *Kind);
     }
   }
   return true;

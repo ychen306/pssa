@@ -12,14 +12,13 @@ class Instruction;
 class AAResults;
 class ScalarEvolution;
 class LoopInfo;
+class SCEV;
 } // namespace llvm
 
 class PackSet;
 
 bool mayReadOrWriteMemory(llvm::Instruction *I);
 bool mayReadOrWriteMemory(const Item &It);
-
-enum DepKind { No = 0, Yes, Maybe };
 
 class DepNode {
   llvm::PointerUnion<llvm::Instruction *, VLoop *, const ControlCondition *>
@@ -67,6 +66,47 @@ template <> struct llvm::DenseMapInfo<DepNode> {
 
 // First depends on second
 using DepEdge = std::pair<DepNode, DepNode>;
+
+struct MemRange {
+  llvm::SCEV *Base;
+  llvm::SCEV *Size;
+  MemRange(llvm::Instruction *) {}
+  MemRange(llvm::LoadInst *) {}
+  MemRange(llvm::StoreInst *) {}
+};
+
+class DepCondition {
+  llvm::Optional<std::pair<MemRange, MemRange>> Disjoint;
+  const ControlCondition *C;
+  DepCondition(const MemRange &R1, const MemRange &R2)
+    : Disjoint(std::make_pair(R1, R2)), C(nullptr) {}
+  DepCondition(const ControlCondition *C) : C(C) {}
+public:
+  static DepCondition ifDisjoint(const MemRange &R1, const MemRange &R2) {
+    return DepCondition(R1, R2);
+  }
+  static DepCondition always() {
+    return DepCondition(nullptr/*true*/);
+  }
+  bool isDisjoint() const {
+    return Disjoint.hasValue();
+  }
+  const ControlCondition *getCondition() const {
+    return C;
+  }
+  std::pair<MemRange, MemRange> getRanges() const {
+    assert(isDisjoint());
+    return *Disjoint;
+  }
+  bool isUnconditional() const {
+    return !isDisjoint() && !C;
+  }
+  bool isConditional() const {
+    return !isUnconditional();
+  }
+};
+
+using DepKind = llvm::Optional<DepCondition>;
 
 class DependenceChecker {
   struct LoopSummary {
@@ -157,7 +197,7 @@ bool findInBetweenDeps(llvm::SmallVectorImpl<Item> &Deps,
 
 // Find conditional dependences that, once removed, will make `Items` independent
 // Return true if it's possible (and false if no such set of deps exists).
-bool findNecessaryDeps(llvm::DenseSet<DepEdge> &DepEdges,
+bool findNecessaryDeps(llvm::DenseMap<DepEdge, DepCondition> &DepEdges,
                        llvm::ArrayRef<Item> Items, VLoop *VL,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker);
 
