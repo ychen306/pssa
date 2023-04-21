@@ -23,6 +23,92 @@ bool mayReadOrWriteMemory(const Item &It) {
   return true;
 }
 
+MemRange MemRange::get(llvm::Instruction *I, ScalarEvolution &SE) {
+  auto &DL = I->getModule()->getDataLayout();
+  if (auto *LI = dyn_cast<LoadInst>(I))
+    return MemRange::get(DL, LI->getPointerOperand(), LI->getType(), SE);
+  if (auto *SI = dyn_cast<StoreInst>(I))
+    return MemRange::get(DL, SI->getPointerOperand(),
+                         SI->getValueOperand()->getType(), SE);
+  llvm_unreachable("MemRange::get only supports loads and stores");
+}
+
+MemRange MemRange::get(const DataLayout &DL, Value *Ptr, Type *Ty,
+                       ScalarEvolution &SE) {
+  auto *PtrTy = cast<PointerType>(Ptr->getType());
+  unsigned IndexWidth = DL.getIndexSizeInBits(PtrTy->getAddressSpace());
+  APInt Size(IndexWidth, DL.getTypeStoreSize(Ty));
+  return {Ptr, SE.getConstant(Size)};
+}
+
+static bool isLessThan(ScalarEvolution &SE, const SCEV *A, const SCEV *B) {
+  return SE.isKnownNegative(SE.getMinusSCEV(A, B));
+}
+
+Optional<MemRange> MemRange::merge(const MemRange &R1, const MemRange &R2,
+                                   ScalarEvolution &SE) {
+  auto *Base1 = SE.getSCEV(R1.Base);
+  auto *Base2 = SE.getSCEV(R2.Base);
+  // Base2 - Base1
+  auto *Diff = SE.getMinusSCEV(Base2, Base1);
+  if (!isa<SCEVConstant>(Diff))
+    return None;
+  auto *End1 = SE.getAddExpr(Base1, R1.Size);
+  auto *End2 = SE.getAddExpr(Base2, R2.Size);
+  Value *Base = nullptr;
+  const SCEV *Size = nullptr;
+  if (SE.isKnownNonNegative(Diff)) {
+    // Base2 >= Base1
+    Base = R1.Base;
+    if (isLessThan(SE, End1, End2))
+      Size = SE.getAddExpr(Diff, R2.Size);
+    else if (End1 == End2 || isLessThan(SE, End2, End1))
+      Size = R1.Size;
+    else
+      return None;
+  } else {
+    Base = R2.Base;
+    if (isLessThan(SE, End2, End1))
+      Size = SE.getAddExpr(SE.getMulExpr(Diff, SE.getMinusOne(Diff->getType())), R1.Size);
+    else if (End1 == End2 || isLessThan(SE, End1, End2))
+      Size = R2.Size;
+    else
+      return None;
+  }
+  errs() << "!!! size = " << *Size << '\n';
+  return MemRange{Base, Size};
+}
+
+Optional<DepCondition> DepCondition::coalesce(const DepCondition &Cond1, const DepCondition &Cond2, ScalarEvolution &SE) {
+  if (Cond1 == Cond2)
+    return Cond1;
+
+  // Only support disjoint checks now
+  if (!Cond1.isDisjoint() || !Cond2.isDisjoint())
+    return None;
+
+  auto Chk1 = Cond1.getRanges();
+  auto Chk2 = Cond2.getRanges();
+  // TODO: support commuting the ranges
+  Optional<MemRange> R1 = MemRange::merge(Chk1.first, Chk2.first, SE);
+  if (!R1)
+    return None;
+  Optional<MemRange> R2 = MemRange::merge(Chk1.second, Chk2.second, SE);
+  if (!R2)
+    return None;
+  return DepCondition::ifDisjoint(*R1, *R2);
+}
+
+raw_ostream &operator<<(raw_ostream &OS, const MemRange &R) {
+  OS << '(';
+  if (R.Base->hasName())
+    OS << R.Base->getName();
+  else
+    OS << *R.Base;
+  OS << ")[:" << *R.Size << ']';
+  return OS;
+}
+
 raw_ostream &operator<<(raw_ostream &OS, const DepNode &N) {
   if (auto *I = N.asInstruction())
     OS << *I;
@@ -50,10 +136,6 @@ static Value *getBaseValue(const SCEV *S) {
   }
   // No Identified object found.
   return nullptr;
-}
-
-static bool isLessThan(ScalarEvolution &SE, const SCEV *A, const SCEV *B) {
-  return SE.isKnownNegative(SE.getMinusSCEV(A, B));
 }
 
 /// True if the instruction is not a volatile or atomic load/store.
@@ -225,7 +307,8 @@ DepKind DependenceChecker::getDepKind(Instruction *I1, Instruction *I2) {
   auto Dep = DI.depends(I1, I2, true);
   if (Dep && Dep->isOrdered()) {
     if (L1 == L2)
-      return DepCondition::ifDisjoint(MemRange(I1), MemRange(I2));
+      return DepCondition::ifDisjoint(MemRange::get(I1, SE),
+                                      MemRange::get(I2, SE));
     return DepCondition::always();
   }
   return None;
@@ -431,8 +514,8 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
   return FoundCycle;
 }
 
-bool findNecessaryDeps(DenseMap<DepEdge, DepCondition> &DepEdges, ArrayRef<Item> Items,
-                       VLoop *VL, PredicatedSSA &PSSA,
+bool findNecessaryDeps(DenseMap<DepEdge, DepCondition> &DepEdges,
+                       ArrayRef<Item> Items, VLoop *VL, PredicatedSSA &PSSA,
                        DependenceChecker &DepChecker) {
   assert(all_of(Items,
                 [&](const Item &It) { return PSSA.getLoopForItem(It) == VL; }));
@@ -487,7 +570,8 @@ bool findNecessaryDeps(DenseMap<DepEdge, DepCondition> &DepEdges, ArrayRef<Item>
   const int UnconditionalWeight = NumConditionalDeps + 1;
   // Add the dep edges
   for (auto [Edge, Kind] : DepFinder.getDepEdges()) {
-    int Weight = Kind->isConditional() ? ConditionalWeight : UnconditionalWeight;
+    int Weight =
+        Kind->isConditional() ? ConditionalWeight : UnconditionalWeight;
     auto [Src, Dst] = Edge;
     int SrcId = NodeToIds.lookup(Src);
     int DstId = NodeToIds.lookup(Dst);

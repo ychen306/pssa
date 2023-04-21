@@ -427,8 +427,23 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       bool CanSpeculate = findNecessaryDeps(
           DepEdges, Items, &PSSA.getTopLevel(), PSSA, DepChecker);
       if (CanSpeculate) {
-        for (auto [Src, Dst] : make_first_range(DepEdges))
+        // See if we can coalesce everything into just one condition
+        Optional<DepCondition> Cond = DepEdges.begin()->second;
+        for (auto [Edge, DepCond] : DepEdges) {
+          auto [Src, Dst] = Edge;
           errs() << "Cut edge: " << Src << " -> " << Dst << '\n';
+          if (DepCond.isDisjoint()) {
+            auto [R1, R2] = DepCond.getRanges();
+            errs() << "\tIF " << R1 << " DISJOINT WITH " << R2 << '\n';
+          }
+          if (Cond) {
+            Cond = DepCondition::coalesce(*Cond, DepCond, SE);
+          }
+        }
+        if (Cond && Cond->isDisjoint()) {
+          auto [R1, R2] = Cond->getRanges();
+          errs() << "COALESCED RANGE CHECK = " << R1 << " DISJOINT WITH " << R2 << '\n';
+        }
       }
     }
     return PreservedAnalyses::all();

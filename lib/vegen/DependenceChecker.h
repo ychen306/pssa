@@ -41,9 +41,7 @@ public:
   llvm::Instruction *asInstruction() const {
     return Storage.dyn_cast<llvm::Instruction *>();
   }
-  VLoop *asLoop() const {
-    return Storage.dyn_cast<VLoop *>();
-  }
+  VLoop *asLoop() const { return Storage.dyn_cast<VLoop *>(); }
   const ControlCondition *asCond() const {
     return Storage.dyn_cast<const ControlCondition *>();
   }
@@ -59,51 +57,53 @@ template <> struct llvm::DenseMapInfo<DepNode> {
   static unsigned getHashValue(DepNode N) {
     return llvm::hash_value(N.getPointer());
   }
-  static bool isEqual(DepNode N1, DepNode N2) {
-    return N1 == N2;
-  }
+  static bool isEqual(DepNode N1, DepNode N2) { return N1 == N2; }
 };
 
 // First depends on second
 using DepEdge = std::pair<DepNode, DepNode>;
 
 struct MemRange {
-  llvm::SCEV *Base;
-  llvm::SCEV *Size;
-  MemRange(llvm::Instruction *) {}
-  MemRange(llvm::LoadInst *) {}
-  MemRange(llvm::StoreInst *) {}
+  llvm::Value *Base;
+  const llvm::SCEV *Size;
+  static MemRange get(llvm::Instruction *I, llvm::ScalarEvolution &);
+  static MemRange get(const llvm::DataLayout &, llvm::Value *Ptr,
+                      llvm::Type *Ty, llvm::ScalarEvolution &);
+  static llvm::Optional<MemRange> merge(const MemRange &, const MemRange &,
+                                        llvm::ScalarEvolution &);
+  bool operator==(const MemRange &Other) const {
+    return Base == Other.Base && Size == Other.Size;
+  }
 };
+llvm::raw_ostream &operator<<(llvm::raw_ostream &, const MemRange &);
 
 class DepCondition {
   llvm::Optional<std::pair<MemRange, MemRange>> Disjoint;
   const ControlCondition *C;
   DepCondition(const MemRange &R1, const MemRange &R2)
-    : Disjoint(std::make_pair(R1, R2)), C(nullptr) {}
+      : Disjoint(std::make_pair(R1, R2)), C(nullptr) {}
   DepCondition(const ControlCondition *C) : C(C) {}
+
 public:
   static DepCondition ifDisjoint(const MemRange &R1, const MemRange &R2) {
     return DepCondition(R1, R2);
   }
-  static DepCondition always() {
-    return DepCondition(nullptr/*true*/);
+  static DepCondition always() { return DepCondition(nullptr /*true*/); }
+  // Try to create a condition that implies both Cond1 and Cond2
+  static llvm::Optional<DepCondition> coalesce(const DepCondition &Cond1,
+                                               const DepCondition &Cond2,
+                                               llvm::ScalarEvolution &);
+  bool operator==(const DepCondition &Other) const {
+    return Disjoint == Other.Disjoint && C == Other.C;
   }
-  bool isDisjoint() const {
-    return Disjoint.hasValue();
-  }
-  const ControlCondition *getCondition() const {
-    return C;
-  }
+  bool isDisjoint() const { return Disjoint.hasValue(); }
+  const ControlCondition *getCondition() const { return C; }
   std::pair<MemRange, MemRange> getRanges() const {
     assert(isDisjoint());
     return *Disjoint;
   }
-  bool isUnconditional() const {
-    return !isDisjoint() && !C;
-  }
-  bool isConditional() const {
-    return !isUnconditional();
-  }
+  bool isUnconditional() const { return !isDisjoint() && !C; }
+  bool isConditional() const { return !isUnconditional(); }
 };
 
 using DepKind = llvm::Optional<DepCondition>;
@@ -195,8 +195,9 @@ bool findInBetweenDeps(llvm::SmallVectorImpl<Item> &Deps,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker,
                        const PackSet *Packs = nullptr);
 
-// Find conditional dependences that, once removed, will make `Items` independent
-// Return true if it's possible (and false if no such set of deps exists).
+// Find conditional dependences that, once removed, will make `Items`
+// independent Return true if it's possible (and false if no such set of deps
+// exists).
 bool findNecessaryDeps(llvm::DenseMap<DepEdge, DepCondition> &DepEdges,
                        llvm::ArrayRef<Item> Items, VLoop *VL,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker);
