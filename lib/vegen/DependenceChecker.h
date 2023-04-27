@@ -106,7 +106,20 @@ public:
   bool isConditional() const { return !isUnconditional(); }
 };
 
-using DepKind = llvm::Optional<DepCondition>;
+class DepKind {
+  llvm::SmallVector<DepCondition> Conds;
+public:
+  DepKind() {}
+  DepKind(const DepCondition &Cond) : Conds({Cond}) {}
+  DepKind(llvm::ArrayRef<DepCondition> Conds) : Conds(Conds.begin(), Conds.end()) {}
+  bool isUnconditional() const { return Conds.size() == 1 && Conds.front().isUnconditional(); }
+  bool isConditional() const { return !isUnconditional(); }
+
+  operator bool() const {
+    return !Conds.empty();
+  }
+  llvm::ArrayRef<DepCondition> getConds() const { return Conds; }
+};
 
 class DependenceChecker {
   struct LoopSummary {
@@ -132,7 +145,7 @@ class DependenceChecker {
   void processLoop(VLoop *VL);
   llvm::ArrayRef<llvm::Instruction *> getMemoryInsts(VLoop *);
 
-  DepKind getDepKind(llvm::Instruction *, llvm::Instruction *);
+  llvm::Optional<DepCondition> getDepKind(llvm::Instruction *, llvm::Instruction *);
 
 public:
   // DeadInsts is an optional set of instructions known to be dead
@@ -195,11 +208,11 @@ bool findInBetweenDeps(llvm::SmallVectorImpl<Item> &Deps,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker,
                        const PackSet *Packs = nullptr);
 
-// Find conditional dependences that, once removed, will make `Items`
+// Find conditional dependences that, once removed, will make the instructions
 // independent Return true if it's possible (and false if no such set of deps
 // exists).
-bool findNecessaryDeps(llvm::DenseMap<DepEdge, DepCondition> &DepEdges,
-                       llvm::ArrayRef<Item> Items, VLoop *VL,
+bool findNecessaryDeps(llvm::DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
+                       llvm::ArrayRef<llvm::Instruction *> Insts,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker);
 
 #endif // VEGEN_DEPENDENCECHECKER_H
