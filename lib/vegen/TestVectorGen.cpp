@@ -17,6 +17,7 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
 
 using namespace llvm;
 
@@ -432,6 +433,11 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
           for (auto DepCond : DepConds) {
             if (DepCond.isDisjoint()) {
               auto [R1, R2] = DepCond.getRanges();
+              //errs() << "... R1.Base = " << *R1.Base << '\n';
+              //auto *AR = cast<SCEVAddRecExpr>(R1.Base);
+              //errs() << "... scev start = " << *AR->getStart() << '\n';
+              //errs() << "... scev step = " << *AR->getStepRecurrence(SE) << '\n';
+              //errs() << "... scev loop = " << *AR->getLoop() << '\n';
               errs() << "\tIF " << R1 << " DISJOINT WITH " << R2 << '\n';
             }
             if (Cond) {
