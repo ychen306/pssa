@@ -64,7 +64,7 @@ template <> struct llvm::DenseMapInfo<DepNode> {
 using DepEdge = std::pair<DepNode, DepNode>;
 
 struct MemRange {
-  llvm::Value *Base;
+  const llvm::SCEV *Base;
   const llvm::SCEV *Size;
   static MemRange get(llvm::Instruction *I, llvm::ScalarEvolution &);
   static MemRange get(const llvm::DataLayout &, llvm::Value *Ptr,

@@ -38,7 +38,7 @@ MemRange MemRange::get(const DataLayout &DL, Value *Ptr, Type *Ty,
   auto *PtrTy = cast<PointerType>(Ptr->getType());
   unsigned IndexWidth = DL.getIndexSizeInBits(PtrTy->getAddressSpace());
   APInt Size(IndexWidth, DL.getTypeStoreSize(Ty));
-  return {Ptr, SE.getConstant(Size)};
+  return {SE.getSCEV(Ptr), SE.getConstant(Size)};
 }
 
 static bool isLessThan(ScalarEvolution &SE, const SCEV *A, const SCEV *B) {
@@ -47,15 +47,15 @@ static bool isLessThan(ScalarEvolution &SE, const SCEV *A, const SCEV *B) {
 
 Optional<MemRange> MemRange::merge(const MemRange &R1, const MemRange &R2,
                                    ScalarEvolution &SE) {
-  auto *Base1 = SE.getSCEV(R1.Base);
-  auto *Base2 = SE.getSCEV(R2.Base);
+  auto *Base1 = R1.Base;
+  auto *Base2 = R2.Base;
   // Base2 - Base1
   auto *Diff = SE.getMinusSCEV(Base2, Base1);
   if (!isa<SCEVConstant>(Diff))
     return None;
   auto *End1 = SE.getAddExpr(Base1, R1.Size);
   auto *End2 = SE.getAddExpr(Base2, R2.Size);
-  Value *Base = nullptr;
+  const SCEV *Base = nullptr;
   const SCEV *Size = nullptr;
   if (SE.isKnownNonNegative(Diff)) {
     // Base2 >= Base1
@@ -103,12 +103,7 @@ Optional<DepCondition> DepCondition::coalesce(const DepCondition &Cond1,
 }
 
 raw_ostream &operator<<(raw_ostream &OS, const MemRange &R) {
-  OS << '(';
-  if (R.Base->hasName())
-    OS << R.Base->getName();
-  else
-    OS << *R.Base;
-  OS << ")[:" << *R.Size << ']';
+  OS << '(' << *R.Base << ")[:" << *R.Size << ']';
   return OS;
 }
 
