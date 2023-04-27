@@ -421,23 +421,22 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
 
   if (FindConditionalDeps) {
     for (auto *P : Packs) {
-      DenseMap<DepEdge, DepCondition> DepEdges;
-      auto Vals = P->values();
-      SmallVector<Item> Items(Vals.begin(), Vals.end());
-      bool CanSpeculate = findNecessaryDeps(
-          DepEdges, Items, &PSSA.getTopLevel(), PSSA, DepChecker);
+      DenseMap<DepEdge, std::vector<DepCondition>> DepEdges;
+      bool CanSpeculate = findNecessaryDeps(DepEdges, P->values(), PSSA, DepChecker);
       if (CanSpeculate) {
         // See if we can coalesce everything into just one condition
-        Optional<DepCondition> Cond = DepEdges.begin()->second;
-        for (auto [Edge, DepCond] : DepEdges) {
+        Optional<DepCondition> Cond = DepEdges.begin()->second.front();
+        for (auto [Edge, DepConds] : DepEdges) {
           auto [Src, Dst] = Edge;
           errs() << "Cut edge: " << Src << " -> " << Dst << '\n';
-          if (DepCond.isDisjoint()) {
-            auto [R1, R2] = DepCond.getRanges();
-            errs() << "\tIF " << R1 << " DISJOINT WITH " << R2 << '\n';
-          }
-          if (Cond) {
-            Cond = DepCondition::coalesce(*Cond, DepCond, SE);
+          for (auto DepCond : DepConds) {
+            if (DepCond.isDisjoint()) {
+              auto [R1, R2] = DepCond.getRanges();
+              errs() << "\tIF " << R1 << " DISJOINT WITH " << R2 << '\n';
+            }
+            if (Cond) {
+              Cond = DepCondition::coalesce(*Cond, DepCond, SE);
+            }
           }
         }
         if (Cond && Cond->isDisjoint()) {

@@ -69,7 +69,8 @@ Optional<MemRange> MemRange::merge(const MemRange &R1, const MemRange &R2,
   } else {
     Base = R2.Base;
     if (isLessThan(SE, End2, End1))
-      Size = SE.getAddExpr(SE.getMulExpr(Diff, SE.getMinusOne(Diff->getType())), R1.Size);
+      Size = SE.getAddExpr(SE.getMulExpr(Diff, SE.getMinusOne(Diff->getType())),
+                           R1.Size);
     else if (End1 == End2 || isLessThan(SE, End1, End2))
       Size = R2.Size;
     else
@@ -79,7 +80,9 @@ Optional<MemRange> MemRange::merge(const MemRange &R1, const MemRange &R2,
   return MemRange{Base, Size};
 }
 
-Optional<DepCondition> DepCondition::coalesce(const DepCondition &Cond1, const DepCondition &Cond2, ScalarEvolution &SE) {
+Optional<DepCondition> DepCondition::coalesce(const DepCondition &Cond1,
+                                              const DepCondition &Cond2,
+                                              ScalarEvolution &SE) {
   if (Cond1 == Cond2)
     return Cond1;
 
@@ -268,7 +271,8 @@ static bool isExclusive(const ControlCondition *C1,
   return false;
 }
 
-DepKind DependenceChecker::getDepKind(Instruction *I1, Instruction *I2) {
+Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
+                                                     Instruction *I2) {
   if (I1 == I2)
     return None;
 
@@ -306,10 +310,10 @@ DepKind DependenceChecker::getDepKind(Instruction *I1, Instruction *I2) {
 
   auto Dep = DI.depends(I1, I2, true);
   if (Dep && Dep->isOrdered()) {
-    if (L1 == L2)
-      return DepCondition::ifDisjoint(MemRange::get(I1, SE),
-                                      MemRange::get(I2, SE));
-    return DepCondition::always();
+    // FIXME: in some trivial cases we know for sure that I1 depends on I2
+    // (e.g., A[i] and A[i]), report DepCondition::always() in those cases.
+    return DepCondition::ifDisjoint(MemRange::get(I1, SE),
+                                    MemRange::get(I2, SE));
   }
   return None;
 }
@@ -329,17 +333,36 @@ bool DependenceChecker::depends(const Item &It1, const Item &It2,
     processLoop(VL1);
     processLoop(VL2);
 
+    bool FoundDep = false;
+    SmallVector<DepCondition> DepConds;
     for (auto *I1 : Summaries[VL1].MemoryInsts) {
       for (auto *I2 : Summaries[VL2].MemoryInsts) {
         // TODO: deal with inter-loop conditional dependences
-        if (getDepKind(I1, I2)) {
-          if (DepEdges)
-            DepEdges->try_emplace({It2, It1}, DepCondition::always());
-          return true;
+        auto Kind = getDepKind(I1, I2);
+        if (Kind) {
+          if (DepEdges) {
+            // If the dep kind is unconditionally just return early and don't
+            // bother looking for conditional deps (because removing those deps
+            // will still keep the loops dependent
+            if (Kind->isUnconditional()) {
+              DepEdges->try_emplace({It2, It1}, DepCondition::always());
+              return true;
+            }
+
+            // DepEdges->try_emplace({I2, I1}, Kind);
+            DepConds.push_back(*Kind);
+            FoundDep = true;
+            continue;
+          } else {
+            return true;
+          }
         }
       }
     }
-    return false;
+    if (DepEdges && !DepConds.empty()) {
+      DepEdges->try_emplace({It2, It1}, DepConds);
+    }
+    return FoundDep;
   }
 
   assert((I1 && VL2) || (VL1 && I2));
@@ -514,11 +537,10 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
   return FoundCycle;
 }
 
-bool findNecessaryDeps(DenseMap<DepEdge, DepCondition> &DepEdges,
-                       ArrayRef<Item> Items, VLoop *VL, PredicatedSSA &PSSA,
-                       DependenceChecker &DepChecker) {
-  assert(all_of(Items,
-                [&](const Item &It) { return PSSA.getLoopForItem(It) == VL; }));
+static bool
+findNecessaryDepsImpl(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
+                      ArrayRef<Item> Items, VLoop *VL, PredicatedSSA &PSSA,
+                      DependenceChecker &DepChecker) {
   auto ComesBefore = [VL](const Item &It1, const Item &It2) {
     return VL->comesBefore(It1, It2);
   };
@@ -549,10 +571,10 @@ bool findNecessaryDeps(DenseMap<DepEdge, DepCondition> &DepEdges,
   // Assign ids to the nodes and edges
   int NumConditionalDeps = 0;
   for (auto [Edge, Kind] : DepFinder.getDepEdges()) {
-    if (Kind->isConditional())
+    if (Kind.isConditional())
       NumConditionalDeps++;
     auto [Src, Dst] = Edge;
-    assert(Kind.hasValue());
+    assert(Kind);
     TrackNode(Src);
     TrackNode(Dst);
   }
@@ -570,8 +592,7 @@ bool findNecessaryDeps(DenseMap<DepEdge, DepCondition> &DepEdges,
   const int UnconditionalWeight = NumConditionalDeps + 1;
   // Add the dep edges
   for (auto [Edge, Kind] : DepFinder.getDepEdges()) {
-    int Weight =
-        Kind->isConditional() ? ConditionalWeight : UnconditionalWeight;
+    int Weight = Kind.isConditional() ? ConditionalWeight : UnconditionalWeight;
     auto [Src, Dst] = Edge;
     int SrcId = NodeToIds.lookup(Src);
     int DstId = NodeToIds.lookup(Dst);
@@ -610,10 +631,62 @@ bool findNecessaryDeps(DenseMap<DepEdge, DepCondition> &DepEdges,
                      TCutSet.count(AuxNodeIds.lookup(Dst));
     if (SrcInSCut && DstInTCut) {
       // Can't cut an unconditional edge
-      if (Kind->isUnconditional())
+      if (Kind.isUnconditional())
         return false;
-      DepEdges.try_emplace(Edge, *Kind);
+      DepEdges.try_emplace(Edge, Kind.getConds());
     }
   }
   return true;
+}
+
+static bool haveSameParent(ArrayRef<VLoop *> Loops) {
+  if (Loops.empty())
+    return true;
+
+  auto *Parent = Loops.front()->getParent();
+  for (auto *VL : drop_begin(Loops))
+    if (VL->getParent() != Parent)
+      return false;
+  return true;
+};
+
+bool findNecessaryDeps(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
+                       ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
+                       DependenceChecker &DepChecker) {
+  SmallVector<Item> Items;
+  auto *ParentVL = PSSA.getLoopForInst(Insts.front());
+  if (all_of(Insts, [ParentVL, &PSSA](auto *I) {
+        return ParentVL == PSSA.getLoopForInst(I);
+      })) {
+    Items.assign(Insts.begin(), Insts.end());
+  } else {
+    SmallDenseMap<VLoop *, TinyPtrVector<Instruction *>, 8> LoopToInstsMap;
+    for (auto *I : Insts) {
+      auto *VL = PSSA.getLoopForInst(I);
+      LoopToInstsMap[VL].push_back(I);
+    }
+
+    // For instructions that come from the same loops,
+    // make sure that they are independent
+    for (auto &Insts2 : make_second_range(LoopToInstsMap))
+      if (Insts2.size() > 1 &&
+          !findNecessaryDeps(DepEdges, Insts2, PSSA, DepChecker))
+        return false;
+
+    // Make sure the disjoint parent loops are independent
+    SmallVector<VLoop *, 8> Loops(make_first_range(LoopToInstsMap));
+    while (!haveSameParent(Loops)) {
+      for (auto &VL : Loops) {
+        VL = VL->getParent();
+        // This only happens when the instructions have different nesting depth,
+        // in which case we just bail out.
+        if (!VL)
+          return false;
+      }
+    }
+
+    Items.assign(Loops.begin(), Loops.end());
+    ParentVL = Loops.front()->getParent();
+  }
+  return findNecessaryDepsImpl(DepEdges, Items, ParentVL, PSSA, DepChecker);
 }
