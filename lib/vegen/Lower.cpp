@@ -409,14 +409,6 @@ Value *ExitsRemapper::remapSubLoopExit(VLoop *SubVL, Value *V) {
   return RemappedSubLoopExits[{SubVL, V}] = Guarded;
 }
 
-// FIXME: this has quadratic complexity
-VLoop *nearestCommonParent(VLoop *VL1, VLoop *VL2) {
-  while (VL1 && !VL1->contains(VL2))
-    VL1 = VL1->getParent();
-  assert(VL1 && VL1->contains(VL2));
-  return VL1;
-}
-
 Value *ExitsRemapper::remapValue(VLoop *UserVL, Value *V) {
   if (LoopsWithExits.empty())
     return nullptr;

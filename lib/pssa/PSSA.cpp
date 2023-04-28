@@ -293,3 +293,11 @@ unsigned PredicatedSSA::getLoopDepth(VLoop *VL) {
     return 0;
   return getOrigLoop(VL)->getLoopDepth();
 }
+
+// FIXME: this has quadratic complexity
+VLoop *nearestCommonParent(VLoop *VL1, VLoop *VL2) {
+  while (VL1 && !VL1->contains(VL2))
+    VL1 = VL1->getParent();
+  assert(VL1 && VL1->contains(VL2));
+  return VL1;
+}

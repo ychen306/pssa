@@ -309,4 +309,6 @@ public:
 
 bool isConvertibleToPSSA(llvm::Function &, llvm::LoopInfo &, llvm::DominatorTree &);
 
+VLoop *nearestCommonParent(VLoop *VL1, VLoop *VL2);
+
 #endif // end PSSA_H

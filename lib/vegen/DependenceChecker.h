@@ -66,11 +66,19 @@ using DepEdge = std::pair<DepNode, DepNode>;
 struct MemRange {
   const llvm::SCEV *Base;
   const llvm::SCEV *Size;
-  static MemRange get(llvm::Instruction *I, llvm::ScalarEvolution &);
+  VLoop *ParentLoop;
+
+  static MemRange get(llvm::Instruction *I, llvm::ScalarEvolution &,
+                      PredicatedSSA &PSSA);
   static MemRange get(const llvm::DataLayout &, llvm::Value *Ptr,
-                      llvm::Type *Ty, llvm::ScalarEvolution &);
+                      llvm::Type *Ty, VLoop *ParentLoop,
+                      llvm::ScalarEvolution &);
   static llvm::Optional<MemRange> merge(const MemRange &, const MemRange &,
-                                        llvm::ScalarEvolution &);
+                                        llvm::ScalarEvolution &,
+                                        PredicatedSSA &);
+  // Get a range to that over-approximate the memory accessed over all the loop
+  // iterations
+  llvm::Optional<MemRange> promote(llvm::ScalarEvolution &, PredicatedSSA &);
   bool operator==(const MemRange &Other) const {
     return Base == Other.Base && Size == Other.Size;
   }
@@ -92,7 +100,8 @@ public:
   // Try to create a condition that implies both Cond1 and Cond2
   static llvm::Optional<DepCondition> coalesce(const DepCondition &Cond1,
                                                const DepCondition &Cond2,
-                                               llvm::ScalarEvolution &);
+                                               llvm::ScalarEvolution &,
+                                               PredicatedSSA &);
   bool operator==(const DepCondition &Other) const {
     return Disjoint == Other.Disjoint && C == Other.C;
   }
@@ -108,16 +117,18 @@ public:
 
 class DepKind {
   llvm::SmallVector<DepCondition> Conds;
+
 public:
   DepKind() {}
   DepKind(const DepCondition &Cond) : Conds({Cond}) {}
-  DepKind(llvm::ArrayRef<DepCondition> Conds) : Conds(Conds.begin(), Conds.end()) {}
-  bool isUnconditional() const { return Conds.size() == 1 && Conds.front().isUnconditional(); }
+  DepKind(llvm::ArrayRef<DepCondition> Conds)
+      : Conds(Conds.begin(), Conds.end()) {}
+  bool isUnconditional() const {
+    return Conds.size() == 1 && Conds.front().isUnconditional();
+  }
   bool isConditional() const { return !isUnconditional(); }
 
-  operator bool() const {
-    return !Conds.empty();
-  }
+  operator bool() const { return !Conds.empty(); }
   llvm::ArrayRef<DepCondition> getConds() const { return Conds; }
 };
 
@@ -145,7 +156,8 @@ class DependenceChecker {
   void processLoop(VLoop *VL);
   llvm::ArrayRef<llvm::Instruction *> getMemoryInsts(VLoop *);
 
-  llvm::Optional<DepCondition> getDepKind(llvm::Instruction *, llvm::Instruction *);
+  llvm::Optional<DepCondition> getDepKind(llvm::Instruction *,
+                                          llvm::Instruction *);
 
 public:
   // DeadInsts is an optional set of instructions known to be dead
@@ -211,8 +223,9 @@ bool findInBetweenDeps(llvm::SmallVectorImpl<Item> &Deps,
 // Find conditional dependences that, once removed, will make the instructions
 // independent Return true if it's possible (and false if no such set of deps
 // exists).
-bool findNecessaryDeps(llvm::DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
-                       llvm::ArrayRef<llvm::Instruction *> Insts,
-                       PredicatedSSA &PSSA, DependenceChecker &DepChecker);
+bool findNecessaryDeps(
+    llvm::DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
+    llvm::ArrayRef<llvm::Instruction *> Insts, PredicatedSSA &PSSA,
+    DependenceChecker &DepChecker);
 
 #endif // VEGEN_DEPENDENCECHECKER_H

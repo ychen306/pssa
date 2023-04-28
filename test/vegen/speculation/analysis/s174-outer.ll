@@ -12,6 +12,7 @@
 ; CHECK-DAG:	IF ({((4 * (sext i32 %M to i64))<nsw> + @a),+,1280000}<nw><%for.body4>)[:4] DISJOINT WITH ({(12 + @a)<nuw><nsw>,+,1280000}<nuw><%for.body4.3>)[:4]
 ; CHECK-DAG:	IF ({(4 + @a)<nuw><nsw>,+,1280000}<nuw><%for.body4.1>)[:4] DISJOINT WITH ({(12 + (4 * (sext i32 %M to i64))<nsw> + @a),+,1280000}<nw><%for.body4.3>)[:4]
 ; CHECK-DAG:	IF ({(4 + (4 * (sext i32 %M to i64))<nsw> + @a),+,1280000}<nw><%for.body4.1>)[:4] DISJOINT WITH ({(12 + @a)<nuw><nsw>,+,1280000}<nuw><%for.body4.3>)[:4]
+; CHECK: COALESCED RANGE CHECK = (@a)[:409600000016] DISJOINT WITH (((4 * (sext i32 %M to i64))<nsw> + @a))[:409600000016]
 
 target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"

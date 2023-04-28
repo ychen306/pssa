@@ -438,10 +438,12 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
               //errs() << "... scev start = " << *AR->getStart() << '\n';
               //errs() << "... scev step = " << *AR->getStepRecurrence(SE) << '\n';
               //errs() << "... scev loop = " << *AR->getLoop() << '\n';
+              //if (auto Promoted = R1.promote(SE, PSSA))
+              //  errs() << "..... promoted r1 = " << *Promoted << '\n';
               errs() << "\tIF " << R1 << " DISJOINT WITH " << R2 << '\n';
             }
             if (Cond) {
-              Cond = DepCondition::coalesce(*Cond, DepCond, SE);
+              Cond = DepCondition::coalesce(*Cond, DepCond, SE, PSSA);
             }
           }
         }
