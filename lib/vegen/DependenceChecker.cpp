@@ -23,36 +23,62 @@ bool mayReadOrWriteMemory(const Item &It) {
   return true;
 }
 
-MemRange MemRange::get(llvm::Instruction *I, ScalarEvolution &SE) {
+MemRange MemRange::get(llvm::Instruction *I, ScalarEvolution &SE,
+                       PredicatedSSA &PSSA) {
   auto &DL = I->getModule()->getDataLayout();
+  auto *VL = PSSA.getLoopForInst(I);
   if (auto *LI = dyn_cast<LoadInst>(I))
-    return MemRange::get(DL, LI->getPointerOperand(), LI->getType(), SE);
+    return MemRange::get(DL, LI->getPointerOperand(), LI->getType(), VL, SE);
   if (auto *SI = dyn_cast<StoreInst>(I))
     return MemRange::get(DL, SI->getPointerOperand(),
-                         SI->getValueOperand()->getType(), SE);
+                         SI->getValueOperand()->getType(), VL, SE);
   llvm_unreachable("MemRange::get only supports loads and stores");
 }
 
-MemRange MemRange::get(const DataLayout &DL, Value *Ptr, Type *Ty,
+MemRange MemRange::get(const DataLayout &DL, Value *Ptr, Type *Ty, VLoop *VL,
                        ScalarEvolution &SE) {
   auto *PtrTy = cast<PointerType>(Ptr->getType());
   unsigned IndexWidth = DL.getIndexSizeInBits(PtrTy->getAddressSpace());
   APInt Size(IndexWidth, DL.getTypeStoreSize(Ty));
-  return {SE.getSCEV(Ptr), SE.getConstant(Size)};
+  return MemRange{SE.getSCEV(Ptr), SE.getConstant(Size), VL};
 }
 
 static bool isLessThan(ScalarEvolution &SE, const SCEV *A, const SCEV *B) {
   return SE.isKnownNegative(SE.getMinusSCEV(A, B));
 }
 
-Optional<MemRange> MemRange::merge(const MemRange &R1, const MemRange &R2,
-                                   ScalarEvolution &SE) {
+// Promote R until its ParentLoop is VL
+static Optional<MemRange> promoteTo(const MemRange &R, VLoop *VL,
+                                    ScalarEvolution &SE, PredicatedSSA &PSSA) {
+  assert(VL->contains(R.ParentLoop));
+  Optional<MemRange> MaybeR = R;
+  while (MaybeR && MaybeR->ParentLoop != VL)
+    MaybeR = MaybeR->promote(SE, PSSA);
+  return MaybeR;
+}
+
+Optional<MemRange> MemRange::merge(const MemRange &OrigR1, const MemRange &OrigR2,
+                                   ScalarEvolution &SE, PredicatedSSA &PSSA) {
+  auto *VL = nearestCommonParent(OrigR1.ParentLoop, OrigR2.ParentLoop);
+  auto MaybeR1 = promoteTo(OrigR1, VL, SE, PSSA);
+  if (!MaybeR1)
+    return None;
+  auto MaybeR2 = promoteTo(OrigR2, VL, SE, PSSA);
+  if (!MaybeR2)
+    return None;
+  auto &R1 = *MaybeR1;
+  auto &R2 = *MaybeR2;
+
+  //if (R1.ParentLoop != R2.ParentLoop)
+  //  return None;
+
   auto *Base1 = R1.Base;
   auto *Base2 = R2.Base;
   // Base2 - Base1
   auto *Diff = SE.getMinusSCEV(Base2, Base1);
   if (!isa<SCEVConstant>(Diff))
     return None;
+
   auto *End1 = SE.getAddExpr(Base1, R1.Size);
   auto *End2 = SE.getAddExpr(Base2, R2.Size);
   const SCEV *Base = nullptr;
@@ -76,13 +102,63 @@ Optional<MemRange> MemRange::merge(const MemRange &R1, const MemRange &R2,
     else
       return None;
   }
-  errs() << "!!! size = " << *Size << '\n';
-  return MemRange{Base, Size};
+  return MemRange{Base, Size, R1.ParentLoop};
+}
+
+static const SCEV *getAdd(const SCEV *A, const SCEV *B, ScalarEvolution &SE) {
+  if (A->getType() == B->getType())
+    return SE.getAddExpr(A, B);
+  auto *Ty = A->getType();
+  if (Ty->getIntegerBitWidth() < B->getType()->getIntegerBitWidth())
+    Ty = B->getType();
+  return SE.getAddExpr(SE.getNoopOrZeroExtend(A, Ty), SE.getNoopOrZeroExtend(B, Ty));
+}
+
+static const SCEV *getMul(const SCEV *A, const SCEV *B, ScalarEvolution &SE) {
+  if (A->getType() == B->getType())
+    return SE.getMulExpr(A, B);
+  auto *Ty = A->getType();
+  if (Ty->getIntegerBitWidth() < B->getType()->getIntegerBitWidth())
+    Ty = B->getType();
+  return SE.getMulExpr(SE.getNoopOrZeroExtend(A, Ty), SE.getNoopOrZeroExtend(B, Ty));
+}
+
+Optional<MemRange> MemRange::promote(ScalarEvolution &SE, PredicatedSSA &PSSA) {
+  if (!ParentLoop->isLoop())
+    return None;
+  auto *L = PSSA.getOrigLoop(ParentLoop);
+  if (!L)
+    return None;
+
+  // Don't bother promoting if the access size is not loop-invariant
+  if (!SE.isLoopInvariant(Size, L))
+    return None;
+
+  // Best case: the access pattern is loop-invariant
+  if (SE.isLoopInvariant(Base, L))
+    return MemRange{Base, Size, ParentLoop->getParent()};
+
+  // Otherwise we insistj the base pointer is an AddRec expr (and therefore
+  // predictable)
+  auto *BaseAR = dyn_cast<SCEVAddRecExpr>(Base);
+  if (!BaseAR)
+    return None;
+
+  auto *Step = BaseAR->getStepRecurrence(SE);
+  // TODO: deal with negative step
+  if (!SE.isKnownNonNegative(Step))
+    return None;
+
+  auto *BackedgeTakenCount = SE.getBackedgeTakenCount(L);
+  auto *TripCount = getAdd(SE.getOne(BackedgeTakenCount->getType()), BackedgeTakenCount, SE);
+  return MemRange{BaseAR->getStart(),
+                  getAdd(getMul(TripCount, Step, SE), Size, SE),
+                  ParentLoop->getParent()};
 }
 
 Optional<DepCondition> DepCondition::coalesce(const DepCondition &Cond1,
                                               const DepCondition &Cond2,
-                                              ScalarEvolution &SE) {
+                                              ScalarEvolution &SE, PredicatedSSA &PSSA) {
   if (Cond1 == Cond2)
     return Cond1;
 
@@ -92,13 +168,21 @@ Optional<DepCondition> DepCondition::coalesce(const DepCondition &Cond1,
 
   auto Chk1 = Cond1.getRanges();
   auto Chk2 = Cond2.getRanges();
-  // TODO: support commuting the ranges
-  Optional<MemRange> R1 = MemRange::merge(Chk1.first, Chk2.first, SE);
-  if (!R1)
-    return None;
-  Optional<MemRange> R2 = MemRange::merge(Chk1.second, Chk2.second, SE);
-  if (!R2)
-    return None;
+  Optional<MemRange> R1, R2;
+  R1 = MemRange::merge(Chk1.first, Chk2.first, SE, PSSA);
+  if (!R1) {
+    // Try permute Chk2 and coalesce
+    R1 = MemRange::merge(Chk1.first, Chk2.second, SE, PSSA);
+    if (!R1)
+      return None;
+    R2 = MemRange::merge(Chk1.second, Chk2.first, SE, PSSA);
+    if (!R2)
+      return None;
+  } else {
+    R2 = MemRange::merge(Chk1.second, Chk2.second, SE, PSSA);
+    if (!R2)
+      return None;
+  }
   return DepCondition::ifDisjoint(*R1, *R2);
 }
 
@@ -307,8 +391,8 @@ Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
   if (Dep && Dep->isOrdered()) {
     // FIXME: in some trivial cases we know for sure that I1 depends on I2
     // (e.g., A[i] and A[i]), report DepCondition::always() in those cases.
-    return DepCondition::ifDisjoint(MemRange::get(I1, SE),
-                                    MemRange::get(I2, SE));
+    return DepCondition::ifDisjoint(MemRange::get(I1, SE, PSSA),
+                                    MemRange::get(I2, SE, PSSA));
   }
   return None;
 }
