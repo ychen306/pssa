@@ -57,8 +57,9 @@ static Optional<MemRange> promoteTo(const MemRange &R, VLoop *VL,
   return MaybeR;
 }
 
-Optional<MemRange> MemRange::merge(const MemRange &OrigR1, const MemRange &OrigR2,
-                                   ScalarEvolution &SE, PredicatedSSA &PSSA) {
+Optional<MemRange> MemRange::merge(const MemRange &OrigR1,
+                                   const MemRange &OrigR2, ScalarEvolution &SE,
+                                   PredicatedSSA &PSSA) {
   auto *VL = nearestCommonParent(OrigR1.ParentLoop, OrigR2.ParentLoop);
   auto MaybeR1 = promoteTo(OrigR1, VL, SE, PSSA);
   if (!MaybeR1)
@@ -68,9 +69,6 @@ Optional<MemRange> MemRange::merge(const MemRange &OrigR1, const MemRange &OrigR
     return None;
   auto &R1 = *MaybeR1;
   auto &R2 = *MaybeR2;
-
-  //if (R1.ParentLoop != R2.ParentLoop)
-  //  return None;
 
   auto *Base1 = R1.Base;
   auto *Base2 = R2.Base;
@@ -111,7 +109,8 @@ static const SCEV *getAdd(const SCEV *A, const SCEV *B, ScalarEvolution &SE) {
   auto *Ty = A->getType();
   if (Ty->getIntegerBitWidth() < B->getType()->getIntegerBitWidth())
     Ty = B->getType();
-  return SE.getAddExpr(SE.getNoopOrZeroExtend(A, Ty), SE.getNoopOrZeroExtend(B, Ty));
+  return SE.getAddExpr(SE.getNoopOrZeroExtend(A, Ty),
+                       SE.getNoopOrZeroExtend(B, Ty));
 }
 
 static const SCEV *getMul(const SCEV *A, const SCEV *B, ScalarEvolution &SE) {
@@ -120,7 +119,8 @@ static const SCEV *getMul(const SCEV *A, const SCEV *B, ScalarEvolution &SE) {
   auto *Ty = A->getType();
   if (Ty->getIntegerBitWidth() < B->getType()->getIntegerBitWidth())
     Ty = B->getType();
-  return SE.getMulExpr(SE.getNoopOrZeroExtend(A, Ty), SE.getNoopOrZeroExtend(B, Ty));
+  return SE.getMulExpr(SE.getNoopOrZeroExtend(A, Ty),
+                       SE.getNoopOrZeroExtend(B, Ty));
 }
 
 Optional<MemRange> MemRange::promote(ScalarEvolution &SE, PredicatedSSA &PSSA) {
@@ -150,7 +150,8 @@ Optional<MemRange> MemRange::promote(ScalarEvolution &SE, PredicatedSSA &PSSA) {
     return None;
 
   auto *BackedgeTakenCount = SE.getBackedgeTakenCount(L);
-  auto *TripCount = getAdd(SE.getOne(BackedgeTakenCount->getType()), BackedgeTakenCount, SE);
+  auto *TripCount =
+      getAdd(SE.getOne(BackedgeTakenCount->getType()), BackedgeTakenCount, SE);
   return MemRange{BaseAR->getStart(),
                   getAdd(getMul(TripCount, Step, SE), Size, SE),
                   ParentLoop->getParent()};
@@ -158,7 +159,8 @@ Optional<MemRange> MemRange::promote(ScalarEvolution &SE, PredicatedSSA &PSSA) {
 
 Optional<DepCondition> DepCondition::coalesce(const DepCondition &Cond1,
                                               const DepCondition &Cond2,
-                                              ScalarEvolution &SE, PredicatedSSA &PSSA) {
+                                              ScalarEvolution &SE,
+                                              PredicatedSSA &PSSA) {
   if (Cond1 == Cond2)
     return Cond1;
 
@@ -728,6 +730,42 @@ static bool haveSameParent(ArrayRef<VLoop *> Loops) {
       return false;
   return true;
 };
+
+raw_ostream &operator<<(raw_ostream &OS, const DepCondition &DepCond) {
+  if (DepCond.isDisjoint()) {
+    auto [R1, R2] = DepCond.getRanges();
+    OS << R1 << " DISJOINT WITH " << R2;
+  } else {
+    OS << *DepCond.getCondition();
+  }
+  return OS;
+}
+
+void ConditionSetTracker::add(const DepCondition &DepCond) {
+  ConditionSet *Set = nullptr;
+  for (auto &CS : CondSets) {
+    if (Optional<DepCondition> Coalesced =
+            DepCondition::coalesce(CS.DepCond, DepCond, SE, PSSA)) {
+      CS.DepCond = *Coalesced;
+      Set = &CS;
+      break;
+    }
+  }
+
+  // If we can't coalesce, just create a singleton set
+  if (!Set)
+    Set = newSet(DepCond);
+  // Forward the condition to the set
+  CondToSetMap[DepCond] = Set;
+}
+
+const DepCondition &
+ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) const {
+  auto It = CondToSetMap.find(DepCond);
+  if (It != CondToSetMap.end())
+    return It->second->DepCond;
+  return DepCond;
+}
 
 bool findNecessaryDeps(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
                        ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,

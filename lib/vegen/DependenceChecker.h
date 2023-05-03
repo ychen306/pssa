@@ -5,6 +5,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include <map>
+#include <list>
 
 namespace llvm {
 class DependenceInfo;
@@ -85,6 +86,7 @@ struct MemRange {
 };
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const MemRange &);
 
+// TODO: pull the dep condition stuff to a separate file
 class DepCondition {
   llvm::Optional<std::pair<MemRange, MemRange>> Disjoint;
   const ControlCondition *C;
@@ -115,6 +117,25 @@ public:
   bool isConditional() const { return !isUnconditional(); }
 };
 
+template <> struct llvm::DenseMapInfo<DepCondition> {
+  static DepCondition getEmptyKey() { return DepCondition::always(); }
+  static DepCondition getTombstoneKey() {
+    return DepCondition::ifDisjoint({nullptr, nullptr, nullptr},
+                                    {nullptr, nullptr, nullptr});
+  }
+  static unsigned getHashValue(const DepCondition &DepCond) {
+    if (DepCond.isDisjoint()) {
+      auto [R1, R2] = DepCond.getRanges();
+      return llvm::hash_combine(true, R1.Base, R1.Size, R1.ParentLoop, R2.Base,
+                                R2.Size, R2.ParentLoop);
+    }
+    return llvm::hash_combine(false, DepCond.getCondition());
+  }
+  static bool isEqual(const DepCondition &DC1, const DepCondition &DC2) {
+    return DC1 == DC2;
+  }
+};
+
 class DepKind {
   llvm::SmallVector<DepCondition> Conds;
 
@@ -130,6 +151,29 @@ public:
 
   operator bool() const { return !Conds.empty(); }
   llvm::ArrayRef<DepCondition> getConds() const { return Conds; }
+};
+
+llvm::raw_ostream &operator<<(llvm::raw_ostream &, const DepCondition &);
+
+struct ConditionSet {
+  DepCondition DepCond; // union of all of the conditions
+
+  ConditionSet(const DepCondition &DepCond) : DepCond(DepCond) {}
+};
+
+class ConditionSetTracker {
+  llvm::ScalarEvolution &SE;
+  PredicatedSSA &PSSA;
+  std::list<ConditionSet> CondSets;
+  llvm::DenseMap<DepCondition, ConditionSet *> CondToSetMap;
+  ConditionSet *newSet(const DepCondition &DepCond) {
+    return &*CondSets.emplace(CondSets.end(), DepCond);
+  }
+public:
+  ConditionSetTracker(llvm::ScalarEvolution &SE, PredicatedSSA &PSSA) : SE(SE), PSSA(PSSA) {}
+  void add(const DepCondition &);
+  // If `DepCond` is coalesced with some other condition(s), return the coalesced condition
+  const DepCondition &getCoalescedCondition(const DepCondition &DepCond) const;
 };
 
 class DependenceChecker {

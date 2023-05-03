@@ -14,10 +14,10 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Analysis/ScalarEvolutionExpressions.h"
 
 using namespace llvm;
 
@@ -423,33 +423,25 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   if (FindConditionalDeps) {
     for (auto *P : Packs) {
       DenseMap<DepEdge, std::vector<DepCondition>> DepEdges;
-      bool CanSpeculate = findNecessaryDeps(DepEdges, P->values(), PSSA, DepChecker);
+      bool CanSpeculate =
+          findNecessaryDeps(DepEdges, P->values(), PSSA, DepChecker);
       if (CanSpeculate) {
-        // See if we can coalesce everything into just one condition
-        Optional<DepCondition> Cond = DepEdges.begin()->second.front();
+        ConditionSetTracker CST(SE, PSSA);
+        for (auto [Edge, DepConds] : DepEdges)
+          for (auto &DepCond : DepConds)
+            CST.add(DepCond);
+
         for (auto [Edge, DepConds] : DepEdges) {
           auto [Src, Dst] = Edge;
           errs() << "Cut edge: " << Src << " -> " << Dst << '\n';
           for (auto DepCond : DepConds) {
             if (DepCond.isDisjoint()) {
               auto [R1, R2] = DepCond.getRanges();
-              //errs() << "... R1.Base = " << *R1.Base << '\n';
-              //auto *AR = cast<SCEVAddRecExpr>(R1.Base);
-              //errs() << "... scev start = " << *AR->getStart() << '\n';
-              //errs() << "... scev step = " << *AR->getStepRecurrence(SE) << '\n';
-              //errs() << "... scev loop = " << *AR->getLoop() << '\n';
-              //if (auto Promoted = R1.promote(SE, PSSA))
-              //  errs() << "..... promoted r1 = " << *Promoted << '\n';
               errs() << "\tIF " << R1 << " DISJOINT WITH " << R2 << '\n';
             }
-            if (Cond) {
-              Cond = DepCondition::coalesce(*Cond, DepCond, SE, PSSA);
-            }
+            errs() << "\t coalesced condition: "
+                   << CST.getCoalescedCondition(DepCond) << '\n';
           }
-        }
-        if (Cond && Cond->isDisjoint()) {
-          auto [R1, R2] = Cond->getRanges();
-          errs() << "COALESCED RANGE CHECK = " << R1 << " DISJOINT WITH " << R2 << '\n';
         }
       }
     }
