@@ -7,6 +7,7 @@
 #include "Reduction.h"
 #include "pssa/Lower.h"
 #include "pssa/PSSA.h"
+#include "Versioning.h"
 #include "vegen/Lower.h"
 #include "vegen/Pack.h"
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -421,6 +422,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   DependenceChecker DepChecker(PSSA, DI, AA, LI, SE, &DeadInsts);
 
   if (FindConditionalDeps) {
+    Versioner::VersioningMapTy VersioningMap;
     for (auto *P : Packs) {
       DenseMap<DepEdge, std::vector<DepCondition>> DepEdges;
       bool CanSpeculate =
@@ -430,6 +432,17 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
         for (auto [Edge, DepConds] : DepEdges)
           for (auto &DepCond : DepConds)
             CST.add(DepCond);
+
+        DenseSet<DepCondition> UniqueConds;
+        for (auto &DepConds : llvm::make_second_range(DepEdges)) {
+          for (auto &DepCond : DepConds)
+            UniqueConds.insert(CST.getCoalescedCondition(DepCond));
+        }
+
+        // FIXME:
+        // this is wrong when we want to pack instructions across loops
+        for (auto *I : P->values())
+          VersioningMap.try_emplace(I, UniqueConds.begin(), UniqueConds.end());
 
         for (auto [Edge, DepConds] : DepEdges) {
           auto [Src, Dst] = Edge;
@@ -443,8 +456,11 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
                    << CST.getCoalescedCondition(DepCond) << '\n';
           }
         }
+
       }
     }
+    Versioner TheVersioner(PSSA, SE, VersioningMap);
+    TheVersioner.run();
     return PreservedAnalyses::all();
   }
 
