@@ -1,12 +1,13 @@
 #include "Versioning.h"
 #include "DependenceChecker.h"
+#include "pssa/Inserter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 
 using namespace llvm;
 
 // Expand Pred before specified item
-static Value *emitSCEVPred(SCEVPredicate *Pred, VLoop *VL,
+static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
                            const ControlCondition *C,
                            VLoop::ItemIterator InsertBefore,
                            ScalarEvolution &SE, const DataLayout &DL) {
@@ -39,11 +40,12 @@ static Value *emitCondition(const DepCondition &DepCond, VLoop *VL,
     auto [R1, R2] = DepCond.getRanges();
     auto *End1 = SE.getAddExpr(R1.Base, R1.Size);
     auto *End2 = SE.getAddExpr(R2.Base, R2.Size);
-    // Case 1: R1 is left of R2; i.e., End1 < Begin2
-    auto *Left = SE.getComparePredicate(ICmpInst::ICMP_ULT, End2, R2.Base);
-    auto *Right = SE.getComparePredicate(ICmpInst::ICMP_ULT, End1, R2.Base);
-    SCEVUnionPredicate Disjoint({Left, Right});
-    return emitSCEVPred(&Disjoint, VL, C, InsertBefore, SE, DL);
+    // Case 1: R1 is left of R2; i.e., End1 < Begin2.
+    auto *Left = emitSCEVPred(SE.getComparePredicate(ICmpInst::ICMP_ULT, End1, R2.Base), VL, C, InsertBefore, SE, DL);
+    // Case 2: R2 is left of R1; i.e., End2 < Begin1.
+    auto *Right = emitSCEVPred(SE.getComparePredicate(ICmpInst::ICMP_ULT, End2, R1.Base), VL, C, InsertBefore, SE, DL);
+    Inserter Insert(VL, C, InsertBefore);
+    return Insert.CreateBinOp(Instruction::Or, Left, Right);
   }
 
   llvm_unreachable("not handling control conditions right now");
