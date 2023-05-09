@@ -5,9 +5,9 @@
 #include "Matcher.h"
 #include "Reducer.h"
 #include "Reduction.h"
+#include "Versioning.h"
 #include "pssa/Lower.h"
 #include "pssa/PSSA.h"
-#include "Versioning.h"
 #include "vegen/Lower.h"
 #include "vegen/Pack.h"
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -427,41 +427,40 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       DenseMap<DepEdge, std::vector<DepCondition>> DepEdges;
       bool CanSpeculate =
           findNecessaryDeps(DepEdges, P->values(), PSSA, DepChecker);
-      if (CanSpeculate) {
-        ConditionSetTracker CST(SE, PSSA);
-        for (auto [Edge, DepConds] : DepEdges)
-          for (auto &DepCond : DepConds)
-            CST.add(DepCond);
+      if (!CanSpeculate)
+        return PreservedAnalyses::all();
 
-        DenseSet<DepCondition> UniqueConds;
-        for (auto &DepConds : llvm::make_second_range(DepEdges)) {
-          for (auto &DepCond : DepConds)
-            UniqueConds.insert(CST.getCoalescedCondition(DepCond));
-        }
+      ConditionSetTracker CST(SE, PSSA);
+      for (auto [Edge, DepConds] : DepEdges)
+        for (auto &DepCond : DepConds)
+          CST.add(DepCond);
 
-        // FIXME:
-        // this is wrong when we want to pack instructions across loops
-        for (auto *I : P->values())
-          VersioningMap.try_emplace(I, UniqueConds.begin(), UniqueConds.end());
+      DenseSet<DepCondition> UniqueConds;
+      for (auto &DepConds : llvm::make_second_range(DepEdges)) {
+        for (auto &DepCond : DepConds)
+          UniqueConds.insert(CST.getCoalescedCondition(DepCond));
+      }
 
-        for (auto [Edge, DepConds] : DepEdges) {
-          auto [Src, Dst] = Edge;
-          errs() << "Cut edge: " << Src << " -> " << Dst << '\n';
-          for (auto DepCond : DepConds) {
-            if (DepCond.isDisjoint()) {
-              auto [R1, R2] = DepCond.getRanges();
-              errs() << "\tIF " << R1 << " DISJOINT WITH " << R2 << '\n';
-            }
-            errs() << "\t coalesced condition: "
-                   << CST.getCoalescedCondition(DepCond) << '\n';
+      // FIXME:
+      // this is wrong when we want to pack instructions across loops
+      for (auto *I : P->values())
+        VersioningMap.try_emplace(I, UniqueConds.begin(), UniqueConds.end());
+
+      for (auto [Edge, DepConds] : DepEdges) {
+        auto [Src, Dst] = Edge;
+        errs() << "Cut edge: " << Src << " -> " << Dst << '\n';
+        for (auto DepCond : DepConds) {
+          if (DepCond.isDisjoint()) {
+            auto [R1, R2] = DepCond.getRanges();
+            errs() << "\tIF " << R1 << " DISJOINT WITH " << R2 << '\n';
           }
+          errs() << "\t coalesced condition: "
+                 << CST.getCoalescedCondition(DepCond) << '\n';
         }
-
       }
     }
     Versioner TheVersioner(PSSA, SE, VersioningMap);
     TheVersioner.run();
-    return PreservedAnalyses::all();
   }
 
   // Insert all of the loose instructions resulting from

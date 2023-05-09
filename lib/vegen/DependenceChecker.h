@@ -83,6 +83,10 @@ struct MemRange {
   bool operator==(const MemRange &Other) const {
     return Base == Other.Base && Size == Other.Size;
   }
+  // Get a total order for things like std::set
+  bool operator<(const MemRange &Other) const {
+    return std::tie(Base, Size, ParentLoop) < std::tie(Other.Base, Other.Size, Other.ParentLoop);
+  }
 };
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const MemRange &);
 
@@ -106,6 +110,18 @@ public:
                                                PredicatedSSA &);
   bool operator==(const DepCondition &Other) const {
     return Disjoint == Other.Disjoint && C == Other.C;
+  }
+  bool operator<(const DepCondition &Other) const {
+    // Order conflict checks before control conditions
+    if (isDisjoint() && !Other.isDisjoint())
+      return true;
+    if (!isDisjoint() && Other.isDisjoint())
+      return false;
+    if (isDisjoint()) {
+      assert(Other.isDisjoint());
+      return getRanges() < Other.getRanges();
+    }
+    return getCondition() < Other.getCondition();
   }
   bool isDisjoint() const { return Disjoint.hasValue(); }
   const ControlCondition *getCondition() const { return C; }
