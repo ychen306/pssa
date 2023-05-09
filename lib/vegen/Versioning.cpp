@@ -1,6 +1,7 @@
 #include "Versioning.h"
 #include "DependenceChecker.h"
 #include "pssa/Inserter.h"
+#include "pssa/VectorHashInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 
@@ -41,9 +42,13 @@ static Value *emitCondition(const DepCondition &DepCond, VLoop *VL,
     auto *End1 = SE.getAddExpr(R1.Base, R1.Size);
     auto *End2 = SE.getAddExpr(R2.Base, R2.Size);
     // Case 1: R1 is left of R2; i.e., End1 < Begin2.
-    auto *Left = emitSCEVPred(SE.getComparePredicate(ICmpInst::ICMP_ULT, End1, R2.Base), VL, C, InsertBefore, SE, DL);
+    auto *Left =
+        emitSCEVPred(SE.getComparePredicate(ICmpInst::ICMP_ULT, End1, R2.Base),
+                     VL, C, InsertBefore, SE, DL);
     // Case 2: R2 is left of R1; i.e., End2 < Begin1.
-    auto *Right = emitSCEVPred(SE.getComparePredicate(ICmpInst::ICMP_ULT, End2, R1.Base), VL, C, InsertBefore, SE, DL);
+    auto *Right =
+        emitSCEVPred(SE.getComparePredicate(ICmpInst::ICMP_ULT, End2, R1.Base),
+                     VL, C, InsertBefore, SE, DL);
     Inserter Insert(VL, C, InsertBefore);
     return Insert.CreateBinOp(Instruction::Or, Left, Right);
   }
@@ -95,8 +100,82 @@ void Versioner::runOnLoop(VLoop *VL) {
     MaterializedConds[DepCond] = V;
   }
 
-  // Do the actual versioning
+  llvm::sort(ItemsToVersion, ComesBefore);
+
+  std::map<std::vector<DepCondition>, Value *> CondSets;
+  // Mapping an item to a single boolean flags indicating when it should be
+  // versioned
+  DenseMap<Item, Value *, ItemHashInfo> VersioningFlags;
+  // Some items require multiple conditions, emit code to AND them together
   for (auto Item : ItemsToVersion) {
-    ArrayRef<DepCondition> DepConds = VersioningMap.find(Item)->second;
+    auto &DepConds = VersioningMap.find(Item)->second;
+    auto [It, Inserted] = CondSets.try_emplace(DepConds);
+    if (!Inserted) {
+      if (DepConds.size() == 1) {
+        It->second = MaterializedConds.lookup(DepConds.front());
+      } else {
+        llvm_unreachable("not handling multiple conditions *right now*");
+      }
+    }
+    VersioningFlags[Item] = It->second;
+  }
+
+  // Clone the instructions/loops
+  DenseMap<Instruction *, Instruction *> OrigToCloneMap;
+  // Join the clone and original instructions with a phi to deal with external uses
+  DenseMap<Instruction *, PHINode *> VersioningPhis;
+  for (auto Item : ItemsToVersion) {
+    if (auto *I = Item.asInstruction()) {
+      auto *I2 = I->clone();
+      CloneToOrigMap[I2] = I;
+      OrigToCloneMap[I] = I2;
+      auto *C = VL->getInstCond(I);
+      auto *Flag = VersioningFlags.lookup(Item);
+      auto *Success = PSSA.getAnd(C, Flag, true);
+      auto *Fail = PSSA.getAnd(C, Flag, false);
+      auto It = VL->toIterator(I);
+      VL->insert(I2, Fail, It);
+      VL->setInstCond(I, Success);
+      Inserter Insert(VL, C, std::next(It));
+      Insert.createPhi({I, I2}, {Success, Fail});
+    } else {
+      llvm_unreachable("not versioning loops for now");
+    }
+  }
+
+  // Rewrire the use of the cloned instructions
+  DenseSet<PHINode *> UsedVersioningPhis;
+  for (auto Item : ItemsToVersion) {
+    auto *Flag = VersioningFlags.lookup(Item);
+    if (auto *I = Item.asInstruction()) {
+      auto *Clone = OrigToCloneMap.lookup(I);
+      assert(Clone);
+      for (Use &U : I->uses()) {
+        auto *UserI = cast<Instruction>(U.getUser());
+        auto *UserVL = PSSA.getLoopForInst(UserI);
+
+        // Ignore if the user is a clone
+        if (CloneToOrigMap.count(UserI))
+          continue;
+
+        if (UserVL == VL && VersioningFlags.lookup(UserI) == Flag) {
+          // If the use comes from another instruction that gets versioned under
+          // the same condition we just change that instruction (and its clone) to use (the clone of) I
+          auto *ClonedUser = OrigToCloneMap.lookup(UserI);
+          assert(ClonedUser);
+          ClonedUser->getOperandUse(U.getOperandNo()).set(Clone);
+        } else {
+          // Otherwise, we should change it to use the verioning phi
+          auto *Phi = VersioningPhis.lookup(I);
+          U.set(Phi);
+          UsedVersioningPhis.insert(Phi);
+          // If the user is cloned, change the clone to also use the phi
+          if (auto *ClonedUser = OrigToCloneMap.lookup(UserI))
+            ClonedUser->getOperandUse(U.getOperandNo()).set(Phi);
+        }
+      }
+    } else {
+      llvm_unreachable("not versioning loops for now");
+    }
   }
 }
