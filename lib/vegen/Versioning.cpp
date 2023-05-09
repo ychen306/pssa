@@ -110,7 +110,7 @@ void Versioner::runOnLoop(VLoop *VL) {
   for (auto Item : ItemsToVersion) {
     auto &DepConds = VersioningMap.find(Item)->second;
     auto [It, Inserted] = CondSets.try_emplace(DepConds);
-    if (!Inserted) {
+    if (Inserted) {
       if (DepConds.size() == 1) {
         It->second = MaterializedConds.lookup(DepConds.front());
       } else {
@@ -130,6 +130,7 @@ void Versioner::runOnLoop(VLoop *VL) {
       CloneToOrigMap[I2] = I;
       OrigToCloneMap[I] = I2;
       auto *C = VL->getInstCond(I);
+      assert(VersioningFlags.count(Item));
       auto *Flag = VersioningFlags.lookup(Item);
       auto *Success = PSSA.getAnd(C, Flag, true);
       auto *Fail = PSSA.getAnd(C, Flag, false);
@@ -137,7 +138,7 @@ void Versioner::runOnLoop(VLoop *VL) {
       VL->insert(I2, Fail, It);
       VL->setInstCond(I, Success);
       Inserter Insert(VL, C, std::next(It));
-      Insert.createPhi({I, I2}, {Success, Fail});
+      VersioningPhis[I] = Insert.createPhi({I, I2}, {Success, Fail});
     } else {
       llvm_unreachable("not versioning loops for now");
     }
@@ -167,6 +168,7 @@ void Versioner::runOnLoop(VLoop *VL) {
         } else {
           // Otherwise, we should change it to use the verioning phi
           auto *Phi = VersioningPhis.lookup(I);
+          assert(Phi);
           U.set(Phi);
           UsedVersioningPhis.insert(Phi);
           // If the user is cloned, change the clone to also use the phi
@@ -177,5 +179,13 @@ void Versioner::runOnLoop(VLoop *VL) {
     } else {
       llvm_unreachable("not versioning loops for now");
     }
+  }
+
+  // Remove the dead versioning phis
+  for (auto *Phi : llvm::make_second_range(VersioningPhis)) {
+    if (UsedVersioningPhis.count(Phi))
+      continue;
+    Phi->dropAllReferences();
+    VL->erase(Phi);
   }
 }
