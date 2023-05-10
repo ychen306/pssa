@@ -423,6 +423,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
 
   if (FindConditionalDeps) {
     Versioner::VersioningMapTy VersioningMap;
+    DenseSet<DepEdge> DepEdgesToIgnore;
     for (auto *P : Packs) {
       DenseMap<DepEdge, std::vector<DepCondition>> DepEdges;
       bool CanSpeculate =
@@ -430,10 +431,16 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       if (!CanSpeculate)
         return PreservedAnalyses::all();
 
+      // Don't need to cut edges
+      if (DepEdges.empty())
+        continue;
+
       ConditionSetTracker CST(SE, PSSA);
-      for (auto [Edge, DepConds] : DepEdges)
+      for (auto [Edge, DepConds] : DepEdges) {
+        DepEdgesToIgnore.insert(Edge);
         for (auto &DepCond : DepConds)
           CST.add(DepCond);
+      }
 
       DenseSet<DepCondition> UniqueConds;
       for (auto &DepConds : llvm::make_second_range(DepEdges)) {
@@ -459,8 +466,14 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
         }
       }
     }
-    Versioner TheVersioner(PSSA, SE, VersioningMap);
+
+    Versioner TheVersioner(PSSA, DI, AA, LI, SE, VersioningMap);
     TheVersioner.run();
+    bool Ok =
+        lower(Packs, PSSA, DI, AA, LI, SE, &TheVersioner, &DepEdgesToIgnore);
+    assert(Ok);
+    lowerPSSAToLLVM(&F, PSSA);
+    return PreservedAnalyses::none();
   }
 
   // Insert all of the loose instructions resulting from

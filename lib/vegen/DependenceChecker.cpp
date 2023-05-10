@@ -1,6 +1,7 @@
 #include "DependenceChecker.h"
 #include "PackSet.h"
 #include "Reduction.h"
+#include "Versioning.h"
 #include "ortools/graph/max_flow.h"
 #include "pssa/PSSA.h"
 #include "vegen/Pack.h"
@@ -291,6 +292,14 @@ static AliasResult::Kind isAliased(Instruction *I1, Instruction *I2,
   return AliasResult::NoAlias;
 }
 
+Instruction *DependenceChecker::getOriginal(Instruction *I) const {
+  if (!TheVersioner)
+    return I;
+  if (auto *Orig = TheVersioner->getOriginalIfCloned(I))
+    return Orig;
+  return I;
+}
+
 void DependenceChecker::processLoop(VLoop *VL) {
   if (Summaries.count(VL))
     return;
@@ -367,6 +376,10 @@ Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
   // is C1 and C2 cannot be true simultaneously then there's no dep.
   if (isExclusive(C1, C2))
     return None;
+
+  // If the instructions are versioned, get their original copy so that AA and DI can understand
+  I1 = getOriginal(I1);
+  I2 = getOriginal(I2);
 
   auto *L1 = LI.getLoopFor(I1->getParent());
   auto *L2 = LI.getLoopFor(I2->getParent());
@@ -466,7 +479,6 @@ bool DependenceChecker::depends(const Item &It1, const Item &It2,
 
   for (auto *I : Summaries[VL2].MemoryInsts)
     if (getDepKind(I1, I)) {
-      // TODO: deal with inter-loop conditional dependences
       if (DepEdges)
         DepEdges->try_emplace({It2, It1}, DepCondition::always());
       return true;
@@ -531,6 +543,9 @@ void DependencesFinder::visitCond(const ControlCondition *C,
 }
 
 void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
+  if (DepEdgesToIgnore && DepEdgesToIgnore->count({Src, It}))
+    return;
+
   if (!Processing.insert(It).second) {
     FoundCycle = true;
     return;
@@ -603,7 +618,8 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
 
 bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
                        VLoop *VL, PredicatedSSA &PSSA,
-                       DependenceChecker &DepChecker, const PackSet *Packs) {
+                       DependenceChecker &DepChecker, const PackSet *Packs,
+                       const DenseSet<DepEdge> *DepEdgesToIgnore) {
   assert(all_of(Items,
                 [&](const Item &It) { return PSSA.getLoopForItem(It) == VL; }));
   auto ComesBefore = [VL](const Item &It1, const Item &It2) {
@@ -611,7 +627,7 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
   };
   Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
 
-  DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker, Packs);
+  DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker, Packs, DepEdgesToIgnore);
   bool FoundCycle = false;
   for (auto It : Items)
     FoundCycle |= DepFinder.findDep(It);
