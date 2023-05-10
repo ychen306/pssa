@@ -4,8 +4,8 @@
 #include "pssa/PSSA.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
-#include <map>
 #include <list>
+#include <map>
 
 namespace llvm {
 class DependenceInfo;
@@ -17,6 +17,7 @@ class SCEV;
 } // namespace llvm
 
 class PackSet;
+class Versioner;
 
 bool mayReadOrWriteMemory(llvm::Instruction *I);
 bool mayReadOrWriteMemory(const Item &It);
@@ -85,7 +86,8 @@ struct MemRange {
   }
   // Get a total order for things like std::set
   bool operator<(const MemRange &Other) const {
-    return std::tie(Base, Size, ParentLoop) < std::tie(Other.Base, Other.Size, Other.ParentLoop);
+    return std::tie(Base, Size, ParentLoop) <
+           std::tie(Other.Base, Other.Size, Other.ParentLoop);
   }
 };
 llvm::raw_ostream &operator<<(llvm::raw_ostream &, const MemRange &);
@@ -185,10 +187,13 @@ class ConditionSetTracker {
   ConditionSet *newSet(const DepCondition &DepCond) {
     return &*CondSets.emplace(CondSets.end(), DepCond);
   }
+
 public:
-  ConditionSetTracker(llvm::ScalarEvolution &SE, PredicatedSSA &PSSA) : SE(SE), PSSA(PSSA) {}
+  ConditionSetTracker(llvm::ScalarEvolution &SE, PredicatedSSA &PSSA)
+      : SE(SE), PSSA(PSSA) {}
   void add(const DepCondition &);
-  // If `DepCond` is coalesced with some other condition(s), return the coalesced condition
+  // If `DepCond` is coalesced with some other condition(s), return the
+  // coalesced condition
   const DepCondition &getCoalescedCondition(const DepCondition &DepCond) const;
 };
 
@@ -204,6 +209,7 @@ class DependenceChecker {
   llvm::ScalarEvolution &SE;
 
   const llvm::DenseSet<llvm::Instruction *> *DeadInsts;
+  const Versioner *TheVersioner;
 
   bool isLive(llvm::Instruction *I) const {
     bool IsDead = DeadInsts && DeadInsts->count(I);
@@ -219,13 +225,18 @@ class DependenceChecker {
   llvm::Optional<DepCondition> getDepKind(llvm::Instruction *,
                                           llvm::Instruction *);
 
+  // If I is versioned return the original instruction, otherwise return I
+  llvm::Instruction *getOriginal(llvm::Instruction *I) const;
+
 public:
   // DeadInsts is an optional set of instructions known to be dead
   DependenceChecker(PredicatedSSA &PSSA, llvm::DependenceInfo &DI,
                     llvm::AAResults &AA, llvm::LoopInfo &LI,
                     llvm::ScalarEvolution &SE,
-                    llvm::DenseSet<llvm::Instruction *> *DeadInsts = nullptr)
-      : PSSA(PSSA), DI(DI), AA(AA), LI(LI), SE(SE), DeadInsts(DeadInsts) {}
+                    llvm::DenseSet<llvm::Instruction *> *DeadInsts = nullptr,
+                    Versioner *TheVersioner = nullptr)
+      : PSSA(PSSA), DI(DI), AA(AA), LI(LI), SE(SE), DeadInsts(DeadInsts),
+        TheVersioner(TheVersioner) {}
 
   void invalidate(VLoop *VL) { Summaries.erase(VL); }
 
@@ -246,6 +257,8 @@ class DependencesFinder {
   PredicatedSSA *PSSA;
   DependenceChecker &DepChecker;
   const PackSet *Packs;
+  const llvm::DenseSet<DepEdge> *DepEdgesToIgnore;
+
   llvm::DenseSet<Item, ItemHashInfo> Visited, Processing;
   llvm::DenseSet<const ControlCondition *> VisitedConds;
   void visit(Item, bool AddDep, const DepNode &Src);
@@ -257,14 +270,17 @@ public:
   // the deps of some instructions' to be checked together
   DependencesFinder(llvm::SmallVectorImpl<Item> &Deps, Item Earliest, VLoop *VL,
                     DependenceChecker &DepChecker,
-                    const PackSet *Packs = nullptr)
+                    const PackSet *Packs = nullptr,
+                    const llvm::DenseSet<DepEdge> *DepEdgesToIgnore = nullptr)
       : Deps(Deps), FoundCycle(false), Earliest(Earliest), VL(VL),
-        PSSA(VL->getPSSA()), DepChecker(DepChecker), Packs(Packs) {}
+        PSSA(VL->getPSSA()), DepChecker(DepChecker), Packs(Packs),
+        DepEdgesToIgnore(DepEdgesToIgnore) {}
 
   // Find all dependencies of `It` that occurs *after* `Earliest`.
-  // Return if there are dependence cycles
-  bool findDep(Item It) {
-    visit(It, false /*don't mark the item itself as a dep*/, It);
+  // Return if there are dependence cycles.
+  // Set AddDep to true is you want to add `It` as a dep.
+  bool findDep(Item It, bool AddDep = false) {
+    visit(It, AddDep, It);
     return FoundCycle;
   }
 
@@ -275,10 +291,11 @@ public:
 
 // Find the dependences of Items but scan no further than the earliest Items
 // Also report if there's any circular dep
-bool findInBetweenDeps(llvm::SmallVectorImpl<Item> &Deps,
-                       llvm::ArrayRef<Item> Items, VLoop *VL,
-                       PredicatedSSA &PSSA, DependenceChecker &DepChecker,
-                       const PackSet *Packs = nullptr);
+bool findInBetweenDeps(
+    llvm::SmallVectorImpl<Item> &Deps, llvm::ArrayRef<Item> Items, VLoop *VL,
+    PredicatedSSA &PSSA, DependenceChecker &DepChecker,
+    const PackSet *Packs = nullptr,
+    const llvm::DenseSet<DepEdge> *DepEdgesToIgnore = nullptr);
 
 // Find conditional dependences that, once removed, will make the instructions
 // independent Return true if it's possible (and false if no such set of deps

@@ -1,5 +1,6 @@
 #include "Versioning.h"
 #include "DependenceChecker.h"
+#include "ItemMover.h"
 #include "pssa/Inserter.h"
 #include "pssa/VectorHashInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
@@ -11,6 +12,7 @@ using namespace llvm;
 static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
                            const ControlCondition *C,
                            VLoop::ItemIterator InsertBefore,
+                           DependenceChecker &DepChecker,
                            ScalarEvolution &SE, const DataLayout &DL) {
   // Create a dummy basic for the expander to emit code
   auto &Ctx = SE.getContext();
@@ -21,12 +23,37 @@ static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
   SCEVExpander Exp(SE, DL, "scev.pred");
   auto *Expanded = Exp.expandCodeForPredicate(Pred, End);
   End->eraseFromParent();
+
+  // The predicate computation may use instructions that show up before `InsertBefore`.
+  // In which case, we need to move those instructions before `InsertBefore`
+  if (InsertBefore != VL->item_end()) {
+    // Find dependences of the pred computation that occur *after* InsertBefore
+    SmallVector<Item> Deps;
+    DependencesFinder DepFinder(Deps, *InsertBefore, VL, DepChecker);
+    for (auto &I : *BB) {
+      for (auto *O : I.operand_values()) {
+        auto *OI = dyn_cast<Instruction>(O);
+        if (!OI || OI->getParent() == BB)
+          continue;
+        bool FoundCycle = DepFinder.findDep(OI, true/*add OI as a dep*/);
+        (void)FoundCycle;
+        assert(!FoundCycle);
+      }
+    }
+    // Move the deps before InsertBefore
+    ItemMover Mover(VL);
+    for (auto Dep : Deps)
+      Mover.remove(Dep);
+    Mover.reinsert(InsertBefore);
+  }
+
   // Move the expanded instruction into the PSSA
   SmallVector<Instruction *> Insts;
   for (auto &I : *BB) {
     VL->insert(&I, C, InsertBefore);
     Insts.push_back(&I);
   }
+
   for (auto *I : Insts)
     I->removeFromParent();
   BB->eraseFromParent();
@@ -36,19 +63,20 @@ static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
 static Value *emitCondition(const DepCondition &DepCond, VLoop *VL,
                             const ControlCondition *C,
                             VLoop::ItemIterator InsertBefore,
+                            DependenceChecker &DepChecker,
                             ScalarEvolution &SE, const DataLayout &DL) {
   if (DepCond.isDisjoint()) {
     auto [R1, R2] = DepCond.getRanges();
     auto *End1 = SE.getAddExpr(R1.Base, R1.Size);
     auto *End2 = SE.getAddExpr(R2.Base, R2.Size);
-    // Case 1: R1 is left of R2; i.e., End1 < Begin2.
+    // Case 1: R1 is left of R2; i.e., End1 < Begin2. Note that we are using the inverse predicate here because SCEVExpander flips the evaluation...
     auto *Left =
-        emitSCEVPred(SE.getComparePredicate(ICmpInst::ICMP_ULT, End1, R2.Base),
-                     VL, C, InsertBefore, SE, DL);
+        emitSCEVPred(SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT), End1, R2.Base),
+                     VL, C, InsertBefore, DepChecker, SE, DL);
     // Case 2: R2 is left of R1; i.e., End2 < Begin1.
     auto *Right =
-        emitSCEVPred(SE.getComparePredicate(ICmpInst::ICMP_ULT, End2, R1.Base),
-                     VL, C, InsertBefore, SE, DL);
+        emitSCEVPred(SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT), End2, R1.Base),
+                     VL, C, InsertBefore, DepChecker, SE, DL);
     Inserter Insert(VL, C, InsertBefore);
     return Insert.CreateBinOp(Instruction::Or, Left, Right);
   }
@@ -96,7 +124,7 @@ void Versioner::runOnLoop(VLoop *VL) {
       Conds.push_back(GetConditionForItem(Item));
     Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
     auto *V = emitCondition(DepCond, VL, getGreatestCommonCondition(Conds),
-                            VL->toIterator(Earliest), SE, DL);
+                            VL->toIterator(Earliest), DepChecker, SE, DL);
     MaterializedConds[DepCond] = V;
   }
 
@@ -122,8 +150,10 @@ void Versioner::runOnLoop(VLoop *VL) {
 
   // Clone the instructions/loops
   DenseMap<Instruction *, Instruction *> OrigToCloneMap;
-  // Join the clone and original instructions with a phi to deal with external uses
-  DenseMap<Instruction *, PHINode *> VersioningPhis;
+  // Join the clone and original instructions with a phi to deal with external
+  // uses
+  DenseSet<Instruction *> VersioningPhis;
+  DenseMap<Instruction *, Instruction *> InstToVersioningPhiMap;
   for (auto Item : ItemsToVersion) {
     if (auto *I = Item.asInstruction()) {
       auto *I2 = I->clone();
@@ -137,15 +167,20 @@ void Versioner::runOnLoop(VLoop *VL) {
       auto It = VL->toIterator(I);
       VL->insert(I2, Fail, It);
       VL->setInstCond(I, Success);
-      Inserter Insert(VL, C, std::next(It));
-      VersioningPhis[I] = Insert.createPhi({I, I2}, {Success, Fail});
+      if (I->hasNUsesOrMore(1)) {
+        Inserter Insert(VL, C, std::next(It));
+        auto *Phi = Insert.createPhi({I, I2}, {Success, Fail});
+        Phi->setName(I->getName() + ".ver");
+        VersioningPhis.insert(Phi);
+        InstToVersioningPhiMap[I] = Phi;
+      }
     } else {
       llvm_unreachable("not versioning loops for now");
     }
   }
 
   // Rewrire the use of the cloned instructions
-  DenseSet<PHINode *> UsedVersioningPhis;
+  DenseSet<Instruction *> UsedInstToVersioningPhiMap;
   for (auto Item : ItemsToVersion) {
     auto *Flag = VersioningFlags.lookup(Item);
     if (auto *I = Item.asInstruction()) {
@@ -159,18 +194,22 @@ void Versioner::runOnLoop(VLoop *VL) {
         if (CloneToOrigMap.count(UserI))
           continue;
 
+        if (VersioningPhis.count(UserI))
+          continue;
+
         if (UserVL == VL && VersioningFlags.lookup(UserI) == Flag) {
           // If the use comes from another instruction that gets versioned under
-          // the same condition we just change that instruction (and its clone) to use (the clone of) I
+          // the same condition we just change that instruction (and its clone)
+          // to use (the clone of) I
           auto *ClonedUser = OrigToCloneMap.lookup(UserI);
           assert(ClonedUser);
           ClonedUser->getOperandUse(U.getOperandNo()).set(Clone);
         } else {
           // Otherwise, we should change it to use the verioning phi
-          auto *Phi = VersioningPhis.lookup(I);
+          auto *Phi = InstToVersioningPhiMap.lookup(I);
           assert(Phi);
           U.set(Phi);
-          UsedVersioningPhis.insert(Phi);
+          UsedInstToVersioningPhiMap.insert(Phi);
           // If the user is cloned, change the clone to also use the phi
           if (auto *ClonedUser = OrigToCloneMap.lookup(UserI))
             ClonedUser->getOperandUse(U.getOperandNo()).set(Phi);
@@ -182,8 +221,8 @@ void Versioner::runOnLoop(VLoop *VL) {
   }
 
   // Remove the dead versioning phis
-  for (auto *Phi : llvm::make_second_range(VersioningPhis)) {
-    if (UsedVersioningPhis.count(Phi))
+  for (auto *Phi : llvm::make_second_range(InstToVersioningPhiMap)) {
+    if (UsedInstToVersioningPhiMap.count(Phi))
       continue;
     Phi->dropAllReferences();
     VL->erase(Phi);

@@ -2,6 +2,7 @@
 #include "ItemMover.h"
 #include "PackSet.h"
 #include "TripCount.h"
+#include "Versioning.h"
 #include "pssa/Inserter.h"
 #include "pssa/PSSA.h"
 #include "pssa/VectorHashInfo.h"
@@ -135,6 +136,9 @@ class VectorGen {
   AAResults &AA;
   LoopInfo &LI;
   ScalarEvolution &SE;
+  Versioner *TheVersioner;
+  const DenseSet<DepEdge> *DepEdgesToIgnore;
+
   ValueIndex<Value *, Pack> ValueIdx;
   ValueIndex<const ControlCondition *, ConditionPack> MaskIdx;
 
@@ -230,8 +234,10 @@ class VectorGen {
 
 public:
   VectorGen(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI,
-            AAResults &AA, LoopInfo &LI, ScalarEvolution &SE)
+            AAResults &AA, LoopInfo &LI, ScalarEvolution &SE,
+            Versioner *TheVersioner, const DenseSet<DepEdge> *DepEdgesToIgnore)
       : Packs(Packs), PSSA(PSSA), DI(DI), AA(AA), LI(LI), SE(SE),
+        TheVersioner(TheVersioner), DepEdgesToIgnore(DepEdgesToIgnore),
         Remapper(VM, RF_None, nullptr, &Extracter) {}
   bool run();
 };
@@ -290,8 +296,8 @@ const char LoweringTimerGroupDesc[] = "Vector Lowering";
 
 // Move the items together while still preserving dependences
 static bool merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
-                  DependenceChecker &DepChecker,
-                  const PackSet *Packs = nullptr) {
+                  DependenceChecker &DepChecker, const PackSet *Packs = nullptr,
+                  const DenseSet<DepEdge> *DepEdgesToIgnore = nullptr) {
   NamedRegionTimer T("scheduling", "moving instructions together",
                      LoweringTimerGroup, LoweringTimerGroupDesc,
                      TimeVectorLowering);
@@ -300,7 +306,8 @@ static bool merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
 
   auto *VL = PSSA.getLoopForItem(Items.front());
   SmallVector<Item> Deps;
-  bool FoundCycle = findInBetweenDeps(Deps, Items, VL, PSSA, DepChecker, Packs);
+  bool FoundCycle = findInBetweenDeps(Deps, Items, VL, PSSA, DepChecker, Packs,
+                                      DepEdgesToIgnore);
   if (FoundCycle)
     return false;
 
@@ -574,7 +581,8 @@ coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
 static bool mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker,
                        DenseMap<Value *, Value *> &ExitGuards,
-                       DenseSet<PHINode *> &ActiveFlags) {
+                       DenseSet<PHINode *> &ActiveFlags,
+                       const DenseSet<DepEdge> *DepEdgesToIgnore) {
   DenseMap<Instruction *, const ControlCondition *> OrigInstConds;
   DenseMap<VLoop *, const ControlCondition *> OrigLoopConds;
   ItemMap<Value *> ItemToActiveMap;
@@ -601,7 +609,7 @@ static bool mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
         return VL->comesBefore(VL1, VL2);
       });
       // Move the loops together first
-      if (!merge(PSSA, toItems(Loops), DepChecker))
+      if (!merge(PSSA, toItems(Loops), DepChecker, nullptr, DepEdgesToIgnore))
         return false;
       VLoop *Fused = nullptr;
       auto *LeaderVL = Loops.front();
@@ -1196,19 +1204,22 @@ bool VectorGen::run() {
   }
 
   //==== Begin Scheduling ====//
-  DependenceChecker DepChecker(PSSA, DI, AA, LI, SE);
+  DependenceChecker DepChecker(PSSA, DI, AA, LI, SE, nullptr /*dead insts*/,
+                               TheVersioner);
   // Figure out the loops that we need to fuse.
   EquivalenceClasses<VLoop *> LoopsToFuse = partitionLoops(Packs, PSSA);
   // Fuse the loops top-down
   DenseMap<Value *, Value *> ExitGuards;
   DenseSet<PHINode *> ActiveFlags;
-  if (!mergeLoops(LoopsToFuse, PSSA, DepChecker, ExitGuards, ActiveFlags))
+  if (!mergeLoops(LoopsToFuse, PSSA, DepChecker, ExitGuards, ActiveFlags,
+                  DepEdgesToIgnore))
     return false;
   // Move the packed instructions together
   for (auto *P : llvm::reverse(Packs)) {
     if (isa<MuPack>(P))
       continue;
-    if (!merge(PSSA, toItems(P->values()), DepChecker, &Packs))
+    if (!merge(PSSA, toItems(P->values()), DepChecker, &Packs,
+               DepEdgesToIgnore))
       return false;
   }
   //==== End scheduling ====//
@@ -1258,7 +1269,8 @@ bool VectorGen::run() {
 }
 
 bool lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI,
-           AAResults &AA, LoopInfo &LI, ScalarEvolution &SE) {
-  VectorGen Gen(Packs, PSSA, DI, AA, LI, SE);
+           AAResults &AA, LoopInfo &LI, ScalarEvolution &SE,
+           Versioner *TheVersioner, const DenseSet<DepEdge> *DepEdgesToIgnore) {
+  VectorGen Gen(Packs, PSSA, DI, AA, LI, SE, TheVersioner, DepEdgesToIgnore);
   return Gen.run();
 }
