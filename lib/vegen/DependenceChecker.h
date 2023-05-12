@@ -243,9 +243,39 @@ public:
   // Check if there's any *memory dependence* from It1 to It2 (assuming It1
   // comes before It2), assuming It1 and It2 have the same parent.
   bool depends(const Item &It1, const Item &It2,
-               llvm::DenseMap<DepEdge, DepKind> *DepEdges = nullptr);
+               llvm::DenseMap<DepEdge, DepKind> *DepEdges = nullptr,
+               llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> *InterLoopDeps =
+                   nullptr);
 
   llvm::ArrayRef<llvm::Instruction *> getLiveIns(VLoop *VL);
+};
+
+class IndependenceTracker {
+  using NodeToNodeSetTy = llvm::DenseMap<DepNode, llvm::DenseSet<DepNode>>;
+  // Mapping a node -> nodes that it's *conditionally* independent from
+  NodeToNodeSetTy IndependentFrom;
+
+  // Mapping a node -> nodes that it's independent from once the node is fully
+  // versioned
+  NodeToNodeSetTy NodeToDepsMap;
+
+  llvm::DenseMap<std::pair<VLoop *, DepNode>, llvm::DenseSet<DepNode>>
+      LoopToDepsMap;
+
+  Versioner &TheVersioner;
+
+public:
+  IndependenceTracker(
+      const llvm::DenseSet<DepEdge> &DepEdgesToIgnore,
+      const llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
+      Versioner &TheVersioner);
+  void markInstAsVersioned(llvm::Instruction *Orig, llvm::Instruction *Cloned);
+  // Mark a loop as versioned (and activate one of the loop instruction's
+  // conditional independences).
+  void markLoopInstAsVersioned(llvm::Instruction *Orig,
+                               llvm::Instruction *Cloned, VLoop *VL);
+
+  bool isIndependent(const DepNode &Src, const DepNode &Dest) const;
 };
 
 class DependencesFinder {
@@ -257,7 +287,8 @@ class DependencesFinder {
   PredicatedSSA *PSSA;
   DependenceChecker &DepChecker;
   const PackSet *Packs;
-  const llvm::DenseSet<DepEdge> *DepEdgesToIgnore;
+  const IndependenceTracker *IndepTracker;
+  llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> *InterLoopDeps;
 
   llvm::DenseSet<Item, ItemHashInfo> Visited, Processing;
   llvm::DenseSet<const ControlCondition *> VisitedConds;
@@ -268,13 +299,14 @@ class DependencesFinder {
 public:
   // Pass in a pack set `Packs` if you want
   // the deps of some instructions' to be checked together
-  DependencesFinder(llvm::SmallVectorImpl<Item> &Deps, Item Earliest, VLoop *VL,
-                    DependenceChecker &DepChecker,
-                    const PackSet *Packs = nullptr,
-                    const llvm::DenseSet<DepEdge> *DepEdgesToIgnore = nullptr)
+  DependencesFinder(
+      llvm::SmallVectorImpl<Item> &Deps, Item Earliest, VLoop *VL,
+      DependenceChecker &DepChecker, const PackSet *Packs = nullptr,
+      const IndependenceTracker *IndepTracker = nullptr,
+      llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> *InterLoopDeps = nullptr)
       : Deps(Deps), FoundCycle(false), Earliest(Earliest), VL(VL),
         PSSA(VL->getPSSA()), DepChecker(DepChecker), Packs(Packs),
-        DepEdgesToIgnore(DepEdgesToIgnore) {}
+        IndepTracker(IndepTracker), InterLoopDeps(InterLoopDeps) {}
 
   // Find all dependencies of `It` that occurs *after* `Earliest`.
   // Return if there are dependence cycles.
@@ -295,13 +327,14 @@ bool findInBetweenDeps(
     llvm::SmallVectorImpl<Item> &Deps, llvm::ArrayRef<Item> Items, VLoop *VL,
     PredicatedSSA &PSSA, DependenceChecker &DepChecker,
     const PackSet *Packs = nullptr,
-    const llvm::DenseSet<DepEdge> *DepEdgesToIgnore = nullptr);
+    const IndependenceTracker *IndepTracker = nullptr);
 
 // Find conditional dependences that, once removed, will make the instructions
 // independent Return true if it's possible (and false if no such set of deps
 // exists).
 bool findNecessaryDeps(
     llvm::DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
+    llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
     llvm::ArrayRef<llvm::Instruction *> Insts, PredicatedSSA &PSSA,
     DependenceChecker &DepChecker);
 

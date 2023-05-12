@@ -371,13 +371,8 @@ Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
   if (!I1->mayWriteToMemory() && !I2->mayWriteToMemory())
     return None;
 
-  auto *C1 = PSSA.getInstCond(I1);
-  auto *C2 = PSSA.getInstCond(I2);
-  // is C1 and C2 cannot be true simultaneously then there's no dep.
-  if (isExclusive(C1, C2))
-    return None;
-
-  // If the instructions are versioned, get their original copy so that AA and DI can understand
+  // If the instructions are versioned, get their original copy so that AA and
+  // DI can understand
   I1 = getOriginal(I1);
   I2 = getOriginal(I2);
 
@@ -412,13 +407,19 @@ Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
   return None;
 }
 
-bool DependenceChecker::depends(const Item &It1, const Item &It2,
-                                DenseMap<DepEdge, DepKind> *DepEdges) {
+bool DependenceChecker::depends(
+    const Item &It1, const Item &It2, DenseMap<DepEdge, DepKind> *DepEdges,
+    DenseMap<DepEdge, DenseSet<DepEdge>> *InterLoopDeps) {
   auto *I1 = It1.asInstruction();
   auto *I2 = It2.asInstruction();
   auto *VL1 = It1.asLoop();
   auto *VL2 = It2.asLoop();
   if (I1 && I2) {
+    auto *C1 = PSSA.getInstCond(I1);
+    auto *C2 = PSSA.getInstCond(I2);
+    if (isExclusive(C1, C2))
+      return false;
+
     auto Kind = getDepKind(I1, I2);
     if (DepEdges && Kind)
       DepEdges->try_emplace({I2, I1}, *Kind);
@@ -426,6 +427,8 @@ bool DependenceChecker::depends(const Item &It1, const Item &It2,
   } else if (VL1 && VL2) {
     processLoop(VL1);
     processLoop(VL2);
+    if (isExclusive(VL1->getLoopCond(), VL2->getLoopCond()))
+      return false;
 
     bool FoundDep = false;
     SmallVector<DepCondition> DepConds;
@@ -443,8 +446,12 @@ bool DependenceChecker::depends(const Item &It1, const Item &It2,
               return true;
             }
 
-            // DepEdges->try_emplace({I2, I1}, Kind);
             DepConds.push_back(*Kind);
+            if (InterLoopDeps) {
+              auto &EdgeSet = (*InterLoopDeps)[{It2, It1}];
+              EdgeSet.insert({I2, I1});
+              EdgeSet.insert({I1, I2});
+            }
             FoundDep = true;
             continue;
           } else {
@@ -469,6 +476,8 @@ bool DependenceChecker::depends(const Item &It1, const Item &It2,
     VL2 = VL1;
   }
   assert(I1 && VL2);
+  if (isExclusive(PSSA.getInstCond(I1), VL2->getLoopCond()))
+    return false;
 
   // Don't bother if I1 doesn't touch memory
   if (!mayReadOrWriteMemory(I1))
@@ -543,10 +552,12 @@ void DependencesFinder::visitCond(const ControlCondition *C,
 }
 
 void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
-  if (DepEdgesToIgnore && DepEdgesToIgnore->count({Src, It}))
+  if (IndepTracker && IndepTracker->isIndependent(Src, It)) {
     return;
+  }
 
   if (!Processing.insert(It).second) {
+    errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
     FoundCycle = true;
     return;
   }
@@ -605,7 +616,8 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
       if (!mayReadOrWriteMemory(*I))
         continue;
       for (auto &It2 : Coupled)
-        if (VL->comesBefore(*I, It2) && DepChecker.depends(*I, It2, &DepEdges))
+        if (VL->comesBefore(*I, It2) &&
+            DepChecker.depends(*I, It2, &DepEdges, InterLoopDeps))
           visit(*I, true, It);
     }
   }
@@ -619,7 +631,7 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
 bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
                        VLoop *VL, PredicatedSSA &PSSA,
                        DependenceChecker &DepChecker, const PackSet *Packs,
-                       const DenseSet<DepEdge> *DepEdgesToIgnore) {
+                       const IndependenceTracker *IndepTracker) {
   assert(all_of(Items,
                 [&](const Item &It) { return PSSA.getLoopForItem(It) == VL; }));
   auto ComesBefore = [VL](const Item &It1, const Item &It2) {
@@ -627,7 +639,8 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
   };
   Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
 
-  DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker, Packs, DepEdgesToIgnore);
+  DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker, Packs,
+                              IndepTracker);
   bool FoundCycle = false;
   for (auto It : Items)
     FoundCycle |= DepFinder.findDep(It);
@@ -636,6 +649,7 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
 
 static bool
 findNecessaryDepsImpl(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
+                      DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
                       ArrayRef<Item> Items, VLoop *VL, PredicatedSSA &PSSA,
                       DependenceChecker &DepChecker) {
   auto ComesBefore = [VL](const Item &It1, const Item &It2) {
@@ -644,7 +658,8 @@ findNecessaryDepsImpl(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
   Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
 
   SmallVector<Item> Deps;
-  DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker);
+  DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker, nullptr, nullptr,
+                              &InterLoopDeps);
   bool FoundCycle = false;
   for (auto It : Items)
     FoundCycle |= DepFinder.findDep(It);
@@ -784,6 +799,7 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) const {
 }
 
 bool findNecessaryDeps(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
+                       DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
                        ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
                        DependenceChecker &DepChecker) {
   SmallVector<Item> Items;
@@ -803,7 +819,7 @@ bool findNecessaryDeps(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
     // make sure that they are independent
     for (auto &Insts2 : make_second_range(LoopToInstsMap))
       if (Insts2.size() > 1 &&
-          !findNecessaryDeps(DepEdges, Insts2, PSSA, DepChecker))
+          !findNecessaryDeps(DepEdges, InterLoopDeps, Insts2, PSSA, DepChecker))
         return false;
 
     // Make sure the disjoint parent loops are independent
@@ -821,5 +837,57 @@ bool findNecessaryDeps(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
     Items.assign(Loops.begin(), Loops.end());
     ParentVL = Loops.front()->getParent();
   }
-  return findNecessaryDepsImpl(DepEdges, Items, ParentVL, PSSA, DepChecker);
+  return findNecessaryDepsImpl(DepEdges, InterLoopDeps, Items, ParentVL, PSSA,
+                               DepChecker);
+}
+
+IndependenceTracker::IndependenceTracker(
+    const DenseSet<DepEdge> &DepEdgesToIgnore,
+    const DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps, Versioner &TheVersioner) : TheVersioner(TheVersioner) {
+  for (auto [Src, Dst] : DepEdgesToIgnore)
+    NodeToDepsMap[Src].insert(Dst);
+  for (auto [LoopPairs, Edges] : InterLoopDeps) {
+    for (auto [Src, Dst] : Edges) {
+      NodeToDepsMap[Src].insert(Dst);
+      auto *VL = LoopPairs.first.asLoop();
+      LoopToDepsMap[{VL, Src}].insert(Dst);
+    }
+  }
+}
+
+void IndependenceTracker::markInstAsVersioned(Instruction *Orig, Instruction *Cloned) {
+  // The cloned instruction inherit the "independence" of the original
+  // instruction
+  // FIXME: this can make unnecessary allocation... We avoid putting empty
+  // entries in the map
+  IndependentFrom[Cloned] = IndependentFrom[Orig];
+}
+
+void IndependenceTracker::markLoopInstAsVersioned(Instruction *Orig,
+                                                  Instruction *Cloned,
+                                                  VLoop *VL) {
+  IndependentFrom[Cloned] = IndependentFrom[Orig];
+  auto It = LoopToDepsMap.find({VL, Orig});
+  if (It == LoopToDepsMap.end())
+    return;
+  auto &Nodes = It->second;
+  IndependentFrom[Cloned].insert(Nodes.begin(), Nodes.end());
+  IndependentFrom[Orig].insert(Nodes.begin(), Nodes.end());
+}
+
+bool IndependenceTracker::isIndependent(const DepNode &Src, const DepNode &Dst) const {
+  if (auto It = NodeToDepsMap.find(Src);
+      It != NodeToDepsMap.end() && It->second.count(Dst))
+    return true;
+  // Try again if Dst is a cloned instruction
+  auto *DstI = Dst.asInstruction();
+  if (!DstI)
+    return false;
+  auto *OrigDst = TheVersioner.getOriginalIfCloned(DstI);
+  if (!OrigDst)
+    OrigDst = DstI;
+  if (auto It = IndependentFrom.find(Src);
+      It != IndependentFrom.end() && It->second.count(OrigDst))
+    return true;
+  return false;
 }
