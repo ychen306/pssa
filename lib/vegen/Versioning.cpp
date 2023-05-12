@@ -12,8 +12,8 @@ using namespace llvm;
 static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
                            const ControlCondition *C,
                            VLoop::ItemIterator InsertBefore,
-                           DependenceChecker &DepChecker,
-                           ScalarEvolution &SE, const DataLayout &DL) {
+                           DependenceChecker &DepChecker, ScalarEvolution &SE,
+                           const DataLayout &DL) {
   // Create a dummy basic for the expander to emit code
   auto &Ctx = SE.getContext();
   auto *BB = BasicBlock::Create(Ctx, "", VL->getPSSA()->getFunction());
@@ -24,8 +24,9 @@ static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
   auto *Expanded = Exp.expandCodeForPredicate(Pred, End);
   End->eraseFromParent();
 
-  // The predicate computation may use instructions that show up before `InsertBefore`.
-  // In which case, we need to move those instructions before `InsertBefore`
+  // The predicate computation may use instructions that show up before
+  // `InsertBefore`. In which case, we need to move those instructions before
+  // `InsertBefore`
   if (InsertBefore != VL->item_end()) {
     // Find dependences of the pred computation that occur *after* InsertBefore
     SmallVector<Item> Deps;
@@ -35,7 +36,7 @@ static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
         auto *OI = dyn_cast<Instruction>(O);
         if (!OI || OI->getParent() == BB)
           continue;
-        bool FoundCycle = DepFinder.findDep(OI, true/*add OI as a dep*/);
+        bool FoundCycle = DepFinder.findDep(OI, true /*add OI as a dep*/);
         (void)FoundCycle;
         assert(!FoundCycle);
       }
@@ -63,25 +64,104 @@ static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
 static Value *emitCondition(const DepCondition &DepCond, VLoop *VL,
                             const ControlCondition *C,
                             VLoop::ItemIterator InsertBefore,
-                            DependenceChecker &DepChecker,
-                            ScalarEvolution &SE, const DataLayout &DL) {
+                            DependenceChecker &DepChecker, ScalarEvolution &SE,
+                            const DataLayout &DL) {
   if (DepCond.isDisjoint()) {
     auto [R1, R2] = DepCond.getRanges();
     auto *End1 = SE.getAddExpr(R1.Base, R1.Size);
     auto *End2 = SE.getAddExpr(R2.Base, R2.Size);
-    // Case 1: R1 is left of R2; i.e., End1 < Begin2. Note that we are using the inverse predicate here because SCEVExpander flips the evaluation...
-    auto *Left =
-        emitSCEVPred(SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT), End1, R2.Base),
-                     VL, C, InsertBefore, DepChecker, SE, DL);
+    // Case 1: R1 is left of R2; i.e., End1 < Begin2. Note that we are using the
+    // inverse predicate here because SCEVExpander flips the evaluation...
+    auto *Left = emitSCEVPred(
+        SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT),
+                               End1, R2.Base),
+        VL, C, InsertBefore, DepChecker, SE, DL);
     // Case 2: R2 is left of R1; i.e., End2 < Begin1.
-    auto *Right =
-        emitSCEVPred(SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT), End2, R1.Base),
-                     VL, C, InsertBefore, DepChecker, SE, DL);
+    auto *Right = emitSCEVPred(
+        SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT),
+                               End2, R1.Base),
+        VL, C, InsertBefore, DepChecker, SE, DL);
     Inserter Insert(VL, C, InsertBefore);
     return Insert.CreateBinOp(Instruction::Or, Left, Right);
   }
 
   llvm_unreachable("not handling control conditions right now");
+}
+
+VLoop *Versioner::cloneLoop(VLoop *OrigVL, ValueToValueMapTy &VMap,
+                            CallbackTy Callback) {
+  ValueMapper Mapper(VMap, RF_IgnoreMissingLocals);
+  DenseMap<const ControlCondition *, const ControlCondition *> RemappedConds;
+  std::function<const ControlCondition *(const ControlCondition *)>
+      RemapCondition = [&](auto *C) {
+        if (!C)
+          return C;
+        if (auto It = RemappedConds.find(C); It != RemappedConds.end())
+          return It->second;
+        if (auto *And = dyn_cast<ConditionAnd>(C)) {
+          auto *V = Mapper.mapValue(*And->Cond);
+          if (!V)
+            V = And->Cond;
+          return RemappedConds[C] =
+                     PSSA.getAnd(RemapCondition(And->Parent), V, And->IsTrue);
+        }
+        SmallVector<const ControlCondition *> Conds;
+        for (auto *C2 : cast<ConditionOr>(C)->Conds)
+          Conds.push_back(RemapCondition(C2));
+        return RemappedConds[C] = PSSA.getOr(Conds);
+      };
+
+  auto *LoopCond = RemapCondition(OrigVL->getLoopCond());
+  auto *VL = new VLoop(&PSSA, LoopCond, OrigVL->getBackEdgeCond(), OrigVL->getParent());
+
+  auto Clone = [&](Instruction *I) {
+    auto *I2 = I->clone();
+    VMap[I] = I2;
+    if (auto *Orig = CloneToOrigMap.lookup(I))
+      CloneToOrigMap[I2] = Orig;
+    else
+      CloneToOrigMap[I2] = I;
+    Callback(I, I2);
+    if (I->hasName())
+      I2->setName(I->getName() + ".clone");
+    return I2;
+  };
+
+  // Clone the mu nodes
+  for (auto *Mu : OrigVL->mus()) {
+    VL->addMu(cast<PHINode>(Clone(Mu)));
+  }
+
+  // Clone the loop body
+  for (auto Item : OrigVL->items()) {
+    if (auto *SubVL = Item.asLoop()) {
+      VL->insert(cloneLoop(SubVL, VMap, Callback));
+      continue;
+    }
+
+    auto *I = Item.asInstruction();
+    auto *C = RemapCondition(OrigVL->getInstCond(I));
+    auto *ClonedI = Clone(I);
+    Mapper.remapInstruction(*ClonedI);
+    if (auto *PN = dyn_cast<PHINode>(ClonedI)) {
+      SmallVector<const ControlCondition *> PhiConds;
+      for (auto *IncomingC : VL->getPhiConditions(PN))
+        PhiConds.push_back(RemapCondition(IncomingC));
+      VL->insert(PN, PhiConds, C);
+    } else {
+      VL->insert(ClonedI, C);
+    }
+  }
+
+  // Remap the mus at last when we've cloned everything
+  // (coulddn't remap when they were first cloned due to circular dep)
+  for (auto *Mu : VL->mus())
+    Mapper.remapInstruction(*Mu);
+
+  // Remap the continue/back-edge cond. (couldn't do it before cloning)
+  VL->setBackEdgeCond(RemapCondition(VL->getBackEdgeCond()));
+
+  return VL;
 }
 
 void Versioner::runOnLoop(VLoop *VL) {
@@ -150,23 +230,25 @@ void Versioner::runOnLoop(VLoop *VL) {
 
   // Clone the instructions/loops
   DenseMap<Instruction *, Instruction *> OrigToCloneMap;
-  // Join the clone and original instructions with a phi to deal with external
-  // uses
+  // Join the clone and original instructions with phis to deal with external uses
   DenseSet<Instruction *> VersioningPhis;
   DenseMap<Instruction *, Instruction *> InstToVersioningPhiMap;
+  // Remember the sub loops that we visit
+  SmallVector<VLoop *> SubLoops;
   for (auto Item : ItemsToVersion) {
-    if (auto *I = Item.asInstruction()) {
-      auto *I2 = I->clone();
-      CloneToOrigMap[I2] = I;
-      OrigToCloneMap[I] = I2;
-      auto *C = VL->getInstCond(I);
-      assert(VersioningFlags.count(Item));
-      auto *Flag = VersioningFlags.lookup(Item);
-      auto *Success = PSSA.getAnd(C, Flag, true);
-      auto *Fail = PSSA.getAnd(C, Flag, false);
-      auto It = VL->toIterator(I);
-      VL->insert(I2, Fail, It);
-      VL->setInstCond(I, Success);
+    auto It = VL->toIterator(Item);
+    assert(VersioningFlags.count(Item));
+    auto *Flag = VersioningFlags.lookup(Item);
+    const ControlCondition *C;
+    if (auto *I = Item.asInstruction())
+      C = VL->getInstCond(I);
+    else
+      C = Item.asLoop()->getLoopCond();
+    auto *Success = PSSA.getAnd(C, Flag, true);
+    auto *Fail = PSSA.getAnd(C, Flag, false);
+
+    // Create a versioning phi for the instruction I and its clone I2.
+    auto CreateVersioningPhi = [&](Instruction *I, Instruction *I2) {
       if (I->hasNUsesOrMore(1)) {
         Inserter Insert(VL, C, std::next(It));
         auto *Phi = Insert.createPhi({I, I2}, {Success, Fail});
@@ -174,49 +256,101 @@ void Versioner::runOnLoop(VLoop *VL) {
         VersioningPhis.insert(Phi);
         InstToVersioningPhiMap[I] = Phi;
       }
+    };
+
+    if (auto *I = Item.asInstruction()) {
+      auto *I2 = I->clone();
+      if (auto *Orig = CloneToOrigMap.lookup(I))
+        CloneToOrigMap[I2] = Orig;
+      else
+        CloneToOrigMap[I2] = I;
+      IndepTracker.markInstAsVersioned(I, I2);
+      OrigToCloneMap[I] = I2;
+      VL->insert(I2, Fail, It);
+      VL->setInstCond(I, Success);
+      CreateVersioningPhi(I, I2);
     } else {
-      llvm_unreachable("not versioning loops for now");
+      ValueToValueMapTy VMap;
+      auto *SubVL = Item.asLoop();
+      SubLoops.push_back(SubVL);
+      auto *SubVL2 = cloneLoop(SubVL, VMap,
+                              [&](Instruction *I, Instruction *ClonedI) {
+                                VersioningFlags[I] = Flag;
+                                OrigToCloneMap[I] = ClonedI;
+                                CreateVersioningPhi(I, ClonedI);
+                                IndepTracker.markLoopInstAsVersioned(I, ClonedI, SubVL);
+                              });
+      SubVL->setLoopCond(Success);
+      SubVL2->setLoopCond(Fail);
+      VL->insert(SubVL2, It);
     }
   }
 
-  // Rewrire the use of the cloned instructions
+  // If I it's cloned, rewrite its uses;
   DenseSet<Instruction *> UsedInstToVersioningPhiMap;
+  auto RewriteUses = [&](Instruction *I, Value *Flag) {
+    auto *Clone = OrigToCloneMap.lookup(I);
+    assert(Clone);
+
+    // Collect the uses of I in a vector first before modifying its uses
+    SmallVector<Use *> Uses;
+    for (auto &U : I->uses())
+      Uses.push_back(&U);
+
+    for (Use *U : Uses) {
+      auto *UserI = cast<Instruction>(U->getUser());
+
+      // Ignore uses by branches (no branches in predicated SSA)
+      if (UserI->isTerminator())
+        continue;
+
+      // Ignore if the user is a clone
+      if (CloneToOrigMap.count(UserI))
+        continue;
+
+      if (VersioningPhis.count(UserI))
+        continue;
+
+      auto *VL = PSSA.getLoopForInst(I);
+      auto *UserVL = PSSA.getLoopForInst(UserI);
+      if (UserVL == VL && VersioningFlags.lookup(UserI) == Flag) {
+        // If the use comes from another instruction that gets versioned under
+        // the same condition we just change that instruction (and its clone)
+        // to use (the clone of) I
+        auto *ClonedUser = OrigToCloneMap.lookup(UserI);
+        assert(ClonedUser);
+        ClonedUser->getOperandUse(U->getOperandNo()).set(Clone);
+      } else {
+        // Otherwise, we should change it to use the verioning phi
+        auto *Phi = InstToVersioningPhiMap.lookup(I);
+        errs() << "!!! using versioning phi for " << *I << "\n";
+        assert(Phi);
+        U->set(Phi);
+        UsedInstToVersioningPhiMap.insert(Phi);
+        // If the user is cloned, change the clone to also use the phi
+        if (auto *ClonedUser = OrigToCloneMap.lookup(UserI))
+          ClonedUser->getOperandUse(U->getOperandNo()).set(Phi);
+      }
+    }
+  };
+
+  // Rewire the use of the cloned instructions
   for (auto Item : ItemsToVersion) {
     auto *Flag = VersioningFlags.lookup(Item);
     if (auto *I = Item.asInstruction()) {
-      auto *Clone = OrigToCloneMap.lookup(I);
-      assert(Clone);
-      for (Use &U : I->uses()) {
-        auto *UserI = cast<Instruction>(U.getUser());
-        auto *UserVL = PSSA.getLoopForInst(UserI);
-
-        // Ignore if the user is a clone
-        if (CloneToOrigMap.count(UserI))
-          continue;
-
-        if (VersioningPhis.count(UserI))
-          continue;
-
-        if (UserVL == VL && VersioningFlags.lookup(UserI) == Flag) {
-          // If the use comes from another instruction that gets versioned under
-          // the same condition we just change that instruction (and its clone)
-          // to use (the clone of) I
-          auto *ClonedUser = OrigToCloneMap.lookup(UserI);
-          assert(ClonedUser);
-          ClonedUser->getOperandUse(U.getOperandNo()).set(Clone);
+      RewriteUses(I, Flag);
+    } else {
+      SmallVector Worklist{Item};
+      while (!Worklist.empty()) {
+        auto Item = Worklist.pop_back_val();
+        if (auto *VL = Item.asLoop()) {
+          Worklist.append(VL->item_begin(), VL->item_end());
+          for (auto *Mu : VL->mus())
+            RewriteUses(Mu, Flag);
         } else {
-          // Otherwise, we should change it to use the verioning phi
-          auto *Phi = InstToVersioningPhiMap.lookup(I);
-          assert(Phi);
-          U.set(Phi);
-          UsedInstToVersioningPhiMap.insert(Phi);
-          // If the user is cloned, change the clone to also use the phi
-          if (auto *ClonedUser = OrigToCloneMap.lookup(UserI))
-            ClonedUser->getOperandUse(U.getOperandNo()).set(Phi);
+          RewriteUses(Item.asInstruction(), Flag);
         }
       }
-    } else {
-      llvm_unreachable("not versioning loops for now");
     }
   }
 
@@ -227,4 +361,7 @@ void Versioner::runOnLoop(VLoop *VL) {
     Phi->dropAllReferences();
     VL->erase(Phi);
   }
+
+  for (auto *SubVL : SubLoops)
+    runOnLoop(SubVL);
 }

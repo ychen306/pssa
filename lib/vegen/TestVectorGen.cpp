@@ -423,11 +423,23 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
 
   if (FindConditionalDeps) {
     Versioner::VersioningMapTy VersioningMap;
+    // If we find any loop -> loop dep, also record all the conditional deps
+    // that causes the loop->loop dep.
+    DenseMap<DepEdge, DenseSet<DepEdge>> InterLoopDeps;
     DenseSet<DepEdge> DepEdgesToIgnore;
+
+    auto MarkForVersioning = [&](const DepNode &N,
+                                 ArrayRef<DepCondition> Conds) {
+      if (auto *I = N.asInstruction())
+        append_range(VersioningMap[I], Conds);
+      else if (auto *VL = N.asLoop())
+        append_range(VersioningMap[VL], Conds);
+    };
+
     for (auto *P : Packs) {
       DenseMap<DepEdge, std::vector<DepCondition>> DepEdges;
-      bool CanSpeculate =
-          findNecessaryDeps(DepEdges, P->values(), PSSA, DepChecker);
+      bool CanSpeculate = findNecessaryDeps(DepEdges, InterLoopDeps,
+                                            P->values(), PSSA, DepChecker);
       if (!CanSpeculate)
         return PreservedAnalyses::all();
 
@@ -435,23 +447,23 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       if (DepEdges.empty())
         continue;
 
-      ConditionSetTracker CST(SE, PSSA);
       for (auto [Edge, DepConds] : DepEdges) {
+        auto [Src, Dst] = Edge;
         DepEdgesToIgnore.insert(Edge);
+        MarkForVersioning(Src, DepConds);
+        MarkForVersioning(Dst, DepConds);
+        for (auto *I : P->values())
+          MarkForVersioning(I, DepConds);
+        if (auto It = InterLoopDeps.find(Edge); It != InterLoopDeps.end()) {
+          for (auto &Edge : It->second)
+            DepEdgesToIgnore.insert(Edge);
+        }
+      }
+
+      ConditionSetTracker CST(SE, PSSA);
+      for (auto DepConds : make_second_range(DepEdges))
         for (auto &DepCond : DepConds)
           CST.add(DepCond);
-      }
-
-      DenseSet<DepCondition> UniqueConds;
-      for (auto &DepConds : llvm::make_second_range(DepEdges)) {
-        for (auto &DepCond : DepConds)
-          UniqueConds.insert(CST.getCoalescedCondition(DepCond));
-      }
-
-      // FIXME:
-      // this is wrong when we want to pack instructions across loops
-      for (auto *I : P->values())
-        VersioningMap.try_emplace(I, UniqueConds.begin(), UniqueConds.end());
 
       for (auto [Edge, DepConds] : DepEdges) {
         auto [Src, Dst] = Edge;
@@ -467,10 +479,29 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       }
     }
 
-    Versioner TheVersioner(PSSA, DI, AA, LI, SE, VersioningMap);
+    ConditionSetTracker CST(SE, PSSA);
+    // Visit all of the conditions for coalescing
+    for (auto &DepConds : make_second_range(VersioningMap))
+      for (auto &DepCond : DepConds)
+        CST.add(DepCond);
+
+    // Go over the versioning map and deduplicate the conditions (after
+    // coalescing)
+    for (auto &Conds : make_second_range(VersioningMap)) {
+      std::vector<DepCondition> NewConds;
+      DenseSet<DepCondition> Inserted;
+      for (const auto &DepCond : Conds) {
+        auto NewCond = CST.getCoalescedCondition(DepCond);
+        if (Inserted.insert(NewCond).second)
+          NewConds.push_back(NewCond);
+      }
+      Conds = std::move(NewConds);
+    }
+
+    Versioner TheVersioner(DepEdgesToIgnore, InterLoopDeps, PSSA, DI, AA, LI, SE, VersioningMap);
     TheVersioner.run();
     bool Ok =
-        lower(Packs, PSSA, DI, AA, LI, SE, &TheVersioner, &DepEdgesToIgnore);
+        lower(Packs, PSSA, DI, AA, LI, SE, &TheVersioner, &TheVersioner.getIndependenceTracker());
     assert(Ok);
     lowerPSSAToLLVM(&F, PSSA);
     return PreservedAnalyses::none();

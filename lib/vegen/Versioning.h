@@ -3,6 +3,8 @@
 
 #include "DependenceChecker.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
+#include <functional>
 
 class Versioner {
 public:
@@ -15,14 +17,28 @@ private:
   llvm::ScalarEvolution &SE;
   DependenceChecker DepChecker;
   const VersioningMapTy &VersioningMap;
+  IndependenceTracker IndepTracker;
+
   llvm::DenseMap<llvm::Instruction *, llvm::Instruction *> CloneToOrigMap;
+
+  using CallbackTy =
+      std::function<void(llvm::Instruction *, llvm::Instruction *)>;
+  VLoop *cloneLoop(VLoop *OrigVL, llvm::ValueToValueMapTy &VMap,
+                   CallbackTy Callback);
   void runOnLoop(VLoop *);
 
 public:
-  Versioner(PredicatedSSA &PSSA, llvm::DependenceInfo &DI, llvm::AAResults &AA,
-            llvm::LoopInfo &LI, llvm::ScalarEvolution &SE,
-            const VersioningMapTy &VersioningMap)
-      : PSSA(PSSA), SE(SE), DepChecker(PSSA, DI, AA, LI, SE, nullptr/*dead insts*/, this), VersioningMap(VersioningMap) {}
+  Versioner(
+      const llvm::DenseSet<DepEdge> &DepEdgesToIgnore,
+      const llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
+      PredicatedSSA &PSSA, llvm::DependenceInfo &DI, llvm::AAResults &AA,
+      llvm::LoopInfo &LI, llvm::ScalarEvolution &SE,
+      const VersioningMapTy &VersioningMap)
+      : PSSA(PSSA), SE(SE),
+        DepChecker(PSSA, DI, AA, LI, SE, nullptr /*dead insts*/, this),
+        VersioningMap(VersioningMap),
+        IndepTracker(DepEdgesToIgnore, InterLoopDeps, *this) {}
+  IndependenceTracker &getIndependenceTracker() { return IndepTracker; }
   void run() { runOnLoop(&PSSA.getTopLevel()); }
   llvm::Instruction *getOriginalIfCloned(llvm::Instruction *I) const {
     return CloneToOrigMap.lookup(I);
