@@ -6,13 +6,11 @@
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <functional>
 
-class Versioner {
-public:
-  // Mapping an item that we want to version -> the versioning condition
-  using VersioningMapTy =
-      llvm::DenseMap<Item, std::vector<DepCondition>, ItemHashInfo>;
+// Mapping an item that we want to version -> the versioning condition
+using VersioningMapTy =
+    llvm::DenseMap<Item, std::vector<DepCondition>, ItemHashInfo>;
 
-private:
+class Versioner {
   PredicatedSSA &PSSA;
   llvm::ScalarEvolution &SE;
   DependenceChecker DepChecker;
@@ -44,5 +42,9 @@ public:
     return CloneToOrigMap.lookup(I);
   }
 };
+
+// If an instruction/loop's has a versioning condition that's implied by its
+// parent loop's versioning condition, remove it
+void removeRedundantConditions(PredicatedSSA &, VersioningMapTy &);
 
 #endif // end VEGEN_VERSIONING_H
