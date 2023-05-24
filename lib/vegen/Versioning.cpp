@@ -112,7 +112,8 @@ VLoop *Versioner::cloneLoop(VLoop *OrigVL, ValueToValueMapTy &VMap,
       };
 
   auto *LoopCond = RemapCondition(OrigVL->getLoopCond());
-  auto *VL = new VLoop(&PSSA, LoopCond, OrigVL->getBackEdgeCond(), OrigVL->getParent());
+  auto *VL = new VLoop(&PSSA, LoopCond, OrigVL->getBackEdgeCond(),
+                       OrigVL->getParent());
 
   auto Clone = [&](Instruction *I) {
     auto *I2 = I->clone();
@@ -230,7 +231,8 @@ void Versioner::runOnLoop(VLoop *VL) {
 
   // Clone the instructions/loops
   DenseMap<Instruction *, Instruction *> OrigToCloneMap;
-  // Join the clone and original instructions with phis to deal with external uses
+  // Join the clone and original instructions with phis to deal with external
+  // uses
   DenseSet<Instruction *> VersioningPhis;
   DenseMap<Instruction *, Instruction *> InstToVersioningPhiMap;
   // Remember the sub loops that we visit
@@ -273,13 +275,13 @@ void Versioner::runOnLoop(VLoop *VL) {
       ValueToValueMapTy VMap;
       auto *SubVL = Item.asLoop();
       SubLoops.push_back(SubVL);
-      auto *SubVL2 = cloneLoop(SubVL, VMap,
-                              [&](Instruction *I, Instruction *ClonedI) {
-                                VersioningFlags[I] = Flag;
-                                OrigToCloneMap[I] = ClonedI;
-                                CreateVersioningPhi(I, ClonedI);
-                                IndepTracker.markLoopInstAsVersioned(I, ClonedI, SubVL);
-                              });
+      auto *SubVL2 =
+          cloneLoop(SubVL, VMap, [&](Instruction *I, Instruction *ClonedI) {
+            VersioningFlags[I] = Flag;
+            OrigToCloneMap[I] = ClonedI;
+            CreateVersioningPhi(I, ClonedI);
+            IndepTracker.markLoopInstAsVersioned(I, ClonedI, SubVL);
+          });
       SubVL->setLoopCond(Success);
       SubVL2->setLoopCond(Fail);
       VL->insert(SubVL2, It);
@@ -364,4 +366,56 @@ void Versioner::runOnLoop(VLoop *VL) {
 
   for (auto *SubVL : SubLoops)
     runOnLoop(SubVL);
+}
+
+// Xs -= Ys
+namespace {
+template <typename T>
+void setSubtraction(std::vector<T> &Xs, const DenseSet<T> &Ys) {
+  std::vector<T> NewXs;
+  for (auto &X : Xs)
+    if (!Ys.count(X))
+      NewXs.push_back(X);
+  Xs = std::move(NewXs);
+}
+} // namespace
+
+void removeRedundantConditions(PredicatedSSA &PSSA,
+                               VersioningMapTy &VersioningMap) {
+  DenseSet<DepCondition> ActiveConds;
+  DenseSet<Item, ItemHashInfo> RemoveFromVersioning;
+  std::function<void(VLoop *)> VisitLoop = [&](VLoop *VL) {
+    // Set of conditions that are not *previously* active but are brought into
+    // scope by versioning VL
+    DenseSet<DepCondition> NewConds;
+    if (auto It = VersioningMap.find(VL); It != VersioningMap.end()) {
+      auto &DepConds = It->second;
+      for (auto &DepCond : DepConds)
+        if (ActiveConds.insert(DepCond).second)
+          NewConds.insert(DepCond);
+    }
+
+    for (auto &Item : VL->items()) {
+      if (auto *SubVL = Item.asLoop())
+        VisitLoop(SubVL);
+
+      auto It = VersioningMap.find(Item);
+      if (It != VersioningMap.end()) {
+        auto &DepConds = It->second;
+        setSubtraction(DepConds, ActiveConds);
+        // If an item's versioning conditions are all implied by its parent
+        // loop's versioning conds, we don't need to version it.
+        if (DepConds.empty())
+          RemoveFromVersioning.insert(Item);
+      }
+    }
+
+    // Deactiate the conditions brought into scope by versioning VL
+    for (auto &DepCond : NewConds)
+      ActiveConds.erase(DepCond);
+  };
+  VisitLoop(&PSSA.getTopLevel());
+
+  for (auto &Item : RemoveFromVersioning)
+    VersioningMap.erase(Item);
 }

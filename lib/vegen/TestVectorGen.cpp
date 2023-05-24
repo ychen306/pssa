@@ -39,6 +39,10 @@ cl::opt<bool>
                                  "checks in order to make each pack"),
                         cl::init(false));
 
+cl::opt<bool> RemoveRedundantConditions(
+    "remove-redundant-conds",
+    cl::desc("remove redundant versioning conditions"), cl::init(false));
+
 cl::opt<bool> RemoveDeadInsts(
     "remove-dead-insts",
     cl::desc("remove instructions killed by reductions before lowering"),
@@ -422,7 +426,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   DependenceChecker DepChecker(PSSA, DI, AA, LI, SE, &DeadInsts);
 
   if (FindConditionalDeps) {
-    Versioner::VersioningMapTy VersioningMap;
+    VersioningMapTy VersioningMap;
     // If we find any loop -> loop dep, also record all the conditional deps
     // that causes the loop->loop dep.
     DenseMap<DepEdge, DenseSet<DepEdge>> InterLoopDeps;
@@ -498,10 +502,13 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       Conds = std::move(NewConds);
     }
 
-    Versioner TheVersioner(DepEdgesToIgnore, InterLoopDeps, PSSA, DI, AA, LI, SE, VersioningMap);
+    if (RemoveRedundantConditions)
+      removeRedundantConditions(PSSA, VersioningMap);
+    Versioner TheVersioner(DepEdgesToIgnore, InterLoopDeps, PSSA, DI, AA, LI,
+                           SE, VersioningMap);
     TheVersioner.run();
-    bool Ok =
-        lower(Packs, PSSA, DI, AA, LI, SE, &TheVersioner, &TheVersioner.getIndependenceTracker());
+    bool Ok = lower(Packs, PSSA, DI, AA, LI, SE, &TheVersioner,
+                    &TheVersioner.getIndependenceTracker());
     assert(Ok);
     lowerPSSAToLLVM(&F, PSSA);
     return PreservedAnalyses::none();
