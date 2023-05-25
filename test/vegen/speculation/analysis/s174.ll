@@ -6,7 +6,7 @@
 ; CHECK-DAG: Cut edge:   %9 = load float, ptr getelementptr inbounds ([320000 x float], ptr @a, i64 0, i64 3), align 4, !tbaa !5 ->   store float %add, ptr %arrayidx5, align 4, !tbaa !5
 ; CHECK-DAG: Cut edge:   %9 = load float, ptr getelementptr inbounds ([320000 x float], ptr @a, i64 0, i64 3), align 4, !tbaa !5 ->   store float %add.1, ptr %arrayidx5.1, align 4, !tbaa !5
 ; CHECK-DAG: Cut edge:   %9 = load float, ptr getelementptr inbounds ([320000 x float], ptr @a, i64 0, i64 3), align 4, !tbaa !5 ->   store float %add.2, ptr %arrayidx5.2, align 4, !tbaa !5
-; CHECK: coalesced condition: (((4 * (sext i32 %M to i64))<nsw> + @a))[:12] DISJOINT WITH ((4 + @a)<nuw><nsw>)[:12]
+; CHECK: coalesced condition: (((4 * (sext i32 %M to i64))<nsw> + @a))[:12] OVERLAPS WITH ((4 + @a)<nuw><nsw>)[:12]
 
 ; ModuleID = 's174.c'
 source_filename = "s174.c"

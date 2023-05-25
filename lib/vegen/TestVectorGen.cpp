@@ -473,10 +473,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
         auto [Src, Dst] = Edge;
         errs() << "Cut edge: " << Src << " -> " << Dst << '\n';
         for (auto DepCond : DepConds) {
-          if (DepCond.isDisjoint()) {
-            auto [R1, R2] = DepCond.getRanges();
-            errs() << "\tIF " << R1 << " DISJOINT WITH " << R2 << '\n';
-          }
+          errs() << "\tIF " << DepCond << '\n';
           errs() << "\t coalesced condition: "
                  << CST.getCoalescedCondition(DepCond) << '\n';
         }
