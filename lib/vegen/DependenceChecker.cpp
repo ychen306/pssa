@@ -421,8 +421,12 @@ bool DependenceChecker::depends(
       return false;
 
     auto Kind = getDepKind(I1, I2);
-    if (DepEdges && Kind)
-      DepEdges->try_emplace({I2, I1}, *Kind);
+    if (DepEdges && Kind) {
+      if (isImplied(C1, C2))
+        DepEdges->try_emplace({I2, I1}, *Kind);
+      else
+        DepEdges->try_emplace({I2, I1}, DepKind({*Kind, DepCondition::ifTrue(C1)}));
+    }
     return Kind.hasValue();
   } else if (VL1 && VL2) {
     processLoop(VL1);
@@ -460,6 +464,8 @@ bool DependenceChecker::depends(
         }
       }
     }
+    if (!isImplied(VL1->getLoopCond(), VL2->getLoopCond()))
+      DepConds.push_back(DepCondition::ifTrue(VL1->getLoopCond()));
     if (DepEdges && !DepConds.empty()) {
       DepEdges->try_emplace({It2, It1}, DepConds);
     }
@@ -486,6 +492,7 @@ bool DependenceChecker::depends(
   // Figure out the memory instructions in VL2
   processLoop(VL2);
 
+  // FIXME: record conditional, inst-to-loop deps
   for (auto *I : Summaries[VL2].MemoryInsts)
     if (getDepKind(I1, I)) {
       if (DepEdges)
