@@ -107,6 +107,7 @@ public:
     return DepCondition(R1, R2);
   }
   static DepCondition always() { return DepCondition(); }
+  static DepCondition ifTrue(const ControlCondition *C) { return DepCondition(C); }
   // Try to create a condition that implies both Cond1 and Cond2
   static llvm::Optional<DepCondition> coalesce(const DepCondition &Cond1,
                                                const DepCondition &Cond2,

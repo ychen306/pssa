@@ -225,6 +225,8 @@ static void buildPasses(PassBuilder &PB) {
         [](FunctionPassManager &FPM, OptimizationLevel) {
           FPM.addPass(ScalarizerPass());
           addPreprocessingPasses(FPM);
+          FPM.addPass(GVNHoistPass());
+          FPM.addPass(InstCombinePass());
           FPM.addPass(GlobalSLPPass());
           addCleanupPasses(FPM);
         });
