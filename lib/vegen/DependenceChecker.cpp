@@ -166,7 +166,7 @@ Optional<DepCondition> DepCondition::coalesce(const DepCondition &Cond1,
     return Cond1;
 
   // Only support disjoint checks now
-  if (!Cond1.isDisjoint() || !Cond2.isDisjoint())
+  if (!Cond1.isOverlapping() || !Cond2.isOverlapping())
     return None;
 
   auto Chk1 = Cond1.getRanges();
@@ -186,7 +186,7 @@ Optional<DepCondition> DepCondition::coalesce(const DepCondition &Cond1,
     if (!R2)
       return None;
   }
-  return DepCondition::ifDisjoint(*R1, *R2);
+  return DepCondition::ifOverlapping(*R1, *R2);
 }
 
 raw_ostream &operator<<(raw_ostream &OS, const MemRange &R) {
@@ -401,8 +401,8 @@ Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
   if (Dep && Dep->isOrdered()) {
     // FIXME: in some trivial cases we know for sure that I1 depends on I2
     // (e.g., A[i] and A[i]), report DepCondition::always() in those cases.
-    return DepCondition::ifDisjoint(MemRange::get(I1, SE, PSSA),
-                                    MemRange::get(I2, SE, PSSA));
+    return DepCondition::ifOverlapping(MemRange::get(I1, SE, PSSA),
+                                       MemRange::get(I2, SE, PSSA));
   }
   return None;
 }
@@ -650,7 +650,7 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
 static bool
 findNecessaryDepsImpl(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
                       DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
-                      ArrayRef<Item> Items, VLoop *VL, PredicatedSSA &PSSA,
+                      ArrayRef<Item> Items, VLoop *VL,
                       DependenceChecker &DepChecker) {
   auto ComesBefore = [VL](const Item &It1, const Item &It2) {
     return VL->comesBefore(It1, It2);
@@ -763,9 +763,9 @@ static bool haveSameParent(ArrayRef<VLoop *> Loops) {
 };
 
 raw_ostream &operator<<(raw_ostream &OS, const DepCondition &DepCond) {
-  if (DepCond.isDisjoint()) {
+  if (DepCond.isOverlapping()) {
     auto [R1, R2] = DepCond.getRanges();
-    OS << R1 << " DISJOINT WITH " << R2;
+    OS << R1 << " OVERLAPS WITH " << R2;
   } else {
     OS << *DepCond.getCondition();
   }
@@ -837,13 +837,15 @@ bool findNecessaryDeps(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
     Items.assign(Loops.begin(), Loops.end());
     ParentVL = Loops.front()->getParent();
   }
-  return findNecessaryDepsImpl(DepEdges, InterLoopDeps, Items, ParentVL, PSSA,
+  return findNecessaryDepsImpl(DepEdges, InterLoopDeps, Items, ParentVL,
                                DepChecker);
 }
 
 IndependenceTracker::IndependenceTracker(
     const DenseSet<DepEdge> &DepEdgesToIgnore,
-    const DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps, Versioner &TheVersioner) : TheVersioner(TheVersioner) {
+    const DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
+    Versioner &TheVersioner)
+    : TheVersioner(TheVersioner) {
   for (auto [Src, Dst] : DepEdgesToIgnore)
     NodeToDepsMap[Src].insert(Dst);
   for (auto [LoopPairs, Edges] : InterLoopDeps) {
@@ -855,7 +857,8 @@ IndependenceTracker::IndependenceTracker(
   }
 }
 
-void IndependenceTracker::markInstAsVersioned(Instruction *Orig, Instruction *Cloned) {
+void IndependenceTracker::markInstAsVersioned(Instruction *Orig,
+                                              Instruction *Cloned) {
   // The cloned instruction inherit the "independence" of the original
   // instruction
   // FIXME: this can make unnecessary allocation... We avoid putting empty
@@ -875,7 +878,8 @@ void IndependenceTracker::markLoopInstAsVersioned(Instruction *Orig,
   IndependentFrom[Orig].insert(Nodes.begin(), Nodes.end());
 }
 
-bool IndependenceTracker::isIndependent(const DepNode &Src, const DepNode &Dst) const {
+bool IndependenceTracker::isIndependent(const DepNode &Src,
+                                        const DepNode &Dst) const {
   if (auto It = NodeToDepsMap.find(Src);
       It != NodeToDepsMap.end() && It->second.count(Dst))
     return true;

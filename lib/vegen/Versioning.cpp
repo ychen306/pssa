@@ -66,7 +66,7 @@ static Value *emitCondition(const DepCondition &DepCond, VLoop *VL,
                             VLoop::ItemIterator InsertBefore,
                             DependenceChecker &DepChecker, ScalarEvolution &SE,
                             const DataLayout &DL) {
-  if (DepCond.isDisjoint()) {
+  if (DepCond.isOverlapping()) {
     auto [R1, R2] = DepCond.getRanges();
     auto *End1 = SE.getAddExpr(R1.Base, R1.Size);
     auto *End2 = SE.getAddExpr(R2.Base, R2.Size);

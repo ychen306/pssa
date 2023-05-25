@@ -94,55 +94,57 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &, const MemRange &);
 
 // TODO: pull the dep condition stuff to a separate file
 class DepCondition {
-  llvm::Optional<std::pair<MemRange, MemRange>> Disjoint;
+  bool IsUnconditional;
+  llvm::Optional<std::pair<MemRange, MemRange>> Overlap;
   const ControlCondition *C;
+  DepCondition() : IsUnconditional(true), C(nullptr) {}
   DepCondition(const MemRange &R1, const MemRange &R2)
-      : Disjoint(std::make_pair(R1, R2)), C(nullptr) {}
-  DepCondition(const ControlCondition *C) : C(C) {}
+      : IsUnconditional(false), Overlap(std::make_pair(R1, R2)), C(nullptr) {}
+  DepCondition(const ControlCondition *C) : IsUnconditional(false), C(C) {}
 
 public:
-  static DepCondition ifDisjoint(const MemRange &R1, const MemRange &R2) {
+  static DepCondition ifOverlapping(const MemRange &R1, const MemRange &R2) {
     return DepCondition(R1, R2);
   }
-  static DepCondition always() { return DepCondition(nullptr /*true*/); }
+  static DepCondition always() { return DepCondition(); }
   // Try to create a condition that implies both Cond1 and Cond2
   static llvm::Optional<DepCondition> coalesce(const DepCondition &Cond1,
                                                const DepCondition &Cond2,
                                                llvm::ScalarEvolution &,
                                                PredicatedSSA &);
   bool operator==(const DepCondition &Other) const {
-    return Disjoint == Other.Disjoint && C == Other.C;
+    return Overlap == Other.Overlap && C == Other.C;
   }
   bool operator<(const DepCondition &Other) const {
     // Order conflict checks before control conditions
-    if (isDisjoint() && !Other.isDisjoint())
+    if (isOverlapping() && !Other.isOverlapping())
       return true;
-    if (!isDisjoint() && Other.isDisjoint())
+    if (!isOverlapping() && Other.isOverlapping())
       return false;
-    if (isDisjoint()) {
-      assert(Other.isDisjoint());
+    if (isOverlapping()) {
+      assert(Other.isOverlapping());
       return getRanges() < Other.getRanges();
     }
     return getCondition() < Other.getCondition();
   }
-  bool isDisjoint() const { return Disjoint.hasValue(); }
+  bool isOverlapping() const { return Overlap.hasValue(); }
   const ControlCondition *getCondition() const { return C; }
   std::pair<MemRange, MemRange> getRanges() const {
-    assert(isDisjoint());
-    return *Disjoint;
+    assert(isOverlapping());
+    return *Overlap;
   }
-  bool isUnconditional() const { return !isDisjoint() && !C; }
-  bool isConditional() const { return !isUnconditional(); }
+  bool isUnconditional() const { return IsUnconditional; }
+  bool isConditional() const { return IsUnconditional; }
 };
 
 template <> struct llvm::DenseMapInfo<DepCondition> {
   static DepCondition getEmptyKey() { return DepCondition::always(); }
   static DepCondition getTombstoneKey() {
-    return DepCondition::ifDisjoint({nullptr, nullptr, nullptr},
+    return DepCondition::ifOverlapping({nullptr, nullptr, nullptr},
                                     {nullptr, nullptr, nullptr});
   }
   static unsigned getHashValue(const DepCondition &DepCond) {
-    if (DepCond.isDisjoint()) {
+    if (DepCond.isOverlapping()) {
       auto [R1, R2] = DepCond.getRanges();
       return llvm::hash_combine(true, R1.Base, R1.Size, R1.ParentLoop, R2.Base,
                                 R2.Size, R2.ParentLoop);
