@@ -315,7 +315,7 @@ void Versioner::runOnLoop(VLoop *VL) {
 
       auto *VL = PSSA.getLoopForInst(I);
       auto *UserVL = PSSA.getLoopForInst(UserI);
-      if (UserVL == VL && VersioningFlags.lookup(UserI) == Flag) {
+      if (VL->contains(UserVL) && VersioningFlags.lookup(UserI) == Flag) {
         // If the use comes from another instruction that gets versioned under
         // the same condition we just change that instruction (and its clone)
         // to use (the clone of) I
