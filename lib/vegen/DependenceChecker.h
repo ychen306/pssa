@@ -107,7 +107,9 @@ public:
     return DepCondition(R1, R2);
   }
   static DepCondition always() { return DepCondition(); }
-  static DepCondition ifTrue(const ControlCondition *C) { return DepCondition(C); }
+  static DepCondition ifTrue(const ControlCondition *C) {
+    return DepCondition(C);
+  }
   // Try to create a condition that implies both Cond1 and Cond2
   static llvm::Optional<DepCondition> coalesce(const DepCondition &Cond1,
                                                const DepCondition &Cond2,
@@ -139,10 +141,11 @@ public:
 };
 
 template <> struct llvm::DenseMapInfo<DepCondition> {
-  static DepCondition getEmptyKey() { return DepCondition::always(); }
+  static DepCondition getEmptyKey() {
+    return DepCondition::ifTrue(reinterpret_cast<const ControlCondition *>(-1));
+  }
   static DepCondition getTombstoneKey() {
-    return DepCondition::ifOverlapping({nullptr, nullptr, nullptr},
-                                    {nullptr, nullptr, nullptr});
+    return DepCondition::ifTrue(reinterpret_cast<const ControlCondition *>(-2));
   }
   static unsigned getHashValue(const DepCondition &DepCond) {
     if (DepCond.isOverlapping()) {
@@ -162,9 +165,7 @@ class DepKind {
 
 public:
   DepKind() {}
-  DepKind(const DepCondition &Cond) : Conds({Cond}) {}
-  DepKind(llvm::ArrayRef<DepCondition> Conds)
-      : Conds(Conds.begin(), Conds.end()) {}
+  DepKind(llvm::ArrayRef<DepCondition> Conds);
   bool isUnconditional() const {
     return Conds.size() == 1 && Conds.front().isUnconditional();
   }
@@ -326,11 +327,11 @@ public:
 
 // Find the dependences of Items but scan no further than the earliest Items
 // Also report if there's any circular dep
-bool findInBetweenDeps(
-    llvm::SmallVectorImpl<Item> &Deps, llvm::ArrayRef<Item> Items, VLoop *VL,
-    PredicatedSSA &PSSA, DependenceChecker &DepChecker,
-    const PackSet *Packs = nullptr,
-    const IndependenceTracker *IndepTracker = nullptr);
+bool findInBetweenDeps(llvm::SmallVectorImpl<Item> &Deps,
+                       llvm::ArrayRef<Item> Items, VLoop *VL,
+                       PredicatedSSA &PSSA, DependenceChecker &DepChecker,
+                       const PackSet *Packs = nullptr,
+                       const IndependenceTracker *IndepTracker = nullptr);
 
 // Find conditional dependences that, once removed, will make the instructions
 // independent Return true if it's possible (and false if no such set of deps

@@ -361,6 +361,14 @@ static bool isExclusive(const ControlCondition *C1,
   return false;
 }
 
+DepKind::DepKind(llvm::ArrayRef<DepCondition> TheConds) {
+  for (auto &DepCond : TheConds)
+    if (!DepCond.isUnconditional())
+      Conds.push_back(DepCond);
+  if (Conds.empty())
+    Conds = {DepCondition::always()};
+}
+
 Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
                                                      Instruction *I2) {
   if (I1 == I2)
