@@ -320,6 +320,11 @@ public:
     return FoundCycle;
   }
 
+  bool findDep(const ControlCondition *C) {
+    visitCond(C, C);
+    return FoundCycle;
+  }
+
   const llvm::DenseMap<DepEdge, DepKind> &getDepEdges() const {
     return DepEdges;
   }
