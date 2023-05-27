@@ -18,14 +18,14 @@ define void @s174(i32 noundef %M) local_unnamed_addr #0 {
 ; CHECK-NEXT:    [[ARRAYIDX5:%.*]] = getelementptr inbounds [320000 x float], ptr @a, i64 0, i64 [[I]]
 ; CHECK-NEXT:    [[IDENT_CHECK1:%.*]] = icmp ult ptr getelementptr (i8, ptr @a, i64 16), [[ARRAYIDX5]]
 ; CHECK-NEXT:    [[TMP0:%.*]] = or i1 [[IDENT_CHECK]], [[IDENT_CHECK1]]
-; CHECK-NEXT:    br i1 [[TMP0]], label [[TMP1:%.*]], label [[TMP2:%.*]]
-; CHECK:       1:
+; CHECK-NEXT:    br i1 [[TMP0]], label %[[TMP1:.*]], label %[[TMP2:.*]]
+; CHECK:       [[TMP1]]:
 ; CHECK-NEXT:    [[I3_VEC:%.*]] = load <4 x float>, ptr @a, align 16
 ; CHECK-NEXT:    [[I4_VEC4:%.*]] = load <4 x float>, ptr @b, align 16
 ; CHECK-NEXT:    [[ADD_1_VEC:%.*]] = fadd <4 x float> [[I3_VEC]], [[I4_VEC4]]
 ; CHECK-NEXT:    store <4 x float> [[ADD_1_VEC]], ptr [[ARRAYIDX5]], align 4
-; CHECK-NEXT:    br label [[TMP15:%.*]]
-; CHECK:       2:
+; CHECK-NEXT:    br label %[[TMP15:.*]]
+; CHECK:       [[TMP2]]:
 ; CHECK-NEXT:    [[TMP3:%.*]] = load float, ptr @a, align 16, !tbaa [[TBAA5:![0-9]+]]
 ; CHECK-NEXT:    [[I4_VEC:%.*]] = load <4 x float>, ptr @b, align 16
 ; CHECK-NEXT:    [[TMP4:%.*]] = extractelement <4 x float> [[I4_VEC]], i64 0
@@ -47,8 +47,8 @@ define void @s174(i32 noundef %M) local_unnamed_addr #0 {
 ; CHECK-NEXT:    [[TMP13:%.*]] = load float, ptr getelementptr inbounds ([320000 x float], ptr @a, i64 0, i64 3), align 4, !tbaa [[TBAA5]]
 ; CHECK-NEXT:    [[TMP14:%.*]] = fadd float [[TMP13]], [[TMP7]]
 ; CHECK-NEXT:    store float [[TMP14]], ptr [[ARRAYIDX5_3]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    br label [[TMP15]]
-; CHECK:       15:
+; CHECK-NEXT:    br label %[[TMP15]]
+; CHECK:       [[TMP15]]:
 ; CHECK-NEXT:    ret void
 ;
 entry:

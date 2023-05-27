@@ -195,7 +195,11 @@ raw_ostream &operator<<(raw_ostream &OS, const MemRange &R) {
 }
 
 raw_ostream &operator<<(raw_ostream &OS, const DepNode &N) {
-  if (auto *I = N.asInstruction())
+  if (auto *I = N.asInstruction(); I && I->hasName())
+    OS << I->getName();
+  else if (isa_and_nonnull<PHINode>(N.asInstruction()))
+    OS << "phi";
+  else if (auto *I = N.asInstruction())
     OS << *I;
   else if (auto *VL = N.asLoop())
     OS << "loop";
@@ -433,7 +437,8 @@ bool DependenceChecker::depends(
       if (isImplied(C1, C2))
         DepEdges->try_emplace({I2, I1}, *Kind);
       else
-        DepEdges->try_emplace({I2, I1}, DepKind({*Kind, DepCondition::ifTrue(C1)}));
+        DepEdges->try_emplace({I2, I1},
+                              DepKind({*Kind, DepCondition::ifTrue(C1)}));
     }
     return Kind.hasValue();
   } else if (VL1 && VL2) {
@@ -570,6 +575,7 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
   if (IndepTracker && IndepTracker->isIndependent(Src, It)) {
     return;
   }
+  errs() << "visiting " << Src << " -> " << It << '\n';
 
   if (!Processing.insert(It).second) {
     errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
@@ -633,7 +639,7 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
       for (auto &It2 : Coupled)
         if (VL->comesBefore(*I, It2) &&
             DepChecker.depends(*I, It2, &DepEdges, InterLoopDeps))
-          visit(*I, true, It);
+          visit(*I, true, It2);
     }
   }
 
@@ -870,6 +876,11 @@ IndependenceTracker::IndependenceTracker(
       LoopToDepsMap[{VL, Src}].insert(Dst);
     }
   }
+
+  errs() << "Dumping node to deps map\n";
+  for (auto [Src, Dsts] : NodeToDepsMap)
+    for (auto Dst : Dsts)
+      errs() << '\t' << Src << " -> " << Dst << '\n';
 }
 
 void IndependenceTracker::markInstAsVersioned(Instruction *Orig,
@@ -895,11 +906,14 @@ void IndependenceTracker::markLoopInstAsVersioned(Instruction *Orig,
 
 bool IndependenceTracker::isIndependent(const DepNode &Src,
                                         const DepNode &Dst) const {
+  auto *DstI = Dst.asInstruction();
   if (auto It = NodeToDepsMap.find(Src);
-      It != NodeToDepsMap.end() && It->second.count(Dst))
+      It != NodeToDepsMap.end() &&
+      (It->second.count(Dst) ||
+       (  TheVersioner.getOriginalIfCloned(DstI)
+        && It->second.count(TheVersioner.getOriginalIfCloned(DstI)))))
     return true;
   // Try again if Dst is a cloned instruction
-  auto *DstI = Dst.asInstruction();
   if (!DstI)
     return false;
   auto *OrigDst = TheVersioner.getOriginalIfCloned(DstI);
@@ -908,5 +922,11 @@ bool IndependenceTracker::isIndependent(const DepNode &Src,
   if (auto It = IndependentFrom.find(Src);
       It != IndependentFrom.end() && It->second.count(OrigDst))
     return true;
+  //if (Src.asInstruction() && !isa<PHINode>(Src.asInstruction()) &&
+  //    !isa<PHINode>(DstI)) {
+  //  errs() << "can't rule out dependence for " << Src << " -> " << Dst << '\n';
+  //  errs() << "\t dst cloned? "
+  //         << ((bool)TheVersioner.getOriginalIfCloned(DstI)) << '\n';
+  //}
   return false;
 }

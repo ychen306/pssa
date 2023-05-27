@@ -496,6 +496,8 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
         if (Inserted.insert(NewCond).second)
           NewConds.push_back(NewCond);
       }
+      // Fix a canonical order for the conditions
+      llvm::sort(NewConds);
       Conds = std::move(NewConds);
     }
 

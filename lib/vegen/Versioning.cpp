@@ -62,10 +62,10 @@ static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
 }
 
 static Value *emitOverlappingChecks(const DepCondition &DepCond, VLoop *VL,
-                            const ControlCondition *C,
-                            VLoop::ItemIterator InsertBefore,
-                            DependenceChecker &DepChecker, ScalarEvolution &SE,
-                            const DataLayout &DL) {
+                                    const ControlCondition *C,
+                                    VLoop::ItemIterator InsertBefore,
+                                    DependenceChecker &DepChecker,
+                                    ScalarEvolution &SE, const DataLayout &DL) {
   assert(DepCond.isOverlapping());
   auto [R1, R2] = DepCond.getRanges();
   auto *End1 = SE.getAddExpr(R1.Base, R1.Size);
@@ -74,12 +74,12 @@ static Value *emitOverlappingChecks(const DepCondition &DepCond, VLoop *VL,
   // inverse predicate here because SCEVExpander flips the evaluation...
   auto *Left = emitSCEVPred(
       SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT),
-        End1, R2.Base),
+                             End1, R2.Base),
       VL, C, InsertBefore, DepChecker, SE, DL);
   // Case 2: R2 is left of R1; i.e., End2 < Begin1.
   auto *Right = emitSCEVPred(
       SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT),
-        End2, R1.Base),
+                             End2, R1.Base),
       VL, C, InsertBefore, DepChecker, SE, DL);
   Inserter Insert(VL, C, InsertBefore);
   return Insert.CreateBinOp(Instruction::Or, Left, Right);
@@ -162,6 +162,19 @@ VLoop *Versioner::cloneLoop(VLoop *OrigVL, ValueToValueMapTy &VMap,
   return VL;
 }
 
+// Assuming VL is the parent of items, find the greatest common condition of the items
+static 
+const ControlCondition *getCommonCondition(VLoop *VL, ArrayRef<Item> Items) {
+  SmallVector<const ControlCondition *> Conds;
+  for (auto &It : Items) {
+    if (auto *I = It.asInstruction())
+      Conds.push_back(VL->getInstCond(I));
+    else
+      Conds.push_back(It.asLoop()->getLoopCond());
+  }
+  return getGreatestCommonCondition(Conds);
+}
+
 void Versioner::runOnLoop(VLoop *VL) {
   // Put the items in a vector to avoid iterator invalidation
   std::vector<Item> Items(VL->item_begin(), VL->item_end());
@@ -169,21 +182,22 @@ void Versioner::runOnLoop(VLoop *VL) {
   // Figure out the items we need to version in this loop and their versioning
   // conditions
   DenseMap<DepCondition, std::vector<Item>> CondToItemMap;
+  std::map<std::vector<DepCondition>, std::vector<Item>> CondSetToItemMap;
   SmallVector<Item> ItemsToVersion;
   for (auto Item : Items) {
     auto It = VersioningMap.find(Item);
     if (It == VersioningMap.end())
       continue;
     ItemsToVersion.push_back(Item);
-    for (auto &DepCond : It->second)
+    errs() << "item = " << Item << '\n';
+    auto &Conds = It->second;
+    for (auto &DepCond : Conds) {
+      errs() << "\t cond = " << DepCond << '\n';
       CondToItemMap[DepCond].push_back(Item);
+    }
+    CondSetToItemMap[Conds].push_back(Item);
   }
 
-  auto GetConditionForItem = [VL](const Item &It) {
-    if (auto *I = It.asInstruction())
-      return VL->getInstCond(I);
-    return It.asLoop()->getLoopCond();
-  };
   auto ComesBefore = [VL](const Item &It1, const Item &It2) {
     return VL->comesBefore(It1, It2);
   };
@@ -195,15 +209,13 @@ void Versioner::runOnLoop(VLoop *VL) {
   for (auto [DepCond, Items] : CondToItemMap) {
     if (!DepCond.isOverlapping())
       continue;
-    // Figure out where we can compute the condition.
+    // Figure out where we can compute the checks
     // (We assume prior analyses have
     // made sure that it's indeed possible to materialize DepCond before Items)
-    SmallVector<const ControlCondition *> Conds;
-    for (auto Item : Items)
-      Conds.push_back(GetConditionForItem(Item));
     Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
-    auto *V = emitOverlappingChecks(DepCond, VL, getGreatestCommonCondition(Conds),
-        VL->toIterator(Earliest), DepChecker, SE, DL);
+    auto *V =
+        emitOverlappingChecks(DepCond, VL, getCommonCondition(VL, Items),
+                              VL->toIterator(Earliest), DepChecker, SE, DL);
     OverlappingChecks[DepCond] = V;
   }
 
@@ -214,21 +226,58 @@ void Versioner::runOnLoop(VLoop *VL) {
   // versioned
   DenseMap<Item, Value *, ItemHashInfo> VersioningFlags;
   // Some items require multiple conditions, emit code to AND them together
-  for (auto Item : ItemsToVersion) {
-    auto &DepConds = VersioningMap.find(Item)->second;
-    auto [It, Inserted] = CondSets.try_emplace(DepConds);
-    if (Inserted) {
-#if 1
+  for (auto It : ItemsToVersion) {
+    auto &DepConds = VersioningMap.find(It)->second;
+    if (!CondSets.count(DepConds)) {
+#if 0
       if (DepConds.size() == 1) {
-        It->second = OverlappingChecks.lookup(DepConds.front());
+        CondSets[DepConds] = OverlappingChecks.lookup(DepConds.front());
       } else {
         llvm_unreachable("not handling multiple conditions *right now*");
       }
 #else
-      SmallVector<
+      SmallVector<Value *> Checks;
+      SmallVector<const ControlCondition *> Conds;
+      for (auto &DepCond : DepConds) {
+        if (DepCond.isOverlapping())
+          Checks.push_back(OverlappingChecks.lookup(DepCond));
+        else
+          Conds.push_back(DepCond.getCondition());
+      }
+
+      // We need to emit code to AND all of the checks together.
+      // Before we do that, we find the dependencies of the checks that occur
+      // after the item It
+      SmallVector<Item> Deps;
+      auto &Items = CondSetToItemMap.at(DepConds);
+      Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
+      DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker);
+      for (auto *V : Checks) {
+        if (auto *Check = dyn_cast<Instruction>(V))
+          DepFinder.findDep(Check, true /*add check to Deps*/);
+      }
+      for (auto *C : Conds)
+        DepFinder.findDep(C);
+
+      // Move the dependences before Item
+      auto InsertBefore = VL->toIterator(Earliest);
+      ItemMover Mover(VL);
+      for (auto Dep : Deps)
+        Mover.remove(Dep);
+      Mover.reinsert(InsertBefore);
+
+      Inserter Insert(VL, getCommonCondition(VL, Items), InsertBefore);
+      Value *NoDep = Insert.getTrue();
+      for (auto *V : Checks)
+        NoDep = Insert.CreateBinOp(Instruction::And, NoDep, V);
+      if (!Conds.empty()) {
+        NoDep = Insert.CreateBinOp(Instruction::And, NoDep, 
+            Insert.createOneHotPhi(PSSA.getOr(Conds), Insert.getFalse(), Insert.getTrue()));
+      }
+      CondSets[DepConds] = NoDep;
 #endif
     }
-    VersioningFlags[Item] = It->second;
+    VersioningFlags[It] = CondSets[DepConds];
   }
 
   // Clone the instructions/loops
@@ -237,6 +286,8 @@ void Versioner::runOnLoop(VLoop *VL) {
   // uses
   DenseSet<Instruction *> VersioningPhis;
   DenseMap<Instruction *, Instruction *> InstToVersioningPhiMap;
+  // Mapping an instruction to the ancestor loop that we just versioned
+  DenseMap<Instruction *, VLoop *> InstToLoopMap;
   // Remember the sub loops that we visit
   SmallVector<VLoop *> SubLoops;
   for (auto Item : ItemsToVersion) {
@@ -264,6 +315,8 @@ void Versioner::runOnLoop(VLoop *VL) {
 
     if (auto *I = Item.asInstruction()) {
       auto *I2 = I->clone();
+      if (I->hasName())
+        I2->setName(I->getName() + ".clone");
       if (auto *Orig = CloneToOrigMap.lookup(I))
         CloneToOrigMap[I2] = Orig;
       else
@@ -280,6 +333,7 @@ void Versioner::runOnLoop(VLoop *VL) {
       auto *SubVL2 =
           cloneLoop(SubVL, VMap, [&](Instruction *I, Instruction *ClonedI) {
             VersioningFlags[I] = Flag;
+            InstToLoopMap[I] = SubVL;
             OrigToCloneMap[I] = ClonedI;
             CreateVersioningPhi(I, ClonedI);
             IndepTracker.markLoopInstAsVersioned(I, ClonedI, SubVL);
@@ -290,9 +344,22 @@ void Versioner::runOnLoop(VLoop *VL) {
     }
   }
 
+  // Check if DepConds are implied by the versioning conditions of I
+  auto CondsAreImplied = [&](ArrayRef<DepCondition> DepConds, Instruction *I) -> bool {
+    Item It = I;
+    // If I's from a loop that we just versioned, we are really asking if VL's versioning is implied
+    if (auto *VL = InstToLoopMap.lookup(I))
+      It = VL;
+    // Not implied if I is never versioned
+    if (!VersioningMap.count(It))
+      return false;
+    auto CondsOfI = VersioningMap.find(It)->second;
+    return llvm::all_of(DepConds, [&](auto &DepCond) { return llvm::count(CondsOfI, DepCond); });
+  };
+
   // If I it's cloned, rewrite its uses;
   DenseSet<Instruction *> UsedInstToVersioningPhiMap;
-  auto RewriteUses = [&](Instruction *I, Value *Flag) {
+  auto RewriteUses = [&](Instruction *I, Value *Flag, ArrayRef<DepCondition> DepConds) {
     auto *Clone = OrigToCloneMap.lookup(I);
     assert(Clone);
 
@@ -317,7 +384,8 @@ void Versioner::runOnLoop(VLoop *VL) {
 
       auto *VL = PSSA.getLoopForInst(I);
       auto *UserVL = PSSA.getLoopForInst(UserI);
-      if (VL->contains(UserVL) && VersioningFlags.lookup(UserI) == Flag) {
+      // FIXME: instead of checking for equality, we *have* to check that the versioning of UserI is *implied by* the versioning of I (i.e., <= instead of ==).
+      if (VL->contains(UserVL) && CondsAreImplied(DepConds, UserI)) {//VersioningFlags.lookup(UserI) == Flag) {
         // If the use comes from another instruction that gets versioned under
         // the same condition we just change that instruction (and its clone)
         // to use (the clone of) I
@@ -341,8 +409,9 @@ void Versioner::runOnLoop(VLoop *VL) {
   // Rewire the use of the cloned instructions
   for (auto Item : ItemsToVersion) {
     auto *Flag = VersioningFlags.lookup(Item);
+    auto &DepConds = VersioningMap.find(Item)->second;
     if (auto *I = Item.asInstruction()) {
-      RewriteUses(I, Flag);
+      RewriteUses(I, Flag, DepConds);
     } else {
       SmallVector Worklist{Item};
       while (!Worklist.empty()) {
@@ -350,9 +419,9 @@ void Versioner::runOnLoop(VLoop *VL) {
         if (auto *VL = Item.asLoop()) {
           Worklist.append(VL->item_begin(), VL->item_end());
           for (auto *Mu : VL->mus())
-            RewriteUses(Mu, Flag);
+            RewriteUses(Mu, Flag, DepConds);
         } else {
-          RewriteUses(Item.asInstruction(), Flag);
+          RewriteUses(Item.asInstruction(), Flag, DepConds);
         }
       }
     }
