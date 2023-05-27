@@ -10,7 +10,7 @@ target triple = "x86_64-apple-macosx10.15.0"
 ; Function Attrs: nofree norecurse nosync nounwind ssp uwtable
 define void @s174(i32 noundef %M) local_unnamed_addr #0 {
 ; CHECK-LABEL: @s174(
-; CHECK-NEXT:  entry:
+; CHECK-NEXT:  [[ENTRY:.*]]:
 ; CHECK-NEXT:    [[I:%.*]] = sext i32 [[M:%.*]] to i64
 ; CHECK-NEXT:    [[TMP0:%.*]] = shl nsw i64 [[I]], 2
 ; CHECK-NEXT:    [[UGLYGEP:%.*]] = getelementptr i8, ptr @a, i64 [[TMP0]]
@@ -19,9 +19,9 @@ define void @s174(i32 noundef %M) local_unnamed_addr #0 {
 ; CHECK-NEXT:    [[UGLYGEP1:%.*]] = getelementptr i8, ptr @a, i64 [[TMP1]]
 ; CHECK-NEXT:    [[IDENT_CHECK2:%.*]] = icmp ult ptr [[UGLYGEP1]], @a
 ; CHECK-NEXT:    [[TMP2:%.*]] = or i1 [[IDENT_CHECK]], [[IDENT_CHECK2]]
-; CHECK-NEXT:    br i1 [[TMP2]], label [[EXIT:%.*]], label [[HEADER:%.*]]
-; CHECK:       header:
-; CHECK-NEXT:    [[INDVARS_IV_CLONE:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_CLONE:%.*]], [[HEADER]] ], [ 0, [[ENTRY:%.*]] ]
+; CHECK-NEXT:    br i1 [[TMP2]], label %[[EXIT:.*]], label %[[HEADER:.*]]
+; CHECK:       [[HEADER]]:
+; CHECK-NEXT:    [[INDVARS_IV_CLONE:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_CLONE:%.*]], %[[HEADER]] ], [ 0, %[[ENTRY]] ]
 ; CHECK-NEXT:    [[ARRAYIDX6_CLONE:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @a, i64 0, i64 [[INDVARS_IV_CLONE]], i64 0
 ; CHECK-NEXT:    [[I10_CLONE:%.*]] = load float, ptr [[ARRAYIDX6_CLONE]], align 16, !tbaa [[TBAA5:![0-9]+]]
 ; CHECK-NEXT:    [[ARRAYIDX10_CLONE:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @b, i64 0, i64 [[INDVARS_IV_CLONE]], i64 0
@@ -32,19 +32,19 @@ define void @s174(i32 noundef %M) local_unnamed_addr #0 {
 ; CHECK-NEXT:    [[INDVARS_IV_NEXT_CLONE]] = add nuw nsw i64 [[INDVARS_IV_CLONE]], 1
 ; CHECK-NEXT:    [[EXITCOND_NOT_CLONE:%.*]] = icmp eq i64 [[INDVARS_IV_NEXT_CLONE]], 320000
 ; CHECK-NEXT:    [[DOT:%.*]] = select i1 [[EXITCOND_NOT_CLONE]], i1 false, i1 true
-; CHECK-NEXT:    br i1 [[DOT]], label [[HEADER]], label [[EXIT]]
-; CHECK:       exit:
+; CHECK-NEXT:    br i1 [[DOT]], label %[[HEADER]], label %[[EXIT]]
+; CHECK:       [[EXIT]]:
 ; CHECK-NEXT:    [[I1:%.*]] = add nsw i64 [[I]], 1
 ; CHECK-NEXT:    [[I4:%.*]] = add nsw i64 [[I]], 2
 ; CHECK-NEXT:    [[I7:%.*]] = add nsw i64 [[I]], 3
-; CHECK-NEXT:    br i1 [[TMP2]], label [[LATCH4:%.*]], label [[HEADER24:%.*]]
-; CHECK:       latch4:
-; CHECK-NEXT:    [[I3_VEC53:%.*]] = phi <4 x float> [ [[I3_VEC_PRE:%.*]], [[LATCH4]] ], [ undef, [[EXIT]] ]
-; CHECK-NEXT:    [[I2_VEC51:%.*]] = phi <4 x float> [ [[I2_VEC_PRE:%.*]], [[LATCH4]] ], [ undef, [[EXIT]] ]
-; CHECK-NEXT:    [[INDVARS_IV_3:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_3:%.*]], [[LATCH4]] ], [ 0, [[EXIT]] ]
-; CHECK-NEXT:    [[INDVARS_IV_2:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_2:%.*]], [[LATCH4]] ], [ 0, [[EXIT]] ]
-; CHECK-NEXT:    [[INDVARS_IV_1:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_1:%.*]], [[LATCH4]] ], [ 0, [[EXIT]] ]
-; CHECK-NEXT:    [[INDVARS_IV:%.*]] = phi i64 [ [[INDVARS_IV_NEXT:%.*]], [[LATCH4]] ], [ 0, [[EXIT]] ]
+; CHECK-NEXT:    br i1 [[TMP2]], label %[[LATCH4:.*]], label %[[HEADER24:.*]]
+; CHECK:       [[LATCH4]]:
+; CHECK-NEXT:    [[I3_VEC53:%.*]] = phi <4 x float> [ [[I3_VEC_PRE:%.*]], %[[LATCH4]] ], [ undef, %[[EXIT]] ]
+; CHECK-NEXT:    [[I2_VEC51:%.*]] = phi <4 x float> [ [[I2_VEC_PRE:%.*]], %[[LATCH4]] ], [ undef, %[[EXIT]] ]
+; CHECK-NEXT:    [[INDVARS_IV_3:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_3:%.*]], %[[LATCH4]] ], [ 0, %[[EXIT]] ]
+; CHECK-NEXT:    [[INDVARS_IV_2:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_2:%.*]], %[[LATCH4]] ], [ 0, %[[EXIT]] ]
+; CHECK-NEXT:    [[INDVARS_IV_1:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_1:%.*]], %[[LATCH4]] ], [ 0, %[[EXIT]] ]
+; CHECK-NEXT:    [[INDVARS_IV:%.*]] = phi i64 [ [[INDVARS_IV_NEXT:%.*]], %[[LATCH4]] ], [ 0, %[[EXIT]] ]
 ; CHECK-NEXT:    [[ARRAYIDX6:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @a, i64 0, i64 [[INDVARS_IV]], i64 0
 ; CHECK-NEXT:    [[I2_VEC_PRE]] = load <4 x float>, ptr [[ARRAYIDX6]], align 16
 ; CHECK-NEXT:    [[ARRAYIDX6_1:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @a, i64 0, i64 [[INDVARS_IV_1]], i64 1
@@ -70,9 +70,9 @@ define void @s174(i32 noundef %M) local_unnamed_addr #0 {
 ; CHECK-NEXT:    [[INDVARS_IV_NEXT_3]] = add nuw nsw i64 [[INDVARS_IV_3]], 1
 ; CHECK-NEXT:    [[EXITCOND_3_NOT:%.*]] = icmp eq i64 [[INDVARS_IV_NEXT_3]], 320000
 ; CHECK-NEXT:    [[DOT47:%.*]] = select i1 [[EXITCOND_NOT]], i1 false, i1 true
-; CHECK-NEXT:    br i1 [[DOT47]], label [[LATCH4]], label [[EXIT5:%.*]]
-; CHECK:       header24:
-; CHECK-NEXT:    [[INDVARS_IV_1_CLONE:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_1_CLONE:%.*]], [[HEADER24]] ], [ 0, [[EXIT]] ]
+; CHECK-NEXT:    br i1 [[DOT47]], label %[[LATCH4]], label %[[EXIT5:.*]]
+; CHECK:       [[HEADER24]]:
+; CHECK-NEXT:    [[INDVARS_IV_1_CLONE:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_1_CLONE:%.*]], %[[HEADER24]] ], [ 0, %[[EXIT]] ]
 ; CHECK-NEXT:    [[ARRAYIDX6_1_CLONE:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @a, i64 0, i64 [[INDVARS_IV_1_CLONE]], i64 1
 ; CHECK-NEXT:    [[I2_CLONE:%.*]] = load float, ptr [[ARRAYIDX6_1_CLONE]], align 4, !tbaa [[TBAA5]]
 ; CHECK-NEXT:    [[ARRAYIDX10_1_CLONE:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @b, i64 0, i64 [[INDVARS_IV_1_CLONE]], i64 1
@@ -83,9 +83,9 @@ define void @s174(i32 noundef %M) local_unnamed_addr #0 {
 ; CHECK-NEXT:    [[INDVARS_IV_NEXT_1_CLONE]] = add nuw nsw i64 [[INDVARS_IV_1_CLONE]], 1
 ; CHECK-NEXT:    [[EXITCOND_1_NOT_CLONE:%.*]] = icmp eq i64 [[INDVARS_IV_NEXT_1_CLONE]], 320000
 ; CHECK-NEXT:    [[DOT48:%.*]] = select i1 [[EXITCOND_1_NOT_CLONE]], i1 false, i1 true
-; CHECK-NEXT:    br i1 [[DOT48]], label [[HEADER24]], label [[HEADER29:%.*]]
-; CHECK:       header29:
-; CHECK-NEXT:    [[INDVARS_IV_2_CLONE:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_2_CLONE:%.*]], [[HEADER29]] ], [ 0, [[HEADER24]] ]
+; CHECK-NEXT:    br i1 [[DOT48]], label %[[HEADER24]], label %[[HEADER29:.*]]
+; CHECK:       [[HEADER29]]:
+; CHECK-NEXT:    [[INDVARS_IV_2_CLONE:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_2_CLONE:%.*]], %[[HEADER29]] ], [ 0, %[[HEADER24]] ]
 ; CHECK-NEXT:    [[ARRAYIDX6_2_CLONE:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @a, i64 0, i64 [[INDVARS_IV_2_CLONE]], i64 2
 ; CHECK-NEXT:    [[I5_CLONE:%.*]] = load float, ptr [[ARRAYIDX6_2_CLONE]], align 8, !tbaa [[TBAA5]]
 ; CHECK-NEXT:    [[ARRAYIDX10_2_CLONE:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @b, i64 0, i64 [[INDVARS_IV_2_CLONE]], i64 2
@@ -96,9 +96,9 @@ define void @s174(i32 noundef %M) local_unnamed_addr #0 {
 ; CHECK-NEXT:    [[INDVARS_IV_NEXT_2_CLONE]] = add nuw nsw i64 [[INDVARS_IV_2_CLONE]], 1
 ; CHECK-NEXT:    [[EXITCOND_2_NOT_CLONE:%.*]] = icmp eq i64 [[INDVARS_IV_NEXT_2_CLONE]], 320000
 ; CHECK-NEXT:    [[DOT49:%.*]] = select i1 [[EXITCOND_2_NOT_CLONE]], i1 false, i1 true
-; CHECK-NEXT:    br i1 [[DOT49]], label [[HEADER29]], label [[HEADER34:%.*]]
-; CHECK:       header34:
-; CHECK-NEXT:    [[INDVARS_IV_3_CLONE:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_3_CLONE:%.*]], [[HEADER34]] ], [ 0, [[HEADER29]] ]
+; CHECK-NEXT:    br i1 [[DOT49]], label %[[HEADER29]], label %[[HEADER34:.*]]
+; CHECK:       [[HEADER34]]:
+; CHECK-NEXT:    [[INDVARS_IV_3_CLONE:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_3_CLONE:%.*]], %[[HEADER34]] ], [ 0, %[[HEADER29]] ]
 ; CHECK-NEXT:    [[ARRAYIDX6_3_CLONE:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @a, i64 0, i64 [[INDVARS_IV_3_CLONE]], i64 3
 ; CHECK-NEXT:    [[I8_CLONE:%.*]] = load float, ptr [[ARRAYIDX6_3_CLONE]], align 4, !tbaa [[TBAA5]]
 ; CHECK-NEXT:    [[ARRAYIDX10_3_CLONE:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @b, i64 0, i64 [[INDVARS_IV_3_CLONE]], i64 3
@@ -109,8 +109,8 @@ define void @s174(i32 noundef %M) local_unnamed_addr #0 {
 ; CHECK-NEXT:    [[INDVARS_IV_NEXT_3_CLONE]] = add nuw nsw i64 [[INDVARS_IV_3_CLONE]], 1
 ; CHECK-NEXT:    [[EXITCOND_3_NOT_CLONE:%.*]] = icmp eq i64 [[INDVARS_IV_NEXT_3_CLONE]], 320000
 ; CHECK-NEXT:    [[DOT50:%.*]] = select i1 [[EXITCOND_3_NOT_CLONE]], i1 false, i1 true
-; CHECK-NEXT:    br i1 [[DOT50]], label [[HEADER34]], label [[EXIT5]]
-; CHECK:       exit5:
+; CHECK-NEXT:    br i1 [[DOT50]], label %[[HEADER34]], label %[[EXIT5]]
+; CHECK:       [[EXIT5]]:
 ; CHECK-NEXT:    ret void
 ;
 entry:

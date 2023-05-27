@@ -293,6 +293,8 @@ static void dump(raw_ostream &OS, const ControlCondition *C) {
       OS << "not ";
     if (And->Cond->hasName())
       OS << And->Cond->getName();
+    else if (isa<PHINode>(And->Cond))
+      OS << "phi";
     else
       OS << *And->Cond;
     OS << ')';
