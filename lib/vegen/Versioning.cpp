@@ -61,31 +61,28 @@ static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
   return Expanded;
 }
 
-static Value *emitCondition(const DepCondition &DepCond, VLoop *VL,
+static Value *emitOverlappingChecks(const DepCondition &DepCond, VLoop *VL,
                             const ControlCondition *C,
                             VLoop::ItemIterator InsertBefore,
                             DependenceChecker &DepChecker, ScalarEvolution &SE,
                             const DataLayout &DL) {
-  if (DepCond.isOverlapping()) {
-    auto [R1, R2] = DepCond.getRanges();
-    auto *End1 = SE.getAddExpr(R1.Base, R1.Size);
-    auto *End2 = SE.getAddExpr(R2.Base, R2.Size);
-    // Case 1: R1 is left of R2; i.e., End1 < Begin2. Note that we are using the
-    // inverse predicate here because SCEVExpander flips the evaluation...
-    auto *Left = emitSCEVPred(
-        SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT),
-                               End1, R2.Base),
-        VL, C, InsertBefore, DepChecker, SE, DL);
-    // Case 2: R2 is left of R1; i.e., End2 < Begin1.
-    auto *Right = emitSCEVPred(
-        SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT),
-                               End2, R1.Base),
-        VL, C, InsertBefore, DepChecker, SE, DL);
-    Inserter Insert(VL, C, InsertBefore);
-    return Insert.CreateBinOp(Instruction::Or, Left, Right);
-  }
-
-  llvm_unreachable("not handling control conditions right now");
+  assert(DepCond.isOverlapping());
+  auto [R1, R2] = DepCond.getRanges();
+  auto *End1 = SE.getAddExpr(R1.Base, R1.Size);
+  auto *End2 = SE.getAddExpr(R2.Base, R2.Size);
+  // Case 1: R1 is left of R2; i.e., End1 < Begin2. Note that we are using the
+  // inverse predicate here because SCEVExpander flips the evaluation...
+  auto *Left = emitSCEVPred(
+      SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT),
+        End1, R2.Base),
+      VL, C, InsertBefore, DepChecker, SE, DL);
+  // Case 2: R2 is left of R1; i.e., End2 < Begin1.
+  auto *Right = emitSCEVPred(
+      SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT),
+        End2, R1.Base),
+      VL, C, InsertBefore, DepChecker, SE, DL);
+  Inserter Insert(VL, C, InsertBefore);
+  return Insert.CreateBinOp(Instruction::Or, Left, Right);
 }
 
 VLoop *Versioner::cloneLoop(VLoop *OrigVL, ValueToValueMapTy &VMap,
@@ -193,10 +190,11 @@ void Versioner::runOnLoop(VLoop *VL) {
 
   auto &DL = PSSA.getFunction()->getParent()->getDataLayout();
 
-  // Emit code to evaluate the versioning condition (if they are not evaluated
-  // already)
-  DenseMap<DepCondition, Value *> MaterializedConds;
+  // Emit code to compute the overlapping checks
+  DenseMap<DepCondition, Value *> OverlappingChecks;
   for (auto [DepCond, Items] : CondToItemMap) {
+    if (!DepCond.isOverlapping())
+      continue;
     // Figure out where we can compute the condition.
     // (We assume prior analyses have
     // made sure that it's indeed possible to materialize DepCond before Items)
@@ -204,9 +202,9 @@ void Versioner::runOnLoop(VLoop *VL) {
     for (auto Item : Items)
       Conds.push_back(GetConditionForItem(Item));
     Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
-    auto *V = emitCondition(DepCond, VL, getGreatestCommonCondition(Conds),
-                            VL->toIterator(Earliest), DepChecker, SE, DL);
-    MaterializedConds[DepCond] = V;
+    auto *V = emitOverlappingChecks(DepCond, VL, getGreatestCommonCondition(Conds),
+        VL->toIterator(Earliest), DepChecker, SE, DL);
+    OverlappingChecks[DepCond] = V;
   }
 
   llvm::sort(ItemsToVersion, ComesBefore);
@@ -220,11 +218,15 @@ void Versioner::runOnLoop(VLoop *VL) {
     auto &DepConds = VersioningMap.find(Item)->second;
     auto [It, Inserted] = CondSets.try_emplace(DepConds);
     if (Inserted) {
+#if 1
       if (DepConds.size() == 1) {
-        It->second = MaterializedConds.lookup(DepConds.front());
+        It->second = OverlappingChecks.lookup(DepConds.front());
       } else {
         llvm_unreachable("not handling multiple conditions *right now*");
       }
+#else
+      SmallVector<
+#endif
     }
     VersioningFlags[Item] = It->second;
   }
