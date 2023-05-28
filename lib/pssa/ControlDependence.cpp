@@ -204,6 +204,27 @@ const ControlCondition *ConditionTable::concat(const ControlCondition *CondA,
   return ConcatCache[{CondA, CondB}] = getOr(Conds);
 }
 
+const ControlCondition *ConditionTable::getAnd(const ControlCondition *CondA,
+                                               const ControlCondition *CondB) {
+  if (!CondA)
+    return CondB;
+  if (!CondB)
+    return CondA;
+
+  if (auto *C = AndCache.lookup({CondA, CondB}))
+    return C;
+
+  if (auto *And = dyn_cast<ConditionAnd>(CondB))
+    return ConcatCache[{CondA, CondB}] =
+               getAnd(getAnd(CondA, And->Parent), And->Cond, And->IsTrue);
+
+  auto *Or = cast<ConditionOr>(CondB);
+  SmallVector<const ControlCondition *> Conds;
+  for (auto *C : Or->Conds)
+    Conds.push_back(getAnd(CondA, C));
+  return AndCache[{CondA, CondB}] = getOr(Conds);
+}
+
 // This is the same as computing the post dominance frontier of BB
 const SmallPtrSetImpl<BasicBlock *> &
 ControlDependenceAnalysis::getControlDependentBlocks(BasicBlock *BB) {

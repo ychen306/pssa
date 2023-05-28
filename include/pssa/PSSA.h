@@ -292,7 +292,13 @@ public:
     return CT.getAnd(ParentC, V, IsTrue);
   }
 
-  const ControlCondition *concat(const ControlCondition *C1, const ControlCondition *C2) {
+  const ControlCondition *getAnd(const ControlCondition *CondA,
+                                 const ControlCondition *CondB) {
+    return CT.getAnd(CondA, CondB);
+  }
+
+  const ControlCondition *concat(const ControlCondition *C1,
+                                 const ControlCondition *C2) {
     return CT.concat(C1, C2);
   }
 
@@ -307,7 +313,8 @@ public:
   unsigned getLoopDepth(VLoop *VL);
 };
 
-bool isConvertibleToPSSA(llvm::Function &, llvm::LoopInfo &, llvm::DominatorTree &);
+bool isConvertibleToPSSA(llvm::Function &, llvm::LoopInfo &,
+                         llvm::DominatorTree &);
 
 VLoop *nearestCommonParent(VLoop *VL1, VLoop *VL2);
 
