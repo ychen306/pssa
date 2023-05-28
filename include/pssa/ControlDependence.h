@@ -95,7 +95,7 @@ class ConditionTable {
   llvm::EquivalenceClasses<const ControlCondition *> EquivalentConds;
   llvm::DenseMap<std::pair<const ControlCondition *, const ControlCondition *>,
                  const ControlCondition *>
-      ConcatCache;
+      ConcatCache, AndCache;
 
   using OrKeyT = llvm::ArrayRef<const ControlCondition *>;
   llvm::DenseMap<OrKeyT, std::unique_ptr<ConditionOr>> UniqueOrs;
@@ -112,6 +112,10 @@ public:
   const ControlCondition *getAnd(const ControlCondition *, llvm::Value *, bool);
   const ControlCondition *getOr(llvm::ArrayRef<const ControlCondition *>);
   const ControlCondition *concat(const ControlCondition *,
+                                 const ControlCondition *);
+  // Similar to concat except we refactor out the common conditions to reduce
+  // complexity
+  const ControlCondition *getAnd(const ControlCondition *,
                                  const ControlCondition *);
   bool isEquivalent(const ControlCondition *C1,
                     const ControlCondition *C2) const {

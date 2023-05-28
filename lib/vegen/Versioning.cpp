@@ -229,13 +229,6 @@ void Versioner::runOnLoop(VLoop *VL) {
   for (auto It : ItemsToVersion) {
     auto &DepConds = VersioningMap.find(It)->second;
     if (!CondSets.count(DepConds)) {
-#if 0
-      if (DepConds.size() == 1) {
-        CondSets[DepConds] = OverlappingChecks.lookup(DepConds.front());
-      } else {
-        llvm_unreachable("not handling multiple conditions *right now*");
-      }
-#else
       SmallVector<Value *> Checks;
       SmallVector<const ControlCondition *> Conds;
       for (auto &DepCond : DepConds) {
@@ -275,7 +268,6 @@ void Versioner::runOnLoop(VLoop *VL) {
             Insert.createOneHotPhi(PSSA.getOr(Conds), Insert.getFalse(), Insert.getTrue()));
       }
       CondSets[DepConds] = NoDep;
-#endif
     }
     VersioningFlags[It] = CondSets[DepConds];
   }
@@ -299,8 +291,10 @@ void Versioner::runOnLoop(VLoop *VL) {
       C = VL->getInstCond(I);
     else
       C = Item.asLoop()->getLoopCond();
-    auto *Success = PSSA.getAnd(C, Flag, true);
-    auto *Fail = PSSA.getAnd(C, Flag, false);
+
+    auto *FlagC = PSSA.getInstCond(cast<Instruction>(Flag));
+    auto *Success = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, true), C);
+    auto *Fail = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, false), C);
 
     // Create a versioning phi for the instruction I and its clone I2.
     auto CreateVersioningPhi = [&](Instruction *I, Instruction *I2) {
@@ -359,7 +353,7 @@ void Versioner::runOnLoop(VLoop *VL) {
 
   // If I it's cloned, rewrite its uses;
   DenseSet<Instruction *> UsedInstToVersioningPhiMap;
-  auto RewriteUses = [&](Instruction *I, Value *Flag, ArrayRef<DepCondition> DepConds) {
+  auto RewriteUses = [&](Instruction *I, ArrayRef<DepCondition> DepConds) {
     auto *Clone = OrigToCloneMap.lookup(I);
     assert(Clone);
 
@@ -408,10 +402,9 @@ void Versioner::runOnLoop(VLoop *VL) {
 
   // Rewire the use of the cloned instructions
   for (auto Item : ItemsToVersion) {
-    auto *Flag = VersioningFlags.lookup(Item);
     auto &DepConds = VersioningMap.find(Item)->second;
     if (auto *I = Item.asInstruction()) {
-      RewriteUses(I, Flag, DepConds);
+      RewriteUses(I, DepConds);
     } else {
       SmallVector Worklist{Item};
       while (!Worklist.empty()) {
@@ -419,9 +412,9 @@ void Versioner::runOnLoop(VLoop *VL) {
         if (auto *VL = Item.asLoop()) {
           Worklist.append(VL->item_begin(), VL->item_end());
           for (auto *Mu : VL->mus())
-            RewriteUses(Mu, Flag, DepConds);
+            RewriteUses(Mu, DepConds);
         } else {
-          RewriteUses(Item.asInstruction(), Flag, DepConds);
+          RewriteUses(Item.asInstruction(), DepConds);
         }
       }
     }
