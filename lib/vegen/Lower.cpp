@@ -977,7 +977,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
           Conds.push_back(VL->getInstCond(I));
           markAsProcessed(I);
         }
-      auto *C = getGreatestCommonCondition(Conds);
+      auto *C = remapCondition(getGreatestCommonCondition(Conds));
 
       auto Iterator = VL->toIterator(I);
       Inserter InsertBeforeI(VL, C, Iterator);
@@ -1026,13 +1026,35 @@ void VectorGen::runOnLoop(VLoop *VL) {
           m_Intrinsic<Intrinsic::lifetime_start>(m_Value()).match(I) ||
           m_Intrinsic<Intrinsic::lifetime_end>(m_Value()).match(I))
         DeadInsts.push_back(I);
+
+      auto *PN = dyn_cast<PHINode>(I);
+      if (PN && VL->isOneHotPhi(PN)) {
+        auto &Ctx = PSSA.getContext();
+        auto *IfFalse = PN->getOperand(0);
+        auto *IfTrue = PN->getOperand(1);
+        auto *True = ConstantInt::getTrue(Ctx);
+        auto *False = ConstantInt::getFalse(Ctx);
+        bool IsNone = IfTrue == False && IfFalse == True;
+        bool IsAll = IfTrue == True && IfFalse == False;
+        auto *Or = dyn_cast<ConditionOr>(VL->getPhiCondition(PN, 1));
+        if (Or && (IsNone || IsAll)) {
+          auto BeforePN = VL->toIterator(PN);
+          Inserter Insert(VL, nullptr, BeforePN);
+          auto *Vec = gatherMask(Or->Conds, Insert, true /*unordered*/);
+          auto *Or = Insert.createOrReduce(Vec);
+          if (IsAll)
+            VM[PN] = Or;
+          else
+            VM[PN] = Insert(BinaryOperator::CreateNot(Or));
+        }
+      }
     }
 
     // Fix some of the operands if need to.
     // (E.g., replacing use of scalar value w/ extract)
     remapInstruction(I);
 
-    // Similay remap the condition
+    // Similarly remap the condition
     // (e.g., the control condition may need to use a extracted value)
     VL->setInstCond(I, remapCondition(VL->getInstCond(I)));
 
