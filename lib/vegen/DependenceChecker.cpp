@@ -575,8 +575,6 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
   if (IndepTracker && IndepTracker->isIndependent(Src, It)) {
     return;
   }
-  errs() << "visiting " << Src << " -> " << It << '\n';
-
   if (!Processing.insert(It).second) {
     errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
     FoundCycle = true;
