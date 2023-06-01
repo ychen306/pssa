@@ -1047,6 +1047,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
             VM[PN] = Or;
           else
             VM[PN] = Insert(BinaryOperator::CreateNot(Or));
+          DeadInsts.push_back(PN);
         }
       }
     }
