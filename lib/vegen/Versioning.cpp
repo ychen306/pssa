@@ -295,6 +295,8 @@ void Versioner::runOnLoop(VLoop *VL) {
     auto *FlagC = PSSA.getInstCond(cast<Instruction>(Flag));
     auto *Success = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, true), C);
     auto *Fail = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, false), C);
+    OrigConds[Success] = C;
+    OrigConds[Fail] = C;
 
     // Create a versioning phi for the instruction I and its clone I2.
     auto CreateVersioningPhi = [&](Instruction *I, Instruction *I2) {

@@ -18,6 +18,7 @@ class Versioner {
   IndependenceTracker IndepTracker;
 
   llvm::DenseMap<llvm::Instruction *, llvm::Instruction *> CloneToOrigMap;
+  llvm::DenseMap<const ControlCondition *, const ControlCondition *> OrigConds;
 
   using CallbackTy =
       std::function<void(llvm::Instruction *, llvm::Instruction *)>;
@@ -40,6 +41,12 @@ public:
   void run() { runOnLoop(&PSSA.getTopLevel()); }
   llvm::Instruction *getOriginalIfCloned(llvm::Instruction *I) const {
     return CloneToOrigMap.lookup(I);
+  }
+  // If we strenghtened an instruction's condition to C during versioning,
+  // return the original condition
+  const ControlCondition *
+  getOriginalCondition(const ControlCondition *C) const {
+    return OrigConds.lookup(C);
   }
 };
 
