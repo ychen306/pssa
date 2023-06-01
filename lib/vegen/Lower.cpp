@@ -1036,8 +1036,9 @@ void VectorGen::runOnLoop(VLoop *VL) {
         auto *False = ConstantInt::getFalse(Ctx);
         bool IsNone = IfTrue == False && IfFalse == True;
         bool IsAll = IfTrue == True && IfFalse == False;
+
         auto *Or = dyn_cast<ConditionOr>(VL->getPhiCondition(PN, 1));
-        if (Or && (IsNone || IsAll)) {
+        if (Or && (IsNone || IsAll) && any_of(Or->Conds, IsPacked)) {
           auto BeforePN = VL->toIterator(PN);
           Inserter Insert(VL, nullptr, BeforePN);
           auto *Vec = gatherMask(Or->Conds, Insert, true /*unordered*/);
@@ -1256,6 +1257,23 @@ bool VectorGen::run() {
     Masks.append(P->masks());
   SmallVector<std::unique_ptr<ConditionPack>> CondPacks;
   if (!DontPackConditions) {
+    // When we do versioning, we sometimes strengthen some conditions.
+    // If we pack a strengthend conditions, we also should pack the original conditions.
+    // This allows us to vectorize some of the versioning checks.
+    if (TheVersioner) {
+      auto NewMasks = Masks;
+      for (auto &M : Masks) {
+        auto &M2 = NewMasks.emplace_back();
+        for (auto *C : M) {
+          if (auto *C2 = TheVersioner->getOriginalCondition(C))
+            M2.push_back(C2);
+          else
+            M2.push_back(C);
+        }
+      }
+      Masks.swap(NewMasks);
+    }
+
     packConditions(Masks, ExitGuards, ActiveFlags, CondPacks, Packs, PSSA);
     // Map each condition to the pack that produces it
     for (auto &CP : CondPacks)
