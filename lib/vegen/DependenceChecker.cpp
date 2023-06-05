@@ -555,10 +555,11 @@ void DependencesFinder::visitCond(const ControlCondition *C,
                                   const DepNode &Src) {
   if (!C)
     return;
-  if (!VisitedConds.insert(C).second)
-    return;
 
   DepEdges.try_emplace({Src, C /*dst*/}, DepCondition::always());
+
+  if (!VisitedConds.insert(C).second)
+    return;
 
   if (auto *And = dyn_cast<ConditionAnd>(C)) {
     visitCond(And->Parent, And);
@@ -611,12 +612,18 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
     // we also need to check their dependences
     ArrayRef<Instruction *> Insts = P ? P->values() : I;
     for (auto *I : Insts) {
-      for (auto *V : I->operand_values())
-        visitValue(V, I);
       visitCond(VL->getInstCond(I), I);
       if (auto *PN = dyn_cast<PHINode>(I); PN && VL->isGatedPhi(PN)) {
-        for (auto *C : VL->getPhiConditions(PN))
+        for (auto [C, V] :
+             llvm::zip(VL->getPhiConditions(PN), I->operand_values())) {
+          if (auto *OperandI = dyn_cast<Instruction>(V))
+            DepEdges.try_emplace({I, OperandI}, DepCondition::ifTrue(C));
           visitCond(C, I);
+          visitValue(V, I);
+        }
+      } else {
+        for (auto *V : I->operand_values())
+          visitValue(V, I);
       }
       Coupled.emplace_back(I);
     }
@@ -908,8 +915,8 @@ bool IndependenceTracker::isIndependent(const DepNode &Src,
   if (auto It = NodeToDepsMap.find(Src);
       It != NodeToDepsMap.end() &&
       (It->second.count(Dst) ||
-       (  TheVersioner.getOriginalIfCloned(DstI)
-        && It->second.count(TheVersioner.getOriginalIfCloned(DstI)))))
+       (TheVersioner.getOriginalIfCloned(DstI) &&
+        It->second.count(TheVersioner.getOriginalIfCloned(DstI)))))
     return true;
   // Try again if Dst is a cloned instruction
   if (!DstI)
@@ -920,11 +927,11 @@ bool IndependenceTracker::isIndependent(const DepNode &Src,
   if (auto It = IndependentFrom.find(Src);
       It != IndependentFrom.end() && It->second.count(OrigDst))
     return true;
-  //if (Src.asInstruction() && !isa<PHINode>(Src.asInstruction()) &&
-  //    !isa<PHINode>(DstI)) {
-  //  errs() << "can't rule out dependence for " << Src << " -> " << Dst << '\n';
-  //  errs() << "\t dst cloned? "
-  //         << ((bool)TheVersioner.getOriginalIfCloned(DstI)) << '\n';
-  //}
+  // if (Src.asInstruction() && !isa<PHINode>(Src.asInstruction()) &&
+  //     !isa<PHINode>(DstI)) {
+  //   errs() << "can't rule out dependence for " << Src << " -> " << Dst <<
+  //   '\n'; errs() << "\t dst cloned? "
+  //          << ((bool)TheVersioner.getOriginalIfCloned(DstI)) << '\n';
+  // }
   return false;
 }

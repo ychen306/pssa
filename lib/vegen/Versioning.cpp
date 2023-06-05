@@ -162,9 +162,10 @@ VLoop *Versioner::cloneLoop(VLoop *OrigVL, ValueToValueMapTy &VMap,
   return VL;
 }
 
-// Assuming VL is the parent of items, find the greatest common condition of the items
-static 
-const ControlCondition *getCommonCondition(VLoop *VL, ArrayRef<Item> Items) {
+// Assuming VL is the parent of items, find the greatest common condition of the
+// items
+static const ControlCondition *getCommonCondition(VLoop *VL,
+                                                  ArrayRef<Item> Items) {
   SmallVector<const ControlCondition *> Conds;
   for (auto &It : Items) {
     if (auto *I = It.asInstruction())
@@ -173,6 +174,15 @@ const ControlCondition *getCommonCondition(VLoop *VL, ArrayRef<Item> Items) {
       Conds.push_back(It.asLoop()->getLoopCond());
   }
   return getGreatestCommonCondition(Conds);
+}
+
+const ControlCondition *
+Versioner::strengthenCondition(const ControlCondition *C, Value *Flag,
+                               bool IsTrue) {
+  auto *FlagC = PSSA.getInstCond(cast<Instruction>(Flag));
+  auto *C2 = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, IsTrue), C);
+  OrigConds[C2] = C;
+  return C2;
 }
 
 void Versioner::runOnLoop(VLoop *VL) {
@@ -243,7 +253,8 @@ void Versioner::runOnLoop(VLoop *VL) {
       // after the item It
       SmallVector<Item> Deps;
       auto &Items = CondSetToItemMap.at(DepConds);
-      Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
+      Item Earliest =
+          *std::min_element(Items.begin(), Items.end(), ComesBefore);
       DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker);
       for (auto *V : Checks) {
         if (auto *Check = dyn_cast<Instruction>(V))
@@ -264,8 +275,10 @@ void Versioner::runOnLoop(VLoop *VL) {
       for (auto *V : Checks)
         NoDep = Insert.CreateBinOp(Instruction::And, NoDep, V);
       if (!Conds.empty()) {
-        NoDep = Insert.CreateBinOp(Instruction::And, NoDep, 
-            Insert.createOneHotPhi(PSSA.getOr(Conds), Insert.getFalse(), Insert.getTrue()));
+        NoDep = Insert.CreateBinOp(Instruction::And, NoDep,
+                                   Insert.createOneHotPhi(PSSA.getOr(Conds),
+                                                          Insert.getFalse(),
+                                                          Insert.getTrue()));
       }
       CondSets[DepConds] = NoDep;
     }
@@ -280,6 +293,7 @@ void Versioner::runOnLoop(VLoop *VL) {
   DenseMap<Instruction *, Instruction *> InstToVersioningPhiMap;
   // Mapping an instruction to the ancestor loop that we just versioned
   DenseMap<Instruction *, VLoop *> InstToLoopMap;
+  SmallVector<PHINode *> VersionedPhis;
   // Remember the sub loops that we visit
   SmallVector<VLoop *> SubLoops;
   for (auto Item : ItemsToVersion) {
@@ -292,11 +306,8 @@ void Versioner::runOnLoop(VLoop *VL) {
     else
       C = Item.asLoop()->getLoopCond();
 
-    auto *FlagC = PSSA.getInstCond(cast<Instruction>(Flag));
-    auto *Success = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, true), C);
-    auto *Fail = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, false), C);
-    OrigConds[Success] = C;
-    OrigConds[Fail] = C;
+    auto *Success = strengthenCondition(C, Flag, true);
+    auto *Fail = strengthenCondition(C, Flag, false);
 
     // Create a versioning phi for the instruction I and its clone I2.
     auto CreateVersioningPhi = [&](Instruction *I, Instruction *I2) {
@@ -319,7 +330,20 @@ void Versioner::runOnLoop(VLoop *VL) {
         CloneToOrigMap[I2] = I;
       IndepTracker.markInstAsVersioned(I, I2);
       OrigToCloneMap[I] = I2;
-      VL->insert(I2, Fail, It);
+
+      if (auto *PN = dyn_cast<PHINode>(I)) {
+        VersionedPhis.push_back(PN);
+        SmallVector<const ControlCondition *> NewPhiConds;
+        for (auto X : llvm::enumerate(VL->getPhiConditions(PN))) {
+          auto *C = X.value();
+          unsigned i = X.index();
+          VL->setPhiCondition(PN, i, strengthenCondition(C, Flag, true));
+          NewPhiConds.push_back(strengthenCondition(C, Flag, false));
+        }
+        VL->insert(cast<PHINode>(I2), NewPhiConds, Fail, It);
+      } else {
+        VL->insert(I2, Fail, It);
+      }
       VL->setInstCond(I, Success);
       CreateVersioningPhi(I, I2);
     } else {
@@ -341,16 +365,20 @@ void Versioner::runOnLoop(VLoop *VL) {
   }
 
   // Check if DepConds are implied by the versioning conditions of I
-  auto CondsAreImplied = [&](ArrayRef<DepCondition> DepConds, Instruction *I) -> bool {
+  auto CondsAreImplied = [&](ArrayRef<DepCondition> DepConds,
+                             Instruction *I) -> bool {
     Item It = I;
-    // If I's from a loop that we just versioned, we are really asking if VL's versioning is implied
+    // If I's from a loop that we just versioned, we are really asking if VL's
+    // versioning is implied
     if (auto *VL = InstToLoopMap.lookup(I))
       It = VL;
     // Not implied if I is never versioned
     if (!VersioningMap.count(It))
       return false;
     auto CondsOfI = VersioningMap.find(It)->second;
-    return llvm::all_of(DepConds, [&](auto &DepCond) { return llvm::count(CondsOfI, DepCond); });
+    return llvm::all_of(DepConds, [&](auto &DepCond) {
+      return llvm::count(CondsOfI, DepCond);
+    });
   };
 
   // If I it's cloned, rewrite its uses;
@@ -380,8 +408,10 @@ void Versioner::runOnLoop(VLoop *VL) {
 
       auto *VL = PSSA.getLoopForInst(I);
       auto *UserVL = PSSA.getLoopForInst(UserI);
-      // FIXME: instead of checking for equality, we *have* to check that the versioning of UserI is *implied by* the versioning of I (i.e., <= instead of ==).
-      if (VL->contains(UserVL) && CondsAreImplied(DepConds, UserI)) {//VersioningFlags.lookup(UserI) == Flag) {
+      // FIXME: instead of checking for equality, we *have* to check that the
+      // versioning of UserI is *implied by* the versioning of I (i.e., <=
+      // instead of ==).
+      if (VL->contains(UserVL) && CondsAreImplied(DepConds, UserI)) {
         // If the use comes from another instruction that gets versioned under
         // the same condition we just change that instruction (and its clone)
         // to use (the clone of) I
@@ -418,6 +448,26 @@ void Versioner::runOnLoop(VLoop *VL) {
         } else {
           RewriteUses(Item.asInstruction(), DepConds);
         }
+      }
+    }
+  }
+
+  // Nuke the dead incoming operands of versioned phis
+  for (auto *PN : VersionedPhis) {
+    assert(VersioningMap.count(PN));
+    ArrayRef<DepCondition> DepConds = VersioningMap.find(PN)->second;
+    for (auto X : llvm::enumerate(VL->getPhiConditions(PN))) {
+      auto *C = getOriginalCondition(X.value());
+      assert(C);
+      unsigned i = X.index();
+      // If the incoming condition is implied by the versioning condition,
+      // replace the incoming value with undef (because, by versioning, we
+      // have ensured that the condition is always false)
+      if (llvm::any_of(DepConds, [C](auto &DepCond) {
+            return isImplied(C, DepCond.getCondition());
+          })) {
+        errs() << "Setting undef \n";
+        PN->setOperand(i, UndefValue::get(PN->getType()));
       }
     }
   }
