@@ -48,6 +48,10 @@ public:
   getOriginalCondition(const ControlCondition *C) const {
     return OrigConds.lookup(C);
   }
+  // Get C', a strengthened version of C, such that C' is true if Flag is true
+  // (or false)
+  const ControlCondition *strengthenCondition(const ControlCondition *C,
+                                              llvm::Value *Flag, bool IsTrue);
 };
 
 // If an instruction/loop's has a versioning condition that's implied by its

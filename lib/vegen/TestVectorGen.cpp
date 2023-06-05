@@ -444,8 +444,10 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       DenseMap<DepEdge, std::vector<DepCondition>> DepEdges;
       bool CanSpeculate = findNecessaryDeps(DepEdges, InterLoopDeps,
                                             P->values(), PSSA, DepChecker);
-      if (!CanSpeculate)
+      if (!CanSpeculate) {
+        errs() << "!! impossible to speculate\n";
         return PreservedAnalyses::all();
+      }
 
       // Don't need to cut edges
       if (DepEdges.empty())
