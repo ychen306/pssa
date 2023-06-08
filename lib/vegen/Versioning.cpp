@@ -176,13 +176,27 @@ static const ControlCondition *getCommonCondition(VLoop *VL,
   return getGreatestCommonCondition(Conds);
 }
 
+// TODO: cache this
 const ControlCondition *
 Versioner::strengthenCondition(const ControlCondition *C, Value *Flag,
                                bool IsTrue) {
   auto *FlagC = PSSA.getInstCond(cast<Instruction>(Flag));
   auto *C2 = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, IsTrue), C);
   OrigConds[C2] = C;
+  StrengthenedConds[C2] = {Flag, IsTrue};
   return C2;
+}
+
+bool Versioner::isExclusive(const ControlCondition *C1, const ControlCondition *C2) {
+  auto It1 = StrengthenedConds.find(C1);
+  if (It1 == StrengthenedConds.end())
+    return false;
+  auto It2 = StrengthenedConds.find(C2);
+  if (It2 == StrengthenedConds.end())
+    return false;
+  auto [Flag1, IsTrue1] = It1->second;
+  auto [Flag2, IsTrue2] = It2->second;
+  return Flag1 == Flag2 && (IsTrue1 ^ IsTrue2);
 }
 
 void Versioner::runOnLoop(VLoop *VL) {
@@ -262,6 +276,7 @@ void Versioner::runOnLoop(VLoop *VL) {
       }
       for (auto *C : Conds)
         DepFinder.findDep(C);
+      assert(!llvm::count(Deps, It) && "can't version due to circular dep.");
 
       // Move the dependences before Item
       auto InsertBefore = VL->toIterator(Earliest);

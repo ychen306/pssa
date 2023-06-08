@@ -573,9 +573,9 @@ void DependencesFinder::visitCond(const ControlCondition *C,
 }
 
 void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
-  if (IndepTracker && IndepTracker->isIndependent(Src, It)) {
+  if (IndepTracker && IndepTracker->isIndependent(Src, It))
     return;
-  }
+
   if (!Processing.insert(It).second) {
     errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
     FoundCycle = true;
@@ -676,6 +676,7 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
 static bool
 findNecessaryDepsImpl(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
                       DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
+                      DenseSet<DepNode> &ExtraNodesToVersion,
                       ArrayRef<Item> Items, VLoop *VL,
                       DependenceChecker &DepChecker) {
   auto ComesBefore = [VL](const Item &It1, const Item &It2) {
@@ -728,6 +729,7 @@ findNecessaryDepsImpl(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
   SimpleMaxFlow MaxFlow;
   const int ConditionalWeight = 1;
   const int UnconditionalWeight = NumConditionalDeps + 1;
+  DenseMap<DepEdge, ArcIndex> EdgeToArcMap;
   // Add the dep edges
   for (auto [Edge, Kind] : DepFinder.getDepEdges()) {
     int Weight = Kind.isConditional() ? ConditionalWeight : UnconditionalWeight;
@@ -739,7 +741,8 @@ findNecessaryDepsImpl(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
     // If the edge *points to* one of the items, rewire them to the aux node
     if (AuxNodeIds.count(Dst))
       DstId = AuxNodeIds.lookup(Dst);
-    MaxFlow.AddArcWithCapacity(SrcId, DstId, Weight);
+    auto Arc = MaxFlow.AddArcWithCapacity(SrcId, DstId, Weight);
+    EdgeToArcMap[Edge] = Arc;
   }
   // Point the aux nodes to the sink
   for (auto N : make_second_range(AuxNodeIds))
@@ -759,21 +762,109 @@ findNecessaryDepsImpl(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
   DenseSet<int> TCutSet(TCut.begin(), TCut.end());
   errs() << "!! max-flow/min-cut: " << MaxFlow.OptimalFlow()
          << ", num conditional deps: " << NumConditionalDeps << '\n';
+
+  /////////
+#if 0
+  DenseSet<std::pair<int, int>> ActiveArcs;
+  for (int Arc = 0; Arc < MaxFlow.NumArcs(); Arc++) {
+    if (MaxFlow.Flow(Arc) != 0) {
+      ActiveArcs.insert({MaxFlow.Tail(Arc), MaxFlow.Head(Arc)});
+    }
+  }
+  errs() << "digraph mygraph {\n";
+  for (auto [N, i] : NodeToIds) {
+    if (SCutSet.count(i))
+      errs() << "n" << i << " [label=\"" << N << "\" color=\"red\"]\n";
+    else if (TCutSet.count(i))
+      errs() << "n" << i << " [label=\"" << N << "\" color=\"green\"]\n";
+    else
+      errs() << "n" << i << " [label=\"" << N << "\" color=\"blue\"]\n";
+
+    if (AuxNodeIds.count(N)) {
+      if (SCutSet.count(AuxNodeIds.lookup(N)))
+        errs() << "n" << AuxNodeIds.lookup(N) << " [label=\"" << N
+               << "\" color=\"red\"]\n";
+      else if (TCutSet.count(AuxNodeIds.count(N)))
+        errs() << "n" << AuxNodeIds.lookup(N) << " [label=\"" << N
+               << "\" color=\"green\"]\n";
+      else
+        errs() << "n" << AuxNodeIds.lookup(N) << " [label=\"" << N
+               << "\" color=\"blue\"]\n";
+    }
+  }
+  errs() << "n" << S << "[label =\"SOURCE\"]\n";
+  errs() << "n" << T << "[label =\"SINK\"]\n";
+
+  for (auto [Edge, Kind] : DepFinder.getDepEdges()) {
+    auto [Src, Dst] = Edge;
+    if (Src == Dst)
+      continue;
+    (void)Kind;
+    if (ActiveArcs.count({NodeToIds.lookup(Src), NodeToIds.lookup(Dst)})) {
+      errs() << "n" << NodeToIds.lookup(Src) << " -> n" << NodeToIds.lookup(Dst)
+             << " [color=\"red\"]\n";
+    } else if (ActiveArcs.count(
+                   {NodeToIds.lookup(Src), AuxNodeIds.lookup(Dst)})) {
+      errs() << "n" << NodeToIds.lookup(Src) << " -> n"
+             << AuxNodeIds.lookup(Dst) << " [color=\"red\"]\n";
+    } else if (AuxNodeIds.count(Dst)) {
+      errs() << "n" << NodeToIds.lookup(Src) << " -> n"
+             << AuxNodeIds.lookup(Dst) << '\n';
+    } else {
+      errs() << "n" << NodeToIds.lookup(Src) << " -> n" << NodeToIds.lookup(Dst)
+             << '\n';
+    }
+  }
+  for (auto N : make_second_range(AuxNodeIds))
+    errs() << "n" << N << " -> n" << T << '\n';
+  for (auto It : Items)
+    errs() << "n" << S << " -> n" << NodeToIds.lookup(It) << '\n';
+  errs() << "}\n";
+#endif
+  ///////////
+
+  // If we version any edges, remember their sources
+  SmallVector<DepNode> Sources;
+  // Find the cut edges; abort if any of the cut edges are unconditional
   for (auto [Edge, Kind] : DepFinder.getDepEdges()) {
     auto [Src, Dst] = Edge;
     if (Src == Dst)
       continue;
     (void)Kind;
     bool SrcInSCut = SCutSet.count(NodeToIds.lookup(Src));
-    bool DstInTCut = TCutSet.count(NodeToIds.lookup(Dst)) ||
-                     TCutSet.count(AuxNodeIds.lookup(Dst));
-    if (SrcInSCut && DstInTCut) {
+    bool DstInSCut = AuxNodeIds.count(Dst)
+                         ? SCutSet.count(AuxNodeIds.lookup(Dst))
+                         : SCutSet.count(NodeToIds.lookup(Dst));
+
+    assert(EdgeToArcMap.count(Edge));
+    // if (SrcInSCut && MaxFlow.Flow(EdgeToArcMap.lookup(Edge)) > 0) {
+    if (SrcInSCut && !DstInSCut) {
+      errs() << "Found cut edge = " << Src << " -> " << Dst << '\n';
       // Can't cut an unconditional edge
       if (Kind.isUnconditional())
         return false;
       DepEdges.try_emplace(Edge, Kind.getConds());
+      Sources.push_back(Src);
     }
   }
+
+  DenseMap<DepNode, std::vector<DepNode>> DestToSourceMap;
+  for (auto [Src, Dst] : llvm::make_first_range(DepFinder.getDepEdges())) {
+    DestToSourceMap[Dst].push_back(Src);
+  }
+
+  // Do a backward traversal to find, transitively, all of the sources (of the
+  // versioned edges), which also need to be versioned
+  DenseSet<DepNode> Visited;
+  while (!Sources.empty()) {
+    auto Src = Sources.pop_back_val();
+    if (!Visited.insert(Src).second)
+      continue;
+    ExtraNodesToVersion.insert(Src);
+    if (auto It = DestToSourceMap.find(Src); It != DestToSourceMap.end())
+      Sources.append(It->second.begin(), It->second.end());
+  }
+
   return true;
 }
 
@@ -826,6 +917,7 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) const {
 
 bool findNecessaryDeps(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
                        DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
+                       DenseSet<DepNode> &ExtraNodesToVersion,
                        ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
                        DependenceChecker &DepChecker) {
   SmallVector<Item> Items;
@@ -845,7 +937,8 @@ bool findNecessaryDeps(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
     // make sure that they are independent
     for (auto &Insts2 : make_second_range(LoopToInstsMap))
       if (Insts2.size() > 1 &&
-          !findNecessaryDeps(DepEdges, InterLoopDeps, Insts2, PSSA, DepChecker))
+          !findNecessaryDeps(DepEdges, InterLoopDeps, ExtraNodesToVersion,
+                             Insts2, PSSA, DepChecker))
         return false;
 
     // Make sure the disjoint parent loops are independent
@@ -863,17 +956,25 @@ bool findNecessaryDeps(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
     Items.assign(Loops.begin(), Loops.end());
     ParentVL = Loops.front()->getParent();
   }
-  return findNecessaryDepsImpl(DepEdges, InterLoopDeps, Items, ParentVL,
-                               DepChecker);
+  return findNecessaryDepsImpl(DepEdges, InterLoopDeps, ExtraNodesToVersion,
+                               Items, ParentVL, DepChecker);
 }
 
 IndependenceTracker::IndependenceTracker(
     const DenseSet<DepEdge> &DepEdgesToIgnore,
+    const DenseSet<DepEdge> &AliasedEdgesToIgnore,
     const DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
-    Versioner &TheVersioner)
-    : TheVersioner(TheVersioner) {
-  for (auto [Src, Dst] : DepEdgesToIgnore)
+    Versioner &TheVersioner, PredicatedSSA &PSSA)
+    : TheVersioner(TheVersioner), PSSA(PSSA),
+      Whitelist(DepEdgesToIgnore.begin(), DepEdgesToIgnore.end()) {
+
+  for (auto [Src, Dst] : AliasedEdgesToIgnore) {
+    // Memory independence is reflexive (e.g., if ptr1 and
+    // ptr2 don't alias, then the independence goes both ways)
     NodeToDepsMap[Src].insert(Dst);
+    NodeToDepsMap[Dst].insert(Src);
+  }
+
   for (auto [LoopPairs, Edges] : InterLoopDeps) {
     for (auto [Src, Dst] : Edges) {
       NodeToDepsMap[Src].insert(Dst);
@@ -909,8 +1010,8 @@ void IndependenceTracker::markLoopInstAsVersioned(Instruction *Orig,
   IndependentFrom[Orig].insert(Nodes.begin(), Nodes.end());
 }
 
-bool IndependenceTracker::isIndependent(const DepNode &Src,
-                                        const DepNode &Dst) const {
+bool IndependenceTracker::checkIndependence(const DepNode &Src,
+                                            const DepNode &Dst) const {
   auto *DstI = Dst.asInstruction();
   if (auto It = NodeToDepsMap.find(Src);
       It != NodeToDepsMap.end() &&
@@ -927,11 +1028,21 @@ bool IndependenceTracker::isIndependent(const DepNode &Src,
   if (auto It = IndependentFrom.find(Src);
       It != IndependentFrom.end() && It->second.count(OrigDst))
     return true;
-  // if (Src.asInstruction() && !isa<PHINode>(Src.asInstruction()) &&
-  //     !isa<PHINode>(DstI)) {
-  //   errs() << "can't rule out dependence for " << Src << " -> " << Dst <<
-  //   '\n'; errs() << "\t dst cloned? "
-  //          << ((bool)TheVersioner.getOriginalIfCloned(DstI)) << '\n';
-  // }
   return false;
+}
+
+bool IndependenceTracker::isIndependent(const DepNode &Src,
+                                        const DepNode &Dst) const {
+  // Check the white list first, which doesn't take cloning into account.
+  if (Whitelist.count({Src, Dst}))
+    return true;
+  auto *SrcI = Src.asInstruction();
+  auto *DstI = Dst.asInstruction();
+  // FIXME: also support inst-to-loop dep
+  if (SrcI && DstI) {
+    if (TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
+                                 PSSA.getInstCond(DstI)))
+      return true;
+  }
+  return checkIndependence(Src, Dst) || checkIndependence(Dst, Src);
 }

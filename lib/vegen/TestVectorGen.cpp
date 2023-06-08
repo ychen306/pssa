@@ -430,7 +430,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     // If we find any loop -> loop dep, also record all the conditional deps
     // that causes the loop->loop dep.
     DenseMap<DepEdge, DenseSet<DepEdge>> InterLoopDeps;
-    DenseSet<DepEdge> DepEdgesToIgnore;
+    DenseSet<DepEdge> AliasedEdgesToIgnore, DepEdgesToIgnore;
 
     auto MarkForVersioning = [&](const DepNode &N,
                                  ArrayRef<DepCondition> Conds) {
@@ -442,27 +442,40 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
 
     for (auto *P : Packs) {
       DenseMap<DepEdge, std::vector<DepCondition>> DepEdges;
-      bool CanSpeculate = findNecessaryDeps(DepEdges, InterLoopDeps,
-                                            P->values(), PSSA, DepChecker);
+      ArrayRef<Instruction *> Values = P->values();
+      DenseSet<DepNode> ExtraNodesToVersion(Values.begin(), Values.end());
+      bool CanSpeculate =
+          findNecessaryDeps(DepEdges, InterLoopDeps, ExtraNodesToVersion,
+                            Values, PSSA, DepChecker);
       if (!CanSpeculate) {
         errs() << "!! impossible to speculate\n";
         return PreservedAnalyses::all();
       }
 
       // Don't need to cut edges
-      if (DepEdges.empty())
+      if (DepEdges.empty()) {
+        errs() << "Don't need to cut edges\n";
         continue;
+      }
 
       for (auto [Edge, DepConds] : DepEdges) {
         auto [Src, Dst] = Edge;
-        DepEdgesToIgnore.insert(Edge);
+        auto *SrcI = Src.asInstruction();
+        auto *DstI = Dst.asInstruction();
+
+        if (SrcI && DstI &&
+            (DepConds.size() == 1 && DepConds.front().isOverlapping()))
+          AliasedEdgesToIgnore.insert(Edge);
+        else
+          DepEdgesToIgnore.insert(Edge);
+
         MarkForVersioning(Src, DepConds);
         MarkForVersioning(Dst, DepConds);
-        for (auto *I : P->values())
-          MarkForVersioning(I, DepConds);
+        for (auto Node : ExtraNodesToVersion)
+          MarkForVersioning(Node, DepConds);
         if (auto It = InterLoopDeps.find(Edge); It != InterLoopDeps.end()) {
           for (auto &Edge : It->second)
-            DepEdgesToIgnore.insert(Edge);
+            AliasedEdgesToIgnore.insert(Edge);
         }
       }
 
@@ -505,8 +518,8 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
 
     if (RemoveRedundantConditions)
       removeRedundantConditions(PSSA, VersioningMap);
-    Versioner TheVersioner(DepEdgesToIgnore, InterLoopDeps, PSSA, DI, AA, LI,
-                           SE, VersioningMap);
+    Versioner TheVersioner(DepEdgesToIgnore, AliasedEdgesToIgnore, InterLoopDeps, PSSA, DI, AA,
+                           LI, SE, VersioningMap);
     TheVersioner.run();
     bool Ok = lower(Packs, PSSA, DI, AA, LI, SE, &TheVersioner,
                     &TheVersioner.getIndependenceTracker());
