@@ -267,12 +267,15 @@ class IndependenceTracker {
       LoopToDepsMap;
 
   Versioner &TheVersioner;
-
+  PredicatedSSA &PSSA;
+  llvm::DenseSet<DepEdge> Whitelist;
+  bool checkIndependence(const DepNode &Src, const DepNode &Dest) const;
 public:
   IndependenceTracker(
       const llvm::DenseSet<DepEdge> &DepEdgesToIgnore,
+      const llvm::DenseSet<DepEdge> &AliasedEdgesToIgnore,
       const llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
-      Versioner &TheVersioner);
+      Versioner &TheVersioner, PredicatedSSA &PSSA);
   void markInstAsVersioned(llvm::Instruction *Orig, llvm::Instruction *Cloned);
   // Mark a loop as versioned (and activate one of the loop instruction's
   // conditional independences).
@@ -344,6 +347,7 @@ bool findInBetweenDeps(llvm::SmallVectorImpl<Item> &Deps,
 bool findNecessaryDeps(
     llvm::DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
     llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
+    llvm::DenseSet<DepNode> &ExtraNodesToVersion,
     llvm::ArrayRef<llvm::Instruction *> Insts, PredicatedSSA &PSSA,
     DependenceChecker &DepChecker);
 

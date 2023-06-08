@@ -19,6 +19,8 @@ class Versioner {
 
   llvm::DenseMap<llvm::Instruction *, llvm::Instruction *> CloneToOrigMap;
   llvm::DenseMap<const ControlCondition *, const ControlCondition *> OrigConds;
+  // Mapping a <strengthened condition> -> <the flag that it's strengthened with>
+  llvm::DenseMap<const ControlCondition *, std::pair<llvm::Value *, bool>> StrengthenedConds;
 
   using CallbackTy =
       std::function<void(llvm::Instruction *, llvm::Instruction *)>;
@@ -29,6 +31,7 @@ class Versioner {
 public:
   Versioner(
       const llvm::DenseSet<DepEdge> &DepEdgesToIgnore,
+      const llvm::DenseSet<DepEdge> &AliasedEdgesToIgnore,
       const llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
       PredicatedSSA &PSSA, llvm::DependenceInfo &DI, llvm::AAResults &AA,
       llvm::LoopInfo &LI, llvm::ScalarEvolution &SE,
@@ -36,7 +39,7 @@ public:
       : PSSA(PSSA), SE(SE),
         DepChecker(PSSA, DI, AA, LI, SE, nullptr /*dead insts*/, this),
         VersioningMap(VersioningMap),
-        IndepTracker(DepEdgesToIgnore, InterLoopDeps, *this) {}
+        IndepTracker(DepEdgesToIgnore, AliasedEdgesToIgnore, InterLoopDeps, *this, PSSA) {}
   IndependenceTracker &getIndependenceTracker() { return IndepTracker; }
   void run() { runOnLoop(&PSSA.getTopLevel()); }
   llvm::Instruction *getOriginalIfCloned(llvm::Instruction *I) const {
@@ -52,6 +55,7 @@ public:
   // (or false)
   const ControlCondition *strengthenCondition(const ControlCondition *C,
                                               llvm::Value *Flag, bool IsTrue);
+  bool isExclusive(const ControlCondition *, const ControlCondition *);
 };
 
 // If an instruction/loop's has a versioning condition that's implied by its
