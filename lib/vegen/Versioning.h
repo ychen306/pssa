@@ -4,6 +4,7 @@
 #include "DependenceChecker.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
+#include "ConditionUserTracker.h"
 #include <functional>
 
 // Mapping an item that we want to version -> the versioning condition
@@ -22,10 +23,12 @@ class Versioner {
   // Mapping a <strengthened condition> -> <the flag that it's strengthened with>
   llvm::DenseMap<const ControlCondition *, std::pair<llvm::Value *, bool>> StrengthenedConds;
 
-  using CallbackTy =
-      std::function<void(llvm::Instruction *, llvm::Instruction *)>;
+  ConditionUserTracker CUT;
+
+  using CallbackTy = std::function<void(Item, Item)>;
   VLoop *cloneLoop(VLoop *OrigVL, llvm::ValueToValueMapTy &VMap,
                    CallbackTy Callback);
+
   void runOnLoop(VLoop *);
 
 public:
@@ -39,9 +42,9 @@ public:
       : PSSA(PSSA), SE(SE),
         DepChecker(PSSA, DI, AA, LI, SE, nullptr /*dead insts*/, this),
         VersioningMap(VersioningMap),
-        IndepTracker(DepEdgesToIgnore, AliasedEdgesToIgnore, InterLoopDeps, *this, PSSA) {}
-  IndependenceTracker &getIndependenceTracker() { return IndepTracker; }
+        IndepTracker(DepEdgesToIgnore, AliasedEdgesToIgnore, InterLoopDeps, *this, PSSA), CUT(PSSA) {}
   void run() { runOnLoop(&PSSA.getTopLevel()); }
+  IndependenceTracker &getIndependenceTracker() { return IndepTracker; }
   llvm::Instruction *getOriginalIfCloned(llvm::Instruction *I) const {
     return CloneToOrigMap.lookup(I);
   }
