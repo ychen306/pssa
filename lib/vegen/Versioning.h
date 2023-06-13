@@ -22,6 +22,8 @@ class Versioner {
   llvm::DenseMap<const ControlCondition *, const ControlCondition *> OrigConds;
   // Mapping a <strengthened condition> -> <the flag that it's strengthened with>
   llvm::DenseMap<const ControlCondition *, std::pair<llvm::Value *, bool>> StrengthenedConds;
+  // Mapping an instruction -> its versioning phis (we have multiple phis when we have nested versioning)
+  llvm::DenseMap<llvm::Instruction *, std::vector<llvm::Instruction *>> VersioningPhisMap;
 
   ConditionUserTracker CUT;
 
@@ -47,6 +49,12 @@ public:
   IndependenceTracker &getIndependenceTracker() { return IndepTracker; }
   llvm::Instruction *getOriginalIfCloned(llvm::Instruction *I) const {
     return CloneToOrigMap.lookup(I);
+  }
+  llvm::ArrayRef<llvm::Instruction *> getVersioningPhis(llvm::Instruction *I) const {
+    auto It = VersioningPhisMap.find(I);
+    if (It == VersioningPhisMap.end())
+      return {};
+    return It->second;
   }
   // If we strenghtened an instruction's condition to C during versioning,
   // return the original condition
