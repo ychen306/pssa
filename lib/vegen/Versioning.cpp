@@ -596,17 +596,17 @@ void Versioner::runOnLoop(VLoop *VL) {
       // have ensured that the condition is always false)
       if (llvm::any_of(DepConds, [C](auto &DepCond) {
             return isImplied(C, DepCond.getCondition());
-          })) {
-        errs() << "Setting undef \n";
+          }))
         PN->setOperand(i, UndefValue::get(PN->getType()));
-      }
     }
   }
 
   // Remove the dead versioning phis
-  for (auto *Phi : llvm::make_second_range(InstToVersioningPhiMap)) {
-    if (UsedInstToVersioningPhiMap.count(Phi))
+  for (auto [I, Phi] : InstToVersioningPhiMap) {
+    if (UsedInstToVersioningPhiMap.count(Phi)) {
+      VersioningPhisMap[I].push_back(Phi);
       continue;
+    }
     Phi->dropAllReferences();
     VL->erase(Phi);
   }

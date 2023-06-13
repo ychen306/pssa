@@ -306,8 +306,8 @@ static bool merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
 
   auto *VL = PSSA.getLoopForItem(Items.front());
   SmallVector<Item> Deps;
-  bool FoundCycle = findInBetweenDeps(Deps, Items, VL, PSSA, DepChecker, Packs,
-                                      IndepTracker);
+  bool FoundCycle =
+      findInBetweenDeps(Deps, Items, VL, PSSA, DepChecker, Packs, IndepTracker);
   if (FoundCycle)
     return false;
 
@@ -987,7 +987,7 @@ void VectorGen::runOnLoop(VLoop *VL) {
         SmallVector<Value *, 8> Operands;
         auto *PN = cast<PHINode>(P->values().front());
         for (auto X : enumerate(getVectorOperands(P))) {
-          auto *C = VL->getPhiCondition(PN, X.index());
+          auto *C = remapCondition(VL->getPhiCondition(PN, X.index()));
           Operands.push_back(gatherOperand(X.value(), VL, C, Iterator));
         }
         V = InsertBeforeI.createPhi(Operands, VL->getPhiConditions(PN));
@@ -1242,8 +1242,7 @@ bool VectorGen::run() {
   for (auto *P : llvm::reverse(Packs)) {
     if (isa<MuPack>(P))
       continue;
-    if (!merge(PSSA, toItems(P->values()), DepChecker, &Packs,
-               IndepTracker))
+    if (!merge(PSSA, toItems(P->values()), DepChecker, &Packs, IndepTracker))
       return false;
   }
   //==== End scheduling ====//
@@ -1259,8 +1258,8 @@ bool VectorGen::run() {
   SmallVector<std::unique_ptr<ConditionPack>> CondPacks;
   if (!DontPackConditions) {
     // When we do versioning, we sometimes strengthen some conditions.
-    // If we pack a strengthend conditions, we also should pack the original conditions.
-    // This allows us to vectorize some of the versioning checks.
+    // If we pack a strengthend conditions, we also should pack the original
+    // conditions. This allows us to vectorize some of the versioning checks.
     if (TheVersioner) {
       auto NewMasks = Masks;
       for (auto &M : Masks) {

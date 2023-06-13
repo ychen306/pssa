@@ -521,6 +521,30 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     Versioner TheVersioner(DepEdgesToIgnore, AliasedEdgesToIgnore, InterLoopDeps, PSSA, DI, AA,
                            LI, SE, VersioningMap);
     TheVersioner.run();
+
+    // Pack the versioning phis
+    SmallVector<Pack *> NewPacks;
+    for (auto *P : Packs) {
+      auto Values = P->values();
+      ArrayRef VersioningPhis = TheVersioner.getVersioningPhis(Values.front());
+      unsigned NumVersions = VersioningPhis.size();
+      if (NumVersions == 0)
+        continue;
+      if (any_of(drop_begin(Values), [&](auto *I) { return TheVersioner.getVersioningPhis(I).size() != NumVersions; }))
+        continue;
+      for (unsigned i = 0; i < NumVersions; i++) {
+        SmallVector<Instruction *> Phis;
+        for (auto *I : Values)
+          Phis.push_back(TheVersioner.getVersioningPhis(I)[i]);
+        if (auto *PhiP = PHIPack::tryPack(Phis, PSSA)) {
+          errs() << "!!! packing " << *PhiP << '\n';
+          NewPacks.push_back(PhiP);
+        }
+      }
+    }
+    Packs.append(NewPacks.begin(), NewPacks.end());
+
+
     bool Ok = lower(Packs, PSSA, DI, AA, LI, SE, &TheVersioner,
                     &TheVersioner.getIndependenceTracker());
     assert(Ok);
