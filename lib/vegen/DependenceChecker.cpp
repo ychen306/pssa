@@ -799,14 +799,21 @@ findNecessaryDepsImpl(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
     auto [Src, Dst] = Edge;
     if (Src == Dst)
       continue;
-    (void)Kind;
     if (ActiveArcs.count({NodeToIds.lookup(Src), NodeToIds.lookup(Dst)})) {
-      errs() << "n" << NodeToIds.lookup(Src) << " -> n" << NodeToIds.lookup(Dst)
-             << " [color=\"red\"]\n";
+      if (Kind.isConditional())
+        errs() << "n" << NodeToIds.lookup(Src) << " -> n" << NodeToIds.lookup(Dst)
+          << " [color=\"red\" style=\"dashed\"]\n";
+      else
+        errs() << "n" << NodeToIds.lookup(Src) << " -> n" << NodeToIds.lookup(Dst)
+          << " [color=\"red\"]\n";
     } else if (ActiveArcs.count(
                    {NodeToIds.lookup(Src), AuxNodeIds.lookup(Dst)})) {
-      errs() << "n" << NodeToIds.lookup(Src) << " -> n"
-             << AuxNodeIds.lookup(Dst) << " [color=\"red\"]\n";
+      if (Kind.isConditional())
+        errs() << "n" << NodeToIds.lookup(Src) << " -> n"
+          << AuxNodeIds.lookup(Dst) << " [color=\"red\" style=\"dashed\"]\n";
+      else
+        errs() << "n" << NodeToIds.lookup(Src) << " -> n"
+          << AuxNodeIds.lookup(Dst) << " [color=\"red\"]\n";
     } else if (AuxNodeIds.count(Dst)) {
       errs() << "n" << NodeToIds.lookup(Src) << " -> n"
              << AuxNodeIds.lookup(Dst) << '\n';
