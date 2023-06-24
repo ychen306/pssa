@@ -270,6 +270,7 @@ class IndependenceTracker {
   PredicatedSSA &PSSA;
   llvm::DenseSet<DepEdge> Whitelist;
   bool checkIndependence(const DepNode &Src, const DepNode &Dest) const;
+
 public:
   IndependenceTracker(
       const llvm::DenseSet<DepEdge> &DepEdgesToIgnore,
@@ -341,13 +342,19 @@ bool findInBetweenDeps(llvm::SmallVectorImpl<Item> &Deps,
                        const PackSet *Packs = nullptr,
                        const IndependenceTracker *IndepTracker = nullptr);
 
+struct Versioning {
+  // The nodes that we are duplicating
+  std::vector<DepNode> Nodes;
+  // Edges that we speculate to be non-existent
+  llvm::DenseMap<DepEdge, std::vector<DepCondition>> CutEdges;
+};
+
 // Find conditional dependences that, once removed, will make the instructions
 // independent Return true if it's possible (and false if no such set of deps
 // exists).
 bool findNecessaryDeps(
-    llvm::DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
+    std::vector<Versioning> &Versionings,
     llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
-    llvm::DenseSet<DepNode> &ExtraNodesToVersion,
     llvm::ArrayRef<llvm::Instruction *> Insts, PredicatedSSA &PSSA,
     DependenceChecker &DepChecker);
 
