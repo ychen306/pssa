@@ -674,9 +674,8 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
 }
 
 static bool
-findNecessaryDepsImpl(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
+findNecessaryDepsImpl(std::vector<Versioning> &Versionings,
                       DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
-                      DenseSet<DepNode> &ExtraNodesToVersion,
                       ArrayRef<Item> Items, VLoop *VL,
                       DependenceChecker &DepChecker) {
   auto ComesBefore = [VL](const Item &It1, const Item &It2) {
@@ -830,8 +829,10 @@ findNecessaryDepsImpl(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
 #endif
   ///////////
 
+  Versioning Ver;
+
   // If we version any edges, remember their sources
-  SmallVector<DepNode> Sources;
+  SmallVector<DepNode> Sources(Items.begin(), Items.end());
   // Find the cut edges; abort if any of the cut edges are unconditional
   for (auto [Edge, Kind] : DepFinder.getDepEdges()) {
     auto [Src, Dst] = Edge;
@@ -850,7 +851,7 @@ findNecessaryDepsImpl(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
       // Can't cut an unconditional edge
       if (Kind.isUnconditional())
         return false;
-      DepEdges.try_emplace(Edge, Kind.getConds());
+      Ver.CutEdges.try_emplace(Edge, Kind.getConds());
       Sources.push_back(Src);
     }
   }
@@ -867,10 +868,12 @@ findNecessaryDepsImpl(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
     auto Src = Sources.pop_back_val();
     if (!Visited.insert(Src).second)
       continue;
-    ExtraNodesToVersion.insert(Src);
+    Ver.Nodes.push_back(Src);
     if (auto It = DestToSourceMap.find(Src); It != DestToSourceMap.end())
       Sources.append(It->second.begin(), It->second.end());
   }
+
+  Versionings.push_back(std::move(Ver));
 
   return true;
 }
@@ -922,9 +925,8 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) const {
   return DepCond;
 }
 
-bool findNecessaryDeps(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
+bool findNecessaryDeps(std::vector<Versioning> &Versionings,
                        DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
-                       DenseSet<DepNode> &ExtraNodesToVersion,
                        ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
                        DependenceChecker &DepChecker) {
   SmallVector<Item> Items;
@@ -943,9 +945,8 @@ bool findNecessaryDeps(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
     // For instructions that come from the same loops,
     // make sure that they are independent
     for (auto &Insts2 : make_second_range(LoopToInstsMap))
-      if (Insts2.size() > 1 &&
-          !findNecessaryDeps(DepEdges, InterLoopDeps, ExtraNodesToVersion,
-                             Insts2, PSSA, DepChecker))
+      if (Insts2.size() > 1 && !findNecessaryDeps(Versionings, InterLoopDeps,
+                                                  Insts2, PSSA, DepChecker))
         return false;
 
     // Make sure the disjoint parent loops are independent
@@ -963,8 +964,8 @@ bool findNecessaryDeps(DenseMap<DepEdge, std::vector<DepCondition>> &DepEdges,
     Items.assign(Loops.begin(), Loops.end());
     ParentVL = Loops.front()->getParent();
   }
-  return findNecessaryDepsImpl(DepEdges, InterLoopDeps, ExtraNodesToVersion,
-                               Items, ParentVL, DepChecker);
+  return findNecessaryDepsImpl(Versionings, InterLoopDeps, Items, ParentVL,
+                               DepChecker);
 }
 
 IndependenceTracker::IndependenceTracker(

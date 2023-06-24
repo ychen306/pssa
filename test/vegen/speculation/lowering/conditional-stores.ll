@@ -12,7 +12,7 @@ define void @foo() local_unnamed_addr #0 {
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[I2_VEC:%.*]] = load <4 x i32>, ptr @a, align 4
 ; CHECK-NEXT:    [[CMP1_1_VEC:%.*]] = icmp slt <4 x i32> [[I2_VEC]], zeroinitializer
-; CHECK-NEXT:    [[TMP0:%.*]] = shufflevector <4 x i1> [[CMP1_1_VEC]], <4 x i1> undef, <3 x i32> <i32 0, i32 1, i32 2>
+; CHECK-NEXT:    [[TMP0:%.*]] = shufflevector <4 x i1> [[CMP1_1_VEC]], <4 x i1> undef, <3 x i32>
 ; CHECK-NEXT:    [[TMP1:%.*]] = call i1 @llvm.vector.reduce.or.v3i1(<3 x i1> [[TMP0]])
 ; CHECK-NEXT:    [[TMP2:%.*]] = xor i1 [[TMP1]], true
 ; CHECK-NEXT:    br i1 [[TMP2]], label [[TMP4:%.*]], label [[TMP5:%.*]]

@@ -441,56 +441,56 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     };
 
     for (auto *P : Packs) {
-      DenseMap<DepEdge, std::vector<DepCondition>> DepEdges;
       ArrayRef<Instruction *> Values = P->values();
-      DenseSet<DepNode> ExtraNodesToVersion(Values.begin(), Values.end());
+      std::vector<Versioning> Versionings;
       bool CanSpeculate =
-          findNecessaryDeps(DepEdges, InterLoopDeps, ExtraNodesToVersion,
-                            Values, PSSA, DepChecker);
+          findNecessaryDeps(Versionings, InterLoopDeps, Values, PSSA, DepChecker);
       if (!CanSpeculate) {
         errs() << "!! impossible to speculate\n";
         return PreservedAnalyses::all();
       }
 
-      // Don't need to cut edges
-      if (DepEdges.empty()) {
-        errs() << "Don't need to cut edges\n";
-        continue;
-      }
-
-      for (auto [Edge, DepConds] : DepEdges) {
-        auto [Src, Dst] = Edge;
-        auto *SrcI = Src.asInstruction();
-        auto *DstI = Dst.asInstruction();
-
-        if (SrcI && DstI &&
-            (DepConds.size() == 1 && DepConds.front().isOverlapping()))
-          AliasedEdgesToIgnore.insert(Edge);
-        else
-          DepEdgesToIgnore.insert(Edge);
-
-        MarkForVersioning(Src, DepConds);
-        MarkForVersioning(Dst, DepConds);
-        for (auto Node : ExtraNodesToVersion)
-          MarkForVersioning(Node, DepConds);
-        if (auto It = InterLoopDeps.find(Edge); It != InterLoopDeps.end()) {
-          for (auto &Edge : It->second)
-            AliasedEdgesToIgnore.insert(Edge);
+      for (auto &Ver : Versionings) {
+        // Don't need to cut edges
+        if (Ver.CutEdges.empty()) {
+          errs() << "Don't need to cut edges\n";
+          continue;
         }
-      }
 
-      ConditionSetTracker CST(SE, PSSA);
-      for (auto DepConds : make_second_range(DepEdges))
-        for (auto &DepCond : DepConds)
-          CST.add(DepCond);
+        for (auto [Edge, DepConds] : Ver.CutEdges) {
+          auto [Src, Dst] = Edge;
+          auto *SrcI = Src.asInstruction();
+          auto *DstI = Dst.asInstruction();
 
-      for (auto [Edge, DepConds] : DepEdges) {
-        auto [Src, Dst] = Edge;
-        errs() << "Cut edge: " << Src << " -> " << Dst << '\n';
-        for (auto DepCond : DepConds) {
-          errs() << "\tIF " << DepCond << '\n';
-          errs() << "\t coalesced condition: "
-                 << CST.getCoalescedCondition(DepCond) << '\n';
+          if (SrcI && DstI &&
+              (DepConds.size() == 1 && DepConds.front().isOverlapping()))
+            AliasedEdgesToIgnore.insert(Edge);
+          else
+            DepEdgesToIgnore.insert(Edge);
+
+          MarkForVersioning(Src, DepConds);
+          MarkForVersioning(Dst, DepConds);
+          for (auto Node : Ver.Nodes)
+            MarkForVersioning(Node, DepConds);
+          if (auto It = InterLoopDeps.find(Edge); It != InterLoopDeps.end()) {
+            for (auto &Edge : It->second)
+              AliasedEdgesToIgnore.insert(Edge);
+          }
+        }
+
+        ConditionSetTracker CST(SE, PSSA);
+        for (auto DepConds : make_second_range(Ver.CutEdges))
+          for (auto &DepCond : DepConds)
+            CST.add(DepCond);
+
+        for (auto [Edge, DepConds] : Ver.CutEdges) {
+          auto [Src, Dst] = Edge;
+          errs() << "Cut edge: " << Src << " -> " << Dst << '\n';
+          for (auto DepCond : DepConds) {
+            errs() << "\tIF " << DepCond << '\n';
+            errs() << "\t coalesced condition: "
+              << CST.getCoalescedCondition(DepCond) << '\n';
+          }
         }
       }
     }
