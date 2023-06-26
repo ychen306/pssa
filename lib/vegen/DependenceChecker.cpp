@@ -673,19 +673,20 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
   return FoundCycle;
 }
 
-static bool
-findNecessaryDepsImpl(std::vector<Versioning> &Versionings,
-                      DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
-                      ArrayRef<Item> Items, VLoop *VL,
-                      DependenceChecker &DepChecker) {
+bool findNecessaryDeps(std::vector<Versioning> &Versionings,
+                       ArrayRef<Item> Items, ArrayRef<Item> Deps,
+                       DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
+                       VLoop *VL, DependenceChecker &DepChecker) {
   auto ComesBefore = [VL](const Item &It1, const Item &It2) {
     return VL->comesBefore(It1, It2);
   };
   Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
 
-  SmallVector<Item> Deps;
-  DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker, nullptr, nullptr,
-                              &InterLoopDeps);
+  // We don't really care about the deps found by DepFinder. We only want the
+  // dep edges
+  SmallVector<Item> DummyDeps;
+  DependencesFinder DepFinder(DummyDeps, Earliest, VL, DepChecker, nullptr,
+                              nullptr, &InterLoopDeps);
   bool FoundCycle = false;
   for (auto It : Items)
     FoundCycle |= DepFinder.findDep(It);
@@ -720,7 +721,7 @@ findNecessaryDepsImpl(std::vector<Versioning> &Versionings,
   int T = ++NodeCounter;
 
   DenseMap<DepNode, int> AuxNodeIds;
-  for (auto It : Items)
+  for (auto It : Deps)
     AuxNodeIds.try_emplace(It, ++NodeCounter);
 
   // Build the flow graph
@@ -926,9 +927,9 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) const {
 }
 
 bool findNecessaryDeps(std::vector<Versioning> &Versionings,
+                       ArrayRef<Instruction *> Insts,
                        DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
-                       ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
-                       DependenceChecker &DepChecker) {
+                       PredicatedSSA &PSSA, DependenceChecker &DepChecker) {
   SmallVector<Item> Items;
   auto *ParentVL = PSSA.getLoopForInst(Insts.front());
   if (all_of(Insts, [ParentVL, &PSSA](auto *I) {
@@ -945,8 +946,9 @@ bool findNecessaryDeps(std::vector<Versioning> &Versionings,
     // For instructions that come from the same loops,
     // make sure that they are independent
     for (auto &Insts2 : make_second_range(LoopToInstsMap))
-      if (Insts2.size() > 1 && !findNecessaryDeps(Versionings, InterLoopDeps,
-                                                  Insts2, PSSA, DepChecker))
+      if (Insts2.size() > 1 &&
+          !findNecessaryDeps(Versionings, Insts2, InterLoopDeps, PSSA,
+                             DepChecker))
         return false;
 
     // Make sure the disjoint parent loops are independent
@@ -964,8 +966,8 @@ bool findNecessaryDeps(std::vector<Versioning> &Versionings,
     Items.assign(Loops.begin(), Loops.end());
     ParentVL = Loops.front()->getParent();
   }
-  return findNecessaryDepsImpl(Versionings, InterLoopDeps, Items, ParentVL,
-                               DepChecker);
+  return findNecessaryDeps(Versionings, Items, Items, InterLoopDeps, ParentVL,
+                           DepChecker);
 }
 
 IndependenceTracker::IndependenceTracker(

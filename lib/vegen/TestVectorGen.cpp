@@ -444,7 +444,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       ArrayRef<Instruction *> Values = P->values();
       std::vector<Versioning> Versionings;
       bool CanSpeculate =
-          findNecessaryDeps(Versionings, InterLoopDeps, Values, PSSA, DepChecker);
+          findNecessaryDeps(Versionings, Values, InterLoopDeps, PSSA, DepChecker);
       if (!CanSpeculate) {
         errs() << "!! impossible to speculate\n";
         return PreservedAnalyses::all();
