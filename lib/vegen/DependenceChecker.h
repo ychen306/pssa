@@ -349,13 +349,20 @@ struct Versioning {
   llvm::DenseMap<DepEdge, std::vector<DepCondition>> CutEdges;
 };
 
-// Find conditional dependences that, once removed, will make the instructions
-// independent Return true if it's possible (and false if no such set of deps
-// exists).
+// Find conditional dependences that, once removed, will `Insts` independent
+// from `Deps`.
+bool findNecessaryDeps(
+    std::vector<Versioning> &Versionings, llvm::ArrayRef<Item> Items,
+    llvm::ArrayRef<Item> Deps,
+    llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps, VLoop *VL,
+    DependenceChecker &DepChecker);
+
+// Find conditional dependences that, once removed, will `Insts` independent
+// from one another. (and false if no such set of deps exists).
 bool findNecessaryDeps(
     std::vector<Versioning> &Versionings,
+    llvm::ArrayRef<llvm::Instruction *> Insts,
     llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
-    llvm::ArrayRef<llvm::Instruction *> Insts, PredicatedSSA &PSSA,
-    DependenceChecker &DepChecker);
+    PredicatedSSA &PSSA, DependenceChecker &DepChecker);
 
 #endif // VEGEN_DEPENDENCECHECKER_H
