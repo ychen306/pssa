@@ -266,7 +266,7 @@ public:
 };
 } // namespace
 
-void Versioner::runOnLoop(VLoop *VL) {
+void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
   // Put the items in a vector to avoid iterator invalidation
   std::vector<Item> Items(VL->item_begin(), VL->item_end());
 
@@ -612,7 +612,7 @@ void Versioner::runOnLoop(VLoop *VL) {
   }
 
   for (auto *SubVL : SubLoops)
-    runOnLoop(SubVL);
+    runOnLoop(SubVL, VersioningMap);
 }
 
 // Xs -= Ys
@@ -627,8 +627,10 @@ void setSubtraction(std::vector<T> &Xs, const DenseSet<T> &Ys) {
 }
 } // namespace
 
-void removeRedundantConditions(PredicatedSSA &PSSA,
-                               VersioningMapTy &VersioningMap) {
+// If an instruction/loop's has a versioning condition that's implied by its
+// parent loop's versioning condition, remove it
+static void removeRedundantConditions(PredicatedSSA &PSSA,
+                                      VersioningMapTy &VersioningMap) {
   DenseSet<DepCondition> ActiveConds;
   DenseSet<Item, ItemHashInfo> RemoveFromVersioning;
   std::function<void(VLoop *)> VisitLoop = [&](VLoop *VL) {
@@ -665,4 +667,73 @@ void removeRedundantConditions(PredicatedSSA &PSSA,
 
   for (auto &Item : RemoveFromVersioning)
     VersioningMap.erase(Item);
+}
+
+void Versioner::run(ArrayRef<Versioning> Versionings,
+                    const DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
+                    bool RemoveRedundantConditions) {
+  VersioningMapTy VersioningMap;
+  auto MarkForVersioning = [&](const DepNode &N, ArrayRef<DepCondition> Conds) {
+    if (auto *I = N.asInstruction())
+      append_range(VersioningMap[I], Conds);
+    else if (auto *VL = N.asLoop())
+      append_range(VersioningMap[VL], Conds);
+  };
+
+  // Populate the versioning conditions for each item and figure the deps that
+  // we need to ignore.
+  DenseSet<DepEdge> AliasedEdgesToIgnore, DepEdgesToIgnore;
+  for (auto &Ver : Versionings) {
+    assert(!Ver.CutEdges.empty());
+
+    for (auto [Edge, DepConds] : Ver.CutEdges) {
+      auto [Src, Dst] = Edge;
+      auto *SrcI = Src.asInstruction();
+      auto *DstI = Dst.asInstruction();
+
+      if (SrcI && DstI &&
+          (DepConds.size() == 1 && DepConds.front().isOverlapping()))
+        AliasedEdgesToIgnore.insert(Edge);
+      else
+        DepEdgesToIgnore.insert(Edge);
+
+      MarkForVersioning(Src, DepConds);
+      MarkForVersioning(Dst, DepConds);
+      for (auto Node : Ver.Nodes)
+        MarkForVersioning(Node, DepConds);
+      if (auto It = InterLoopDeps.find(Edge); It != InterLoopDeps.end()) {
+        for (auto &Edge : It->second)
+          AliasedEdgesToIgnore.insert(Edge);
+      }
+    }
+  }
+
+  IndepTracker.ignoreDependences(DepEdgesToIgnore, AliasedEdgesToIgnore,
+                                 InterLoopDeps);
+
+  ConditionSetTracker CST(SE, PSSA);
+  // Visit all of the conditions for coalescing
+  for (auto &DepConds : make_second_range(VersioningMap))
+    for (auto &DepCond : DepConds)
+      CST.add(DepCond);
+
+  // Go over the versioning map and deduplicate the conditions (after
+  // coalescing)
+  for (auto &Conds : make_second_range(VersioningMap)) {
+    std::vector<DepCondition> NewConds;
+    DenseSet<DepCondition> Inserted;
+    for (const auto &DepCond : Conds) {
+      auto NewCond = CST.getCoalescedCondition(DepCond);
+      if (Inserted.insert(NewCond).second)
+        NewConds.push_back(NewCond);
+    }
+    // Fix a canonical order for the conditions
+    llvm::sort(NewConds);
+    Conds = std::move(NewConds);
+  }
+
+  if (RemoveRedundantConditions)
+    removeRedundantConditions(PSSA, VersioningMap);
+
+  runOnLoop(&PSSA.getTopLevel(), VersioningMap);
 }

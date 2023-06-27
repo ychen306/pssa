@@ -272,11 +272,11 @@ class IndependenceTracker {
   bool checkIndependence(const DepNode &Src, const DepNode &Dest) const;
 
 public:
-  IndependenceTracker(
+  IndependenceTracker(Versioner &TheVersioner, PredicatedSSA &PSSA);
+  void ignoreDependences(
       const llvm::DenseSet<DepEdge> &DepEdgesToIgnore,
       const llvm::DenseSet<DepEdge> &AliasedEdgesToIgnore,
-      const llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
-      Versioner &TheVersioner, PredicatedSSA &PSSA);
+      const llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps);
   void markInstAsVersioned(llvm::Instruction *Orig, llvm::Instruction *Cloned);
   // Mark a loop as versioned (and activate one of the loop instruction's
   // conditional independences).
