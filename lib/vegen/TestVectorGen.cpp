@@ -426,101 +426,40 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   DependenceChecker DepChecker(PSSA, DI, AA, LI, SE, &DeadInsts);
 
   if (FindConditionalDeps) {
-    VersioningMapTy VersioningMap;
     // If we find any loop -> loop dep, also record all the conditional deps
     // that causes the loop->loop dep.
     DenseMap<DepEdge, DenseSet<DepEdge>> InterLoopDeps;
-    DenseSet<DepEdge> AliasedEdgesToIgnore, DepEdgesToIgnore;
-
-    auto MarkForVersioning = [&](const DepNode &N,
-                                 ArrayRef<DepCondition> Conds) {
-      if (auto *I = N.asInstruction())
-        append_range(VersioningMap[I], Conds);
-      else if (auto *VL = N.asLoop())
-        append_range(VersioningMap[VL], Conds);
-    };
-
+    std::vector<Versioning> Versionings;
     for (auto *P : Packs) {
-      ArrayRef<Instruction *> Values = P->values();
-      std::vector<Versioning> Versionings;
-      bool CanSpeculate =
-          findNecessaryDeps(Versionings, Values, InterLoopDeps, PSSA, DepChecker);
-      if (!CanSpeculate) {
+      if (!findNecessaryDeps(Versionings, P->values(), InterLoopDeps, PSSA, DepChecker)) {
         errs() << "!! impossible to speculate\n";
         return PreservedAnalyses::all();
       }
+    }
 
-      for (auto &Ver : Versionings) {
-        // Don't need to cut edges
-        if (Ver.CutEdges.empty()) {
-          errs() << "Don't need to cut edges\n";
-          continue;
-        }
+    // Print out the cut edges for testing
+    for (auto &Ver : Versionings) {
+      // Don't need to cut edges
+      assert(!Ver.CutEdges.empty());
 
-        for (auto [Edge, DepConds] : Ver.CutEdges) {
-          auto [Src, Dst] = Edge;
-          auto *SrcI = Src.asInstruction();
-          auto *DstI = Dst.asInstruction();
+      ConditionSetTracker CST(SE, PSSA);
+      for (auto DepConds : make_second_range(Ver.CutEdges))
+        for (auto &DepCond : DepConds)
+          CST.add(DepCond);
 
-          if (SrcI && DstI &&
-              (DepConds.size() == 1 && DepConds.front().isOverlapping()))
-            AliasedEdgesToIgnore.insert(Edge);
-          else
-            DepEdgesToIgnore.insert(Edge);
-
-          MarkForVersioning(Src, DepConds);
-          MarkForVersioning(Dst, DepConds);
-          for (auto Node : Ver.Nodes)
-            MarkForVersioning(Node, DepConds);
-          if (auto It = InterLoopDeps.find(Edge); It != InterLoopDeps.end()) {
-            for (auto &Edge : It->second)
-              AliasedEdgesToIgnore.insert(Edge);
-          }
-        }
-
-        ConditionSetTracker CST(SE, PSSA);
-        for (auto DepConds : make_second_range(Ver.CutEdges))
-          for (auto &DepCond : DepConds)
-            CST.add(DepCond);
-
-        for (auto [Edge, DepConds] : Ver.CutEdges) {
-          auto [Src, Dst] = Edge;
-          errs() << "Cut edge: " << Src << " -> " << Dst << '\n';
-          for (auto DepCond : DepConds) {
-            errs() << "\tIF " << DepCond << '\n';
-            errs() << "\t coalesced condition: "
-              << CST.getCoalescedCondition(DepCond) << '\n';
-          }
+      for (auto [Edge, DepConds] : Ver.CutEdges) {
+        auto [Src, Dst] = Edge;
+        errs() << "Cut edge: " << Src << " -> " << Dst << '\n';
+        for (auto DepCond : DepConds) {
+          errs() << "\tIF " << DepCond << '\n';
+          errs() << "\t coalesced condition: "
+            << CST.getCoalescedCondition(DepCond) << '\n';
         }
       }
     }
 
-    ConditionSetTracker CST(SE, PSSA);
-    // Visit all of the conditions for coalescing
-    for (auto &DepConds : make_second_range(VersioningMap))
-      for (auto &DepCond : DepConds)
-        CST.add(DepCond);
-
-    // Go over the versioning map and deduplicate the conditions (after
-    // coalescing)
-    for (auto &Conds : make_second_range(VersioningMap)) {
-      std::vector<DepCondition> NewConds;
-      DenseSet<DepCondition> Inserted;
-      for (const auto &DepCond : Conds) {
-        auto NewCond = CST.getCoalescedCondition(DepCond);
-        if (Inserted.insert(NewCond).second)
-          NewConds.push_back(NewCond);
-      }
-      // Fix a canonical order for the conditions
-      llvm::sort(NewConds);
-      Conds = std::move(NewConds);
-    }
-
-    if (RemoveRedundantConditions)
-      removeRedundantConditions(PSSA, VersioningMap);
-    Versioner TheVersioner(DepEdgesToIgnore, AliasedEdgesToIgnore, InterLoopDeps, PSSA, DI, AA,
-                           LI, SE, VersioningMap);
-    TheVersioner.run();
+    Versioner TheVersioner(PSSA, DI, AA, LI, SE);
+    TheVersioner.run(Versionings, InterLoopDeps, RemoveRedundantConditions);
 
     // Pack the versioning phis
     SmallVector<Pack *> NewPacks;

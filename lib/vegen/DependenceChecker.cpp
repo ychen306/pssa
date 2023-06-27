@@ -874,7 +874,9 @@ bool findNecessaryDeps(std::vector<Versioning> &Versionings,
       Sources.append(It->second.begin(), It->second.end());
   }
 
-  Versionings.push_back(std::move(Ver));
+  // Don't need to cut edges
+  if (!Ver.CutEdges.empty())
+    Versionings.push_back(std::move(Ver));
 
   return true;
 }
@@ -970,13 +972,15 @@ bool findNecessaryDeps(std::vector<Versioning> &Versionings,
                            DepChecker);
 }
 
-IndependenceTracker::IndependenceTracker(
+IndependenceTracker::IndependenceTracker(Versioner &TheVersioner,
+                                         PredicatedSSA &PSSA)
+    : TheVersioner(TheVersioner), PSSA(PSSA) {}
+
+void IndependenceTracker::ignoreDependences(
     const DenseSet<DepEdge> &DepEdgesToIgnore,
     const DenseSet<DepEdge> &AliasedEdgesToIgnore,
-    const DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
-    Versioner &TheVersioner, PredicatedSSA &PSSA)
-    : TheVersioner(TheVersioner), PSSA(PSSA),
-      Whitelist(DepEdgesToIgnore.begin(), DepEdgesToIgnore.end()) {
+    const DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps) {
+  Whitelist.insert(DepEdgesToIgnore.begin(), DepEdgesToIgnore.end());
 
   for (auto [Src, Dst] : AliasedEdgesToIgnore) {
     // Memory independence is reflexive (e.g., if ptr1 and
