@@ -673,10 +673,10 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
   return FoundCycle;
 }
 
-bool findNecessaryDeps(std::vector<Versioning> &Versionings,
-                       ArrayRef<Item> Items, ArrayRef<Item> Deps,
-                       DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
-                       VLoop *VL, DependenceChecker &DepChecker) {
+Optional<Versioning>
+inferVersioning(ArrayRef<Item> Items, ArrayRef<Item> Deps,
+                DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps, VLoop *VL,
+                DependenceChecker &DepChecker) {
   auto ComesBefore = [VL](const Item &It1, const Item &It2) {
     return VL->comesBefore(It1, It2);
   };
@@ -753,7 +753,7 @@ bool findNecessaryDeps(std::vector<Versioning> &Versionings,
     MaxFlow.AddArcWithCapacity(S, NodeToIds.lookup(It), UnconditionalWeight);
   MaxFlow.Solve(S, T);
   if (MaxFlow.OptimalFlow() >= UnconditionalWeight)
-    return false;
+    return None;
   std::vector<NodeIndex> SCut;
   std::vector<NodeIndex> TCut;
   MaxFlow.GetSourceSideMinCut(&SCut);
@@ -851,7 +851,7 @@ bool findNecessaryDeps(std::vector<Versioning> &Versionings,
       errs() << "Found cut edge = " << Src << " -> " << Dst << '\n';
       // Can't cut an unconditional edge
       if (Kind.isUnconditional())
-        return false;
+        return None;
       Ver.CutEdges.try_emplace(Edge, Kind.getConds());
       Sources.push_back(Src);
     }
@@ -874,11 +874,7 @@ bool findNecessaryDeps(std::vector<Versioning> &Versionings,
       Sources.append(It->second.begin(), It->second.end());
   }
 
-  // Don't need to cut edges
-  if (!Ver.CutEdges.empty())
-    Versionings.push_back(std::move(Ver));
-
-  return true;
+  return Ver;
 }
 
 static bool haveSameParent(ArrayRef<VLoop *> Loops) {
@@ -968,8 +964,13 @@ bool findNecessaryDeps(std::vector<Versioning> &Versionings,
     Items.assign(Loops.begin(), Loops.end());
     ParentVL = Loops.front()->getParent();
   }
-  return findNecessaryDeps(Versionings, Items, Items, InterLoopDeps, ParentVL,
-                           DepChecker);
+
+  auto Ver = inferVersioning(Items, Items, InterLoopDeps, ParentVL, DepChecker);
+  if (!Ver)
+    return false;
+  if (!Ver->CutEdges.empty())
+    Versionings.push_back(*Ver);
+  return true;
 }
 
 IndependenceTracker::IndependenceTracker(Versioner &TheVersioner,
