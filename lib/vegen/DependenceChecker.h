@@ -329,6 +329,15 @@ public:
     return FoundCycle;
   }
 
+  bool findDepForNode(DepNode Node) {
+    if (auto *C = Node.asCond())
+      return findDep(C);
+    if (auto *VL = Node.asLoop())
+      return findDep(VL);
+    assert(Node.asInstruction());
+    return findDep(Node.asInstruction());
+  }
+
   const llvm::DenseMap<DepEdge, DepKind> &getDepEdges() const {
     return DepEdges;
   }
@@ -349,10 +358,9 @@ struct Versioning {
   llvm::DenseMap<DepEdge, std::vector<DepCondition>> CutEdges;
 };
 
-// Infer a versioning that will make `Insts` independent
-// from `Deps`.
+// Infer a versioning that will make `Nodes` independent from `Deps`.
 llvm::Optional<Versioning>
-inferVersioning(llvm::ArrayRef<Item> Items, llvm::ArrayRef<Item> Deps,
+inferVersioning(llvm::ArrayRef<DepNode> Nodes, llvm::ArrayRef<Item> Deps,
                 llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
                 VLoop *VL, DependenceChecker &DepChecker);
 

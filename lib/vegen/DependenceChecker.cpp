@@ -674,13 +674,13 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
 }
 
 Optional<Versioning>
-inferVersioning(ArrayRef<Item> Items, ArrayRef<Item> Deps,
+inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
                 DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps, VLoop *VL,
                 DependenceChecker &DepChecker) {
   auto ComesBefore = [VL](const Item &It1, const Item &It2) {
     return VL->comesBefore(It1, It2);
   };
-  Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
+  Item Earliest = *std::min_element(Deps.begin(), Deps.end(), ComesBefore);
 
   // We don't really care about the deps found by DepFinder. We only want the
   // dep edges
@@ -688,8 +688,8 @@ inferVersioning(ArrayRef<Item> Items, ArrayRef<Item> Deps,
   DependencesFinder DepFinder(DummyDeps, Earliest, VL, DepChecker, nullptr,
                               nullptr, &InterLoopDeps);
   bool FoundCycle = false;
-  for (auto It : Items)
-    FoundCycle |= DepFinder.findDep(It);
+  for (auto Node : Nodes)
+    FoundCycle |= DepFinder.findDepForNode(Node);
   assert(!FoundCycle);
 
   // Mapping DepNode -> int
@@ -705,7 +705,7 @@ inferVersioning(ArrayRef<Item> Items, ArrayRef<Item> Deps,
     assert(IdsToNodes[NodeToIds.lookup(Node)] == Node);
   };
 
-  llvm::for_each(Items, TrackNode);
+  llvm::for_each(Nodes, TrackNode);
 
   // Assign ids to the nodes and edges
   int NumConditionalDeps = 0;
@@ -749,8 +749,8 @@ inferVersioning(ArrayRef<Item> Items, ArrayRef<Item> Deps,
     MaxFlow.AddArcWithCapacity(N, T, UnconditionalWeight);
 
   // Add the out-going edges from the source
-  for (auto It : Items)
-    MaxFlow.AddArcWithCapacity(S, NodeToIds.lookup(It), UnconditionalWeight);
+  for (auto Node : Nodes)
+    MaxFlow.AddArcWithCapacity(S, NodeToIds.lookup(Node), UnconditionalWeight);
   MaxFlow.Solve(S, T);
   if (MaxFlow.OptimalFlow() >= UnconditionalWeight)
     return None;
@@ -824,8 +824,8 @@ inferVersioning(ArrayRef<Item> Items, ArrayRef<Item> Deps,
   }
   for (auto N : make_second_range(AuxNodeIds))
     errs() << "n" << N << " -> n" << T << '\n';
-  for (auto It : Items)
-    errs() << "n" << S << " -> n" << NodeToIds.lookup(It) << '\n';
+  for (auto Node : Nodes)
+    errs() << "n" << S << " -> n" << NodeToIds.lookup(Node) << '\n';
   errs() << "}\n";
 #endif
   ///////////
@@ -833,7 +833,7 @@ inferVersioning(ArrayRef<Item> Items, ArrayRef<Item> Deps,
   Versioning Ver;
 
   // If we version any edges, remember their sources
-  SmallVector<DepNode> Sources(Items.begin(), Items.end());
+  SmallVector<DepNode> Sources(Nodes.begin(), Nodes.end());
   // Find the cut edges; abort if any of the cut edges are unconditional
   for (auto [Edge, Kind] : DepFinder.getDepEdges()) {
     auto [Src, Dst] = Edge;
@@ -928,11 +928,13 @@ bool findNecessaryDeps(std::vector<Versioning> &Versionings,
                        ArrayRef<Instruction *> Insts,
                        DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker) {
+  SmallVector<DepNode> Nodes;
   SmallVector<Item> Items;
   auto *ParentVL = PSSA.getLoopForInst(Insts.front());
   if (all_of(Insts, [ParentVL, &PSSA](auto *I) {
         return ParentVL == PSSA.getLoopForInst(I);
       })) {
+    Nodes.assign(Insts.begin(), Insts.end());
     Items.assign(Insts.begin(), Insts.end());
   } else {
     SmallDenseMap<VLoop *, TinyPtrVector<Instruction *>, 8> LoopToInstsMap;
@@ -961,11 +963,12 @@ bool findNecessaryDeps(std::vector<Versioning> &Versionings,
       }
     }
 
+    Nodes.assign(Loops.begin(), Loops.end());
     Items.assign(Loops.begin(), Loops.end());
     ParentVL = Loops.front()->getParent();
   }
 
-  auto Ver = inferVersioning(Items, Items, InterLoopDeps, ParentVL, DepChecker);
+  auto Ver = inferVersioning(Nodes, Items, InterLoopDeps, ParentVL, DepChecker);
   if (!Ver)
     return false;
   if (!Ver->CutEdges.empty())
