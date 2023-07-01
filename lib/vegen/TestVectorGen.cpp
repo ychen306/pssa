@@ -306,6 +306,63 @@ static const InstructionDescriptor &getInstByName(StringRef Name) {
   llvm_unreachable("Can't find requested instruction");
 }
 
+// Find the outermost versioning plan
+static Versioning *getOutermostVersioning(Versioning *Ver) {
+  auto *OutermostVer = Ver;
+  while (OutermostVer->Secondary)
+    OutermostVer = OutermostVer->Secondary.get();
+  return OutermostVer;
+}
+
+// Xs -= Ys
+namespace {
+template <typename T>
+void setSubtraction(std::vector<T> &Xs, const DenseSet<T> &Ys) {
+  std::vector<T> NewXs;
+  for (auto &X : Xs)
+    if (!Ys.count(X))
+      NewXs.push_back(X);
+  Xs = std::move(NewXs);
+}
+} // namespace
+
+// Fix up a chain of nested versionings.
+static void finalizeVersioning(Versioning *PrimaryVer) {
+  DenseSet<DepNode> Nodes(PrimaryVer->Nodes.begin(), PrimaryVer->Nodes.end());
+  DenseSet<DepCondition> ImpliedConds;
+#ifndef NDEBUG
+  DenseSet<DepNode> Removed;
+#endif
+  auto RemoveFromNodes = [&](ArrayRef<DepNode> ToRemove) {
+    for (auto &Node : ToRemove) {
+      assert(Nodes.count(Node) || Removed.count(Node));
+      Nodes.erase(Node);
+#ifndef NDEBUG
+      Removed.insert(Node);
+#endif
+    }
+  };
+
+  for (auto *Ver = getOutermostVersioning(PrimaryVer); Ver;
+       Ver = Ver->Primary) {
+    auto OldNodes = std::move(Ver->Nodes);
+    llvm::append_range(Ver->Nodes, Nodes);
+    RemoveFromNodes(OldNodes);
+    DenseSet<DepEdge> ImpliedCutEdges;
+    for (auto [Edge, DepConds] : Ver->CutEdges) {
+      setSubtraction(DepConds, ImpliedConds);
+      // If a cut edge's conditions are all implied, we don't need to cut it.
+      if (DepConds.empty())
+        ImpliedCutEdges.insert(Edge);
+    }
+    for (auto &DepConds : llvm::make_second_range(Ver->CutEdges))
+      ImpliedConds.insert(DepConds.begin(), DepConds.end());
+    // Remove the implied cut edges
+    for (auto &Edge : ImpliedCutEdges)
+      Ver->CutEdges.erase(Edge);
+  }
+}
+
 PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
   auto &DL = F.getParent()->getDataLayout();
@@ -429,9 +486,10 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     // If we find any loop -> loop dep, also record all the conditional deps
     // that causes the loop->loop dep.
     DenseMap<DepEdge, DenseSet<DepEdge>> InterLoopDeps;
-    std::vector<Versioning> Versionings;
+    std::vector<std::unique_ptr<Versioning>> Versionings;
     for (auto *P : Packs) {
-      if (!findNecessaryDeps(Versionings, P->values(), InterLoopDeps, PSSA, DepChecker)) {
+      if (!findNecessaryDeps(Versionings, P->values(), InterLoopDeps, PSSA,
+                             DepChecker)) {
         errs() << "!! impossible to speculate\n";
         return PreservedAnalyses::all();
       }
@@ -440,26 +498,44 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     // Print out the cut edges for testing
     for (auto &Ver : Versionings) {
       // Don't need to cut edges
-      assert(!Ver.CutEdges.empty());
+      assert(!Ver->CutEdges.empty());
 
       ConditionSetTracker CST(SE, PSSA);
-      for (auto DepConds : make_second_range(Ver.CutEdges))
+      for (auto DepConds : make_second_range(Ver->CutEdges))
         for (auto &DepCond : DepConds)
           CST.add(DepCond);
 
-      for (auto [Edge, DepConds] : Ver.CutEdges) {
+      for (auto [Edge, DepConds] : Ver->CutEdges) {
         auto [Src, Dst] = Edge;
         errs() << "Cut edge: " << Src << " -> " << Dst << '\n';
         for (auto DepCond : DepConds) {
           errs() << "\tIF " << DepCond << '\n';
           errs() << "\t coalesced condition: "
-            << CST.getCoalescedCondition(DepCond) << '\n';
+                 << CST.getCoalescedCondition(DepCond) << '\n';
         }
       }
     }
 
+    for (auto &Ver : Versionings)
+      finalizeVersioning(Ver.get());
+
+    // Lower the versionings from the secondaries to primaries.
+    // Collect the outermost versionings first.
+    SmallVector<Versioning *> Frontier;
+    for (auto &Ver : Versionings)
+      Frontier.push_back(getOutermostVersioning(Ver.get()));
+
     Versioner TheVersioner(PSSA, DI, AA, LI, SE);
-    TheVersioner.run(Versionings, InterLoopDeps, RemoveRedundantConditions);
+
+    while (!Frontier.empty()) {
+      TheVersioner.run(Frontier, InterLoopDeps, RemoveRedundantConditions);
+      SmallVector<Versioning *> NewFrontier;
+      for (auto *Ver : Frontier) {
+        if (Ver->Primary)
+          NewFrontier.push_back(Ver->Primary);
+      }
+      Frontier = std::move(NewFrontier);
+    }
 
     // Pack the versioning phis
     SmallVector<Pack *> NewPacks;
@@ -469,7 +545,9 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       unsigned NumVersions = VersioningPhis.size();
       if (NumVersions == 0)
         continue;
-      if (any_of(drop_begin(Values), [&](auto *I) { return TheVersioner.getVersioningPhis(I).size() != NumVersions; }))
+      if (any_of(drop_begin(Values), [&](auto *I) {
+            return TheVersioner.getVersioningPhis(I).size() != NumVersions;
+          }))
         continue;
       for (unsigned i = 0; i < NumVersions; i++) {
         SmallVector<Instruction *> Phis;
@@ -482,7 +560,6 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       }
     }
     Packs.append(NewPacks.begin(), NewPacks.end());
-
 
     bool Ok = lower(Packs, PSSA, DI, AA, LI, SE, &TheVersioner,
                     &TheVersioner.getIndependenceTracker());

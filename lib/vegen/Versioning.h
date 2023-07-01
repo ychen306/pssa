@@ -44,7 +44,7 @@ public:
         IndepTracker(*this, PSSA), CUT(PSSA) {}
 
   void
-  run(llvm::ArrayRef<Versioning>,
+  run(llvm::ArrayRef<Versioning *>,
       const llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
       bool RemoveRedundantConditions);
 

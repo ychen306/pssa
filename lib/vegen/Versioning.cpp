@@ -12,8 +12,9 @@ using namespace llvm;
 static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
                            const ControlCondition *C,
                            VLoop::ItemIterator InsertBefore,
-                           DependenceChecker &DepChecker, ScalarEvolution &SE,
-                           const DataLayout &DL) {
+                           DependenceChecker &DepChecker,
+                           IndependenceTracker &IndepTracker,
+                           ScalarEvolution &SE, const DataLayout &DL) {
   // Create a dummy basic for the expander to emit code
   auto &Ctx = SE.getContext();
   auto *BB = BasicBlock::Create(Ctx, "", VL->getPSSA()->getFunction());
@@ -30,7 +31,8 @@ static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
   if (InsertBefore != VL->item_end()) {
     // Find dependences of the pred computation that occur *after* InsertBefore
     SmallVector<Item> Deps;
-    DependencesFinder DepFinder(Deps, *InsertBefore, VL, DepChecker);
+    DependencesFinder DepFinder(Deps, *InsertBefore, VL, DepChecker,
+                                nullptr /*packs*/, &IndepTracker);
     for (auto &I : *BB) {
       for (auto *O : I.operand_values()) {
         auto *OI = dyn_cast<Instruction>(O);
@@ -65,6 +67,7 @@ static Value *emitOverlappingChecks(const DepCondition &DepCond, VLoop *VL,
                                     const ControlCondition *C,
                                     VLoop::ItemIterator InsertBefore,
                                     DependenceChecker &DepChecker,
+                                    IndependenceTracker &IndepTracker,
                                     ScalarEvolution &SE, const DataLayout &DL) {
   assert(DepCond.isOverlapping());
   auto [R1, R2] = DepCond.getRanges();
@@ -75,12 +78,12 @@ static Value *emitOverlappingChecks(const DepCondition &DepCond, VLoop *VL,
   auto *Left = emitSCEVPred(
       SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT),
                              End1, R2.Base),
-      VL, C, InsertBefore, DepChecker, SE, DL);
+      VL, C, InsertBefore, DepChecker, IndepTracker, SE, DL);
   // Case 2: R2 is left of R1; i.e., End2 < Begin1.
   auto *Right = emitSCEVPred(
       SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT),
                              End2, R1.Base),
-      VL, C, InsertBefore, DepChecker, SE, DL);
+      VL, C, InsertBefore, DepChecker, IndepTracker, SE, DL);
   Inserter Insert(VL, C, InsertBefore);
   return Insert.CreateBinOp(Instruction::Or, Left, Right);
 }
@@ -182,7 +185,10 @@ Versioner::strengthenCondition(const ControlCondition *C, Value *Flag,
                                bool IsTrue) {
   auto *FlagC = PSSA.getInstCond(cast<Instruction>(Flag));
   auto *C2 = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, IsTrue), C);
-  OrigConds[C2] = C;
+  if (OrigConds.count(C))
+    OrigConds[C2] = OrigConds[C];
+  else
+    OrigConds[C2] = C;
   StrengthenedConds[C2] = {Flag, IsTrue};
   return C2;
 }
@@ -304,9 +310,9 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
     // (We assume prior analyses have
     // made sure that it's indeed possible to materialize DepCond before Items)
     Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
-    auto *V =
-        emitOverlappingChecks(DepCond, VL, getCommonCondition(VL, Items),
-                              VL->toIterator(Earliest), DepChecker, SE, DL);
+    auto *V = emitOverlappingChecks(DepCond, VL, getCommonCondition(VL, Items),
+                                    VL->toIterator(Earliest), DepChecker,
+                                    IndepTracker, SE, DL);
     OverlappingChecks[DepCond] = V;
   }
 
@@ -336,7 +342,8 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
       auto &Items = CondSetToItemMap.at(DepConds);
       Item Earliest =
           *std::min_element(Items.begin(), Items.end(), ComesBefore);
-      DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker);
+      DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker,
+                                  nullptr /*packs*/, &IndepTracker);
       for (auto *V : Checks) {
         if (auto *Check = dyn_cast<Instruction>(V))
           DepFinder.findDep(Check, true /*add check to Deps*/);
@@ -488,7 +495,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
       auto *UserI = cast<Instruction>(U->getUser());
 
       // Ignore uses by branches (no branches in predicated SSA)
-      if (UserI->isTerminator())
+      if (isa<BranchInst>(UserI))
         continue;
 
       // Ignore if the user is a clone
@@ -669,7 +676,7 @@ static void removeRedundantConditions(PredicatedSSA &PSSA,
     VersioningMap.erase(Item);
 }
 
-void Versioner::run(ArrayRef<Versioning> Versionings,
+void Versioner::run(ArrayRef<Versioning *> Versionings,
                     const DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
                     bool RemoveRedundantConditions) {
   VersioningMapTy VersioningMap;
@@ -683,10 +690,10 @@ void Versioner::run(ArrayRef<Versioning> Versionings,
   // Populate the versioning conditions for each item and figure the deps that
   // we need to ignore.
   DenseSet<DepEdge> AliasedEdgesToIgnore, DepEdgesToIgnore;
-  for (auto &Ver : Versionings) {
-    assert(!Ver.CutEdges.empty());
+  for (auto *Ver : Versionings) {
+    assert(!Ver->CutEdges.empty());
 
-    for (auto [Edge, DepConds] : Ver.CutEdges) {
+    for (auto [Edge, DepConds] : Ver->CutEdges) {
       auto [Src, Dst] = Edge;
       auto *SrcI = Src.asInstruction();
       auto *DstI = Dst.asInstruction();
@@ -699,7 +706,7 @@ void Versioner::run(ArrayRef<Versioning> Versionings,
 
       MarkForVersioning(Src, DepConds);
       MarkForVersioning(Dst, DepConds);
-      for (auto Node : Ver.Nodes)
+      for (auto Node : Ver->Nodes)
         MarkForVersioning(Node, DepConds);
       if (auto It = InterLoopDeps.find(Edge); It != InterLoopDeps.end()) {
         for (auto &Edge : It->second)
