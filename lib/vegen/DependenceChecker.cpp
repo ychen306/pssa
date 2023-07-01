@@ -673,7 +673,7 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
   return FoundCycle;
 }
 
-Optional<Versioning>
+std::unique_ptr<Versioning>
 inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
                 DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps, VLoop *VL,
                 DependenceChecker &DepChecker) {
@@ -753,7 +753,7 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
     MaxFlow.AddArcWithCapacity(S, NodeToIds.lookup(Node), UnconditionalWeight);
   MaxFlow.Solve(S, T);
   if (MaxFlow.OptimalFlow() >= UnconditionalWeight)
-    return None;
+    return nullptr;
   std::vector<NodeIndex> SCut;
   std::vector<NodeIndex> TCut;
   MaxFlow.GetSourceSideMinCut(&SCut);
@@ -830,10 +830,13 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
 #endif
   ///////////
 
-  Versioning Ver;
+  auto Ver = std::make_unique<Versioning>();
 
   // If we version any edges, remember their sources
   SmallVector<DepNode> Sources(Nodes.begin(), Nodes.end());
+  // Keep track of the computations that are required to compute the versioning
+  // conditions
+  SmallVector<DepNode> CondComputations;
   // Find the cut edges; abort if any of the cut edges are unconditional
   for (auto [Edge, Kind] : DepFinder.getDepEdges()) {
     auto [Src, Dst] = Edge;
@@ -846,13 +849,17 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
                          : SCutSet.count(NodeToIds.lookup(Dst));
 
     assert(EdgeToArcMap.count(Edge));
-    // if (SrcInSCut && MaxFlow.Flow(EdgeToArcMap.lookup(Edge)) > 0) {
     if (SrcInSCut && !DstInSCut) {
-      errs() << "Found cut edge = " << Src << " -> " << Dst << '\n';
       // Can't cut an unconditional edge
       if (Kind.isUnconditional())
-        return None;
-      Ver.CutEdges.try_emplace(Edge, Kind.getConds());
+        return nullptr;
+      // Figure out the deps required to compute the versioning conditions
+      for (auto &DepCond : Kind.getConds()) {
+        // FIXME: also deal with overlap checks
+        if (auto *C =  DepCond.getCondition())
+          CondComputations.push_back(C);
+      }
+      Ver->CutEdges.try_emplace(Edge, Kind.getConds());
       Sources.push_back(Src);
     }
   }
@@ -869,9 +876,36 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
     auto Src = Sources.pop_back_val();
     if (!Visited.insert(Src).second)
       continue;
-    Ver.Nodes.push_back(Src);
+    Ver->Nodes.push_back(Src);
     if (auto It = DestToSourceMap.find(Src); It != DestToSourceMap.end())
       Sources.append(It->second.begin(), It->second.end());
+  }
+
+  // Do seconary versioning in case the computation of the versioning conditions
+  // conditionally depend on the boundary items (in which case there would be
+  // imposible to schedule the versioning checks).
+  if (!CondComputations.empty()) {
+    auto SecondaryVer = inferVersioning(CondComputations, Deps,
+                                        InterLoopDeps, VL, DepChecker);
+    if (!SecondaryVer)
+      return nullptr;
+#if 0
+    for (auto [Edge, Conds] : SecondaryVer->CutEdges) {
+      auto [Src, Dst] = Edge;
+      errs() << "<<<<< dumping secondary versioning\n";
+      errs() << "Node:\n";
+      for (auto &N : SecondaryVer->Nodes)
+        errs() << N << '\n';
+      errs() << "Secondary cut edge: " << Src << " -> " << Dst << '\n';
+      for (auto &Cond : Conds)
+        errs() << "\t " << Cond << '\n';
+      errs() << ">>>>>>>\n";
+    }
+#endif
+    if (!SecondaryVer->CutEdges.empty()) {
+      SecondaryVer->Primary = Ver.get();
+      Ver->Secondary = std::move(SecondaryVer);
+    }
   }
 
   return Ver;
@@ -924,7 +958,7 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) const {
   return DepCond;
 }
 
-bool findNecessaryDeps(std::vector<Versioning> &Versionings,
+bool findNecessaryDeps(std::vector<std::unique_ptr<Versioning>> &Versionings,
                        ArrayRef<Instruction *> Insts,
                        DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker) {
@@ -972,7 +1006,7 @@ bool findNecessaryDeps(std::vector<Versioning> &Versionings,
   if (!Ver)
     return false;
   if (!Ver->CutEdges.empty())
-    Versionings.push_back(*Ver);
+    Versionings.push_back(std::move(Ver));
   return true;
 }
 

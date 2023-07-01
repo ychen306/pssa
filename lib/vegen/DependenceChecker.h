@@ -137,7 +137,7 @@ public:
     return *Overlap;
   }
   bool isUnconditional() const { return IsUnconditional; }
-  bool isConditional() const { return IsUnconditional; }
+  bool isConditional() const { return !IsUnconditional; }
 };
 
 template <> struct llvm::DenseMapInfo<DepCondition> {
@@ -334,8 +334,9 @@ public:
       return findDep(C);
     if (auto *VL = Node.asLoop())
       return findDep(VL);
-    assert(Node.asInstruction());
-    return findDep(Node.asInstruction());
+    if (auto *I = Node.asInstruction())
+      return findDep(I);
+    return FoundCycle;
   }
 
   const llvm::DenseMap<DepEdge, DepKind> &getDepEdges() const {
@@ -356,10 +357,12 @@ struct Versioning {
   std::vector<DepNode> Nodes;
   // Edges that we speculate to be non-existent
   llvm::DenseMap<DepEdge, std::vector<DepCondition>> CutEdges;
+  std::unique_ptr<Versioning> Secondary;
+  Versioning *Primary = nullptr;
 };
 
 // Infer a versioning that will make `Nodes` independent from `Deps`.
-llvm::Optional<Versioning>
+std::unique_ptr<Versioning>
 inferVersioning(llvm::ArrayRef<DepNode> Nodes, llvm::ArrayRef<Item> Deps,
                 llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
                 VLoop *VL, DependenceChecker &DepChecker);
@@ -367,7 +370,7 @@ inferVersioning(llvm::ArrayRef<DepNode> Nodes, llvm::ArrayRef<Item> Deps,
 // Find conditional dependences that, once removed, will `Insts` independent
 // from one another. (and false if no such set of deps exists).
 bool findNecessaryDeps(
-    std::vector<Versioning> &Versionings,
+    std::vector<std::unique_ptr<Versioning>> &Versionings,
     llvm::ArrayRef<llvm::Instruction *> Insts,
     llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
     PredicatedSSA &PSSA, DependenceChecker &DepChecker);
