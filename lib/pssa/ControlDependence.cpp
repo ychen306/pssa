@@ -215,7 +215,7 @@ const ControlCondition *ConditionTable::getAnd(const ControlCondition *CondA,
     return C;
 
   if (auto *And = dyn_cast<ConditionAnd>(CondB))
-    return ConcatCache[{CondA, CondB}] =
+    return AndCache[{CondA, CondB}] =
                getAnd(getAnd(CondA, And->Parent), And->Cond, And->IsTrue);
 
   auto *Or = cast<ConditionOr>(CondB);
