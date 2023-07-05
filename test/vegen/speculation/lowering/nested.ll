@@ -14,19 +14,20 @@ define i32 @foo(ptr %b, ptr %c, i1 %cmp1) {
 ; CHECK-NEXT:    br i1 [[TMP0]], label [[TMP1:%.*]], label [[DOTTHREAD19:%.*]]
 ; CHECK:       .thread19:
 ; CHECK-NEXT:    [[SPEC_SELECT:%.*]] = select i1 [[CMP1:%.*]], i32 1, i32 0
-; CHECK-NEXT:    [[SPEC_SELECT33:%.*]] = select i1 [[CMP1]], i32 1, i32 0
+; CHECK-NEXT:    [[SPEC_SELECT45:%.*]] = select i1 [[CMP1]], i32 1, i32 0
 ; CHECK-NEXT:    store i32 [[SPEC_SELECT]], ptr [[B]], align 4
 ; CHECK-NEXT:    [[I_1_CLONE:%.*]] = load i32, ptr [[C]], align 4
 ; CHECK-NEXT:    [[CMP1_1_CLONE:%.*]] = icmp sgt i32 [[I_1_CLONE]], 0
-; CHECK-NEXT:    [[SPEC_SELECT35:%.*]] = select i1 [[CMP1_1_CLONE]], i32 0, i32 [[SPEC_SELECT]]
+; CHECK-NEXT:    [[SPEC_SELECT48:%.*]] = select i1 [[CMP1_1_CLONE]], i32 0, i32 [[SPEC_SELECT]]
 ; CHECK-NEXT:    br label [[TMP10:%.*]]
 ; CHECK:       1:
 ; CHECK-NEXT:    [[I_1:%.*]] = load i32, ptr [[C]], align 4
 ; CHECK-NEXT:    [[CMP1_1:%.*]] = icmp sgt i32 [[I_1]], 0
 ; CHECK-NEXT:    br i1 [[CMP1_1]], label [[TMP2:%.*]], label [[DOTTHREAD26:%.*]]
 ; CHECK:       .thread26:
-; CHECK-NEXT:    [[SPEC_SELECT34:%.*]] = select i1 [[CMP1]], i32 1, i32 0
-; CHECK-NEXT:    store i32 [[SPEC_SELECT34]], ptr [[B]], align 4
+; CHECK-NEXT:    [[SPEC_SELECT46:%.*]] = select i1 [[CMP1]], i32 1, i32 0
+; CHECK-NEXT:    [[SPEC_SELECT47:%.*]] = select i1 [[CMP1]], i32 1, i32 0
+; CHECK-NEXT:    store i32 [[SPEC_SELECT47]], ptr [[B]], align 4
 ; CHECK-NEXT:    br label [[TMP10]]
 ; CHECK:       2:
 ; CHECK-NEXT:    [[CMP1_1_MEM_01823:%.*]] = phi i1 [ [[CMP1_1]], [[TMP1]] ]
@@ -41,7 +42,7 @@ define i32 @foo(ptr %b, ptr %c, i1 %cmp1) {
 ; CHECK-NEXT:    store i32 [[TMP8]], ptr [[B]], align 4
 ; CHECK-NEXT:    br label [[TMP10]]
 ; CHECK:       10:
-; CHECK-NEXT:    [[S_1_1_VER_DEMOTED_0:%.*]] = phi i32 [ [[TMP9]], [[TMP2]] ], [ [[SPEC_SELECT34]], [[DOTTHREAD26]] ], [ [[SPEC_SELECT35]], [[DOTTHREAD19]] ]
+; CHECK-NEXT:    [[S_1_1_VER_DEMOTED_0:%.*]] = phi i32 [ [[TMP9]], [[TMP2]] ], [ [[SPEC_SELECT46]], [[DOTTHREAD26]] ], [ [[SPEC_SELECT48]], [[DOTTHREAD19]] ]
 ; CHECK-NEXT:    ret i32 [[S_1_1_VER_DEMOTED_0]]
 ;
 for.body:

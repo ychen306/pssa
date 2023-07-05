@@ -516,6 +516,42 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       }
     }
 
+    // Visit all of the conditions and coalesce them
+    ConditionSetTracker CST(SE, PSSA);
+    // Add the conditions to tracker
+    for (auto &PrimaryVer : Versionings) {
+      for (auto *Ver = PrimaryVer.get(); Ver; Ver = Ver->Secondary.get())
+        for (auto DepConds : make_second_range(Ver->CutEdges))
+          for (auto &DepCond : DepConds)
+            CST.add(DepCond);
+    }
+    // Use the coalesced conditions
+    for (auto &PrimaryVer : Versionings) {
+      for (auto *Ver = PrimaryVer.get(); Ver; Ver = Ver->Secondary.get()) {
+        for (auto DepConds : make_second_range(Ver->CutEdges)) {
+          std::vector<DepCondition> NewConds;
+          DenseSet<DepCondition> Inserted;
+          for (auto &DepCond : DepConds) {
+            auto NewCond = CST.getCoalescedCondition(DepCond);
+            if (Inserted.insert(NewCond).second)
+              NewConds.push_back(NewCond);
+          }
+          DepConds = NewConds;
+        }
+      }
+    }
+
+    // Group the items into equivalence classes according to the packing decisions.
+    // If a pack of instructions come from the same loop, then they should be in the same class.
+    // If a pack of instructions come from different loops, then those loops should be in the same class.
+    EquivalenceClasses<Item> EC;
+    for (auto *P : Packs) {
+      auto Values = P->values();
+      auto Leader = Values.front();
+      for (auto *V : drop_begin(Values))
+        EC.unionSets(Leader, V);
+    }
+
     for (auto &Ver : Versionings)
       finalizeVersioning(Ver.get());
 
@@ -528,7 +564,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     Versioner TheVersioner(PSSA, DI, AA, LI, SE);
 
     while (!Frontier.empty()) {
-      TheVersioner.run(Frontier, InterLoopDeps, RemoveRedundantConditions);
+      TheVersioner.run(Frontier, EC, InterLoopDeps, RemoveRedundantConditions);
       SmallVector<Versioning *> NewFrontier;
       for (auto *Ver : Frontier) {
         if (Ver->Primary)

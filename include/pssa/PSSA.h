@@ -32,6 +32,7 @@ public:
   }
   bool operator==(const Item &Other) const { return Storage == Other.Storage; }
   bool operator!=(const Item &Other) const { return Storage != Other.Storage; }
+  bool operator<(const Item &Other) const { return Storage < Other.Storage; }
 };
 
 struct ItemHashInfo {

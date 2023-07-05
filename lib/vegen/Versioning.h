@@ -4,6 +4,7 @@
 #include "ConditionUserTracker.h"
 #include "DependenceChecker.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <functional>
 
@@ -43,8 +44,11 @@ public:
         DepChecker(PSSA, DI, AA, LI, SE, nullptr /*dead insts*/, this),
         IndepTracker(*this, PSSA), CUT(PSSA) {}
 
+  // Items in the same EC will get the same versioning conditions 
+  // (by merging their original versioning conditions)
   void
   run(llvm::ArrayRef<Versioning *>,
+      const llvm::EquivalenceClasses<Item> &EC,
       const llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
       bool RemoveRedundantConditions);
 

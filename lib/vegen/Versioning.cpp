@@ -677,6 +677,7 @@ static void removeRedundantConditions(PredicatedSSA &PSSA,
 }
 
 void Versioner::run(ArrayRef<Versioning *> Versionings,
+                    const EquivalenceClasses<Item> &EC,
                     const DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
                     bool RemoveRedundantConditions) {
   VersioningMapTy VersioningMap;
@@ -723,6 +724,25 @@ void Versioner::run(ArrayRef<Versioning *> Versionings,
   for (auto &DepConds : make_second_range(VersioningMap))
     for (auto &DepCond : DepConds)
       CST.add(DepCond);
+
+  // Merge the conditions for items in the same equivalence classes
+  for (auto I = EC.begin(), E = EC.end(); I != E; ++I) {
+    if (!I->isLeader())
+      continue;
+    auto Items = llvm::make_range(EC.member_begin(I), EC.member_end());
+    DenseSet<DepCondition> CondSet;
+    for (auto &It : Items) {
+      if (!VersioningMap.count(It))
+        continue;
+      auto &DepConds = VersioningMap[It];
+      CondSet.insert(DepConds.begin(), DepConds.end());
+    }
+    std::vector<DepCondition> MergedConds(CondSet.begin(), CondSet.end());
+    if (!MergedConds.empty()) {
+      for (auto &It : Items)
+        VersioningMap[It] = MergedConds;
+    }
+  }
 
   // Go over the versioning map and deduplicate the conditions (after
   // coalescing)

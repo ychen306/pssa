@@ -727,12 +727,14 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   // Build the flow graph
   using namespace operations_research;
   SimpleMaxFlow MaxFlow;
-  const int ConditionalWeight = 1;
-  const int UnconditionalWeight = NumConditionalDeps + 1;
+  const int ConditionalWeight = 10;
+  const int UnconditionalWeight = (NumConditionalDeps + 1) * 10;
   DenseMap<DepEdge, ArcIndex> EdgeToArcMap;
   // Add the dep edges
   for (auto [Edge, Kind] : DepFinder.getDepEdges()) {
     int Weight = Kind.isConditional() ? ConditionalWeight : UnconditionalWeight;
+    if (Kind.getConds().size() == 1 && Kind.getConds().front().isOverlapping())
+      Weight = 1;
     auto [Src, Dst] = Edge;
     int SrcId = NodeToIds.lookup(Src);
     int DstId = NodeToIds.lookup(Dst);
@@ -833,7 +835,7 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   auto Ver = std::make_unique<Versioning>();
 
   // If we version any edges, remember their sources
-  SmallVector<DepNode> Sources(Nodes.begin(), Nodes.end());
+  SmallVector<DepNode> Sources;
   // Keep track of the computations that are required to compute the versioning
   // conditions
   SmallVector<DepNode> CondComputations;
@@ -871,7 +873,7 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
 
   // Do a backward traversal to find, transitively, all of the sources (of the
   // versioned edges), which also need to be versioned
-  DenseSet<DepNode> Visited;
+  DenseSet<DepNode> Visited(Deps.begin(), Deps.end());
   while (!Sources.empty()) {
     auto Src = Sources.pop_back_val();
     if (!Visited.insert(Src).second)
@@ -880,6 +882,7 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
     if (auto It = DestToSourceMap.find(Src); It != DestToSourceMap.end())
       Sources.append(It->second.begin(), It->second.end());
   }
+  llvm::append_range(Ver->Nodes, Nodes);
 
   // Do seconary versioning in case the computation of the versioning conditions
   // conditionally depend on the boundary items (in which case there would be
@@ -1047,7 +1050,7 @@ void IndependenceTracker::markInstAsVersioned(Instruction *Orig,
   // instruction
   // FIXME: this can make unnecessary allocation... We avoid putting empty
   // entries in the map
-  IndependentFrom[Cloned] = IndependentFrom[Orig];
+  IndependentFrom[Cloned] = IndependentFrom[Orig] = NodeToDepsMap[Orig];
 }
 
 void IndependenceTracker::markLoopInstAsVersioned(Instruction *Orig,
