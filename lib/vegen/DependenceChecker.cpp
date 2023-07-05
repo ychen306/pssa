@@ -1050,7 +1050,8 @@ void IndependenceTracker::markInstAsVersioned(Instruction *Orig,
   // instruction
   // FIXME: this can make unnecessary allocation... We avoid putting empty
   // entries in the map
-  IndependentFrom[Cloned] = IndependentFrom[Orig] = NodeToDepsMap[Orig];
+  IndependentFrom[Cloned] = IndependentFrom[Orig];
+  IndependentFrom[Orig] = NodeToDepsMap[Orig];
 }
 
 void IndependenceTracker::markLoopInstAsVersioned(Instruction *Orig,
@@ -1061,7 +1062,6 @@ void IndependenceTracker::markLoopInstAsVersioned(Instruction *Orig,
   if (It == LoopToDepsMap.end())
     return;
   auto &Nodes = It->second;
-  IndependentFrom[Cloned].insert(Nodes.begin(), Nodes.end());
   IndependentFrom[Orig].insert(Nodes.begin(), Nodes.end());
 }
 

@@ -18,21 +18,36 @@ define void @foo(ptr noundef %b, ptr noundef %c) #0 {
 ; CHECK:       5:
 ; CHECK-NEXT:    [[I_CLONE:%.*]] = load i32, ptr @a, align 16, !tbaa [[TBAA5:![0-9]+]]
 ; CHECK-NEXT:    [[CMP1_CLONE:%.*]] = icmp sgt i32 [[I_CLONE]], 0
-; CHECK-NEXT:    [[I_1_CLONE:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @a, i64 0, i64 1), align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[CMP1_1_CLONE:%.*]] = icmp sgt i32 [[I_1_CLONE]], 0
-; CHECK-NEXT:    [[I_2_CLONE:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @a, i64 0, i64 2), align 8, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[I_3_CLONE:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @a, i64 0, i64 3), align 4, !tbaa [[TBAA5]]
 ; CHECK-NEXT:    [[I1_CLONE:%.*]] = load i32, ptr @d, align 16
 ; CHECK-NEXT:    [[SPEC_SELECT:%.*]] = select i1 [[CMP1_CLONE]], i32 [[I1_CLONE]], i32 0
 ; CHECK-NEXT:    [[I2_CLONE:%.*]] = load i32, ptr [[C]], align 4, !tbaa [[TBAA5]]
 ; CHECK-NEXT:    [[MUL_CLONE:%.*]] = mul nsw i32 [[SPEC_SELECT]], [[I2_CLONE]]
 ; CHECK-NEXT:    store i32 [[MUL_CLONE]], ptr [[B]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    br i1 [[CMP1_1_CLONE]], label [[TMP21:%.*]], label [[TMP22:%.*]]
+; CHECK-NEXT:    [[I_1_CLONE:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @a, i64 0, i64 1), align 4, !tbaa [[TBAA5]]
+; CHECK-NEXT:    [[CMP1_1_CLONE:%.*]] = icmp sgt i32 [[I_1_CLONE]], 0
+; CHECK-NEXT:    [[I1_1_CLONE:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @d, i64 0, i64 1), align 4
+; CHECK-NEXT:    [[S_1_1_CLONE_DEMOTED3_0:%.*]] = select i1 [[CMP1_1_CLONE]], i32 [[I1_1_CLONE]], i32 [[SPEC_SELECT]]
+; CHECK-NEXT:    [[I2_1_CLONE:%.*]] = load i32, ptr [[ARRAYIDX5_1]], align 4, !tbaa [[TBAA5]]
+; CHECK-NEXT:    [[MUL_1_CLONE:%.*]] = mul nsw i32 [[S_1_1_CLONE_DEMOTED3_0]], [[I2_1_CLONE]]
+; CHECK-NEXT:    [[ARRAYIDX7_1:%.*]] = getelementptr inbounds i32, ptr [[B]], i64 1
+; CHECK-NEXT:    store i32 [[MUL_1_CLONE]], ptr [[ARRAYIDX7_1]], align 4, !tbaa [[TBAA5]]
+; CHECK-NEXT:    [[I_2_CLONE:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @a, i64 0, i64 2), align 8, !tbaa [[TBAA5]]
+; CHECK-NEXT:    [[CMP1_2_CLONE:%.*]] = icmp sgt i32 [[I_2_CLONE]], 0
+; CHECK-NEXT:    [[I1_2_CLONE:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @d, i64 0, i64 2), align 8
+; CHECK-NEXT:    [[S_1_2_CLONE_DEMOTED2_0_MEM_0:%.*]] = select i1 [[CMP1_2_CLONE]], i32 [[I1_2_CLONE]], i32 [[S_1_1_CLONE_DEMOTED3_0]]
+; CHECK-NEXT:    [[ARRAYIDX5_2:%.*]] = getelementptr inbounds i32, ptr [[C]], i64 2
+; CHECK-NEXT:    [[I2_2_CLONE:%.*]] = load i32, ptr [[ARRAYIDX5_2]], align 4, !tbaa [[TBAA5]]
+; CHECK-NEXT:    [[MUL_2_CLONE:%.*]] = mul nsw i32 [[S_1_2_CLONE_DEMOTED2_0_MEM_0]], [[I2_2_CLONE]]
+; CHECK-NEXT:    [[ARRAYIDX7_2:%.*]] = getelementptr inbounds i32, ptr [[B]], i64 2
+; CHECK-NEXT:    store i32 [[MUL_2_CLONE]], ptr [[ARRAYIDX7_2]], align 4, !tbaa [[TBAA5]]
+; CHECK-NEXT:    [[I_3_CLONE:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @a, i64 0, i64 3), align 4, !tbaa [[TBAA5]]
+; CHECK-NEXT:    [[CMP1_3_CLONE:%.*]] = icmp sgt i32 [[I_3_CLONE]], 0
+; CHECK-NEXT:    br i1 [[CMP1_3_CLONE]], label [[TMP21:%.*]], label [[TMP22:%.*]]
 ; CHECK:       6:
 ; CHECK-NEXT:    [[I_1_VEC:%.*]] = load <4 x i32>, ptr @a, align 16
 ; CHECK-NEXT:    [[CMP1_1_VEC:%.*]] = icmp sgt <4 x i32> [[I_1_VEC]], zeroinitializer
 ; CHECK-NEXT:    [[TMP7:%.*]] = xor <4 x i1> [[CMP1_1_VEC]], <i1 poison, i1 true, i1 true, i1 true>
-; CHECK-NEXT:    [[TMP8:%.*]] = shufflevector <4 x i1> [[TMP7]], <4 x i1> undef, <3 x i32> <i32 1, i32 2, i32 3>
+; CHECK-NEXT:    [[TMP8:%.*]] = shufflevector <4 x i1> [[TMP7]], <4 x i1> undef, <3 x i32>
 ; CHECK-NEXT:    [[TMP9:%.*]] = bitcast <3 x i1> [[TMP8]] to i3
 ; CHECK-NEXT:    [[DOTNOT:%.*]] = icmp eq i3 [[TMP9]], 0
 ; CHECK-NEXT:    br i1 [[DOTNOT]], label [[TMP19:%.*]], label [[TMP10:%.*]]
@@ -42,16 +57,19 @@ define void @foo(ptr noundef %b, ptr noundef %c) #0 {
 ; CHECK-NEXT:    [[TMP13:%.*]] = extractelement <4 x i1> [[CMP1_1_VEC]], i64 3
 ; CHECK-NEXT:    [[TMP14:%.*]] = extractelement <4 x i1> [[CMP1_1_VEC]], i64 0
 ; CHECK-NEXT:    [[I1_CLONE12:%.*]] = load i32, ptr @d, align 16
-; CHECK-NEXT:    [[SPEC_SELECT158:%.*]] = select i1 [[TMP14]], i32 [[I1_CLONE12]], i32 0
-; CHECK-NEXT:    [[I1_1_CLONE:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @d, i64 0, i64 1), align 4
-; CHECK-NEXT:    [[S_1_1_CLONE_DEMOTED3_0:%.*]] = select i1 [[TMP11]], i32 [[I1_1_CLONE]], i32 [[SPEC_SELECT158]]
-; CHECK-NEXT:    [[I1_2_CLONE:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @d, i64 0, i64 2), align 8
-; CHECK-NEXT:    [[S_1_2_CLONE_DEMOTED2_0:%.*]] = select i1 [[TMP12]], i32 [[I1_2_CLONE]], i32 [[S_1_1_CLONE_DEMOTED3_0]]
+; CHECK-NEXT:    [[SPEC_SELECT270:%.*]] = select i1 [[TMP14]], i32 [[I1_CLONE12]], i32 undef
+; CHECK-NEXT:    [[I1_1_CLONE13:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @d, i64 0, i64 1), align 4
+; CHECK-NEXT:    [[I1_1_CLONE13_MEM_0136_PH_PH:%.*]] = select i1 [[TMP11]], i32 [[I1_1_CLONE13]], i32 undef
+; CHECK-NEXT:    [[I1_2_CLONE14:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @d, i64 0, i64 2), align 8
+; CHECK-NEXT:    [[I1_2_CLONE14_MEM_1_PH_PH:%.*]] = select i1 [[TMP12]], i32 [[I1_2_CLONE14]], i32 undef
+; CHECK-NEXT:    [[S_1_CLONE_DEMOTED_0:%.*]] = select i1 [[TMP14]], i32 [[SPEC_SELECT270]], i32 0
+; CHECK-NEXT:    [[S_1_1_CLONE_DEMOTED_0:%.*]] = select i1 [[TMP11]], i32 [[I1_1_CLONE13_MEM_0136_PH_PH]], i32 [[S_1_CLONE_DEMOTED_0]]
+; CHECK-NEXT:    [[S_1_2_CLONE_DEMOTED_0:%.*]] = select i1 [[TMP12]], i32 [[I1_2_CLONE14_MEM_1_PH_PH]], i32 [[S_1_1_CLONE_DEMOTED_0]]
 ; CHECK-NEXT:    [[I1_3_CLONE:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @d, i64 0, i64 3), align 4
-; CHECK-NEXT:    [[S_1_3_CLONE_DEMOTED1_0:%.*]] = select i1 [[TMP13]], i32 [[I1_3_CLONE]], i32 [[S_1_2_CLONE_DEMOTED2_0]]
-; CHECK-NEXT:    [[TMP15:%.*]] = insertelement <4 x i32> undef, i32 [[SPEC_SELECT158]], i64 0
-; CHECK-NEXT:    [[TMP16:%.*]] = insertelement <4 x i32> [[TMP15]], i32 [[S_1_1_CLONE_DEMOTED3_0]], i64 1
-; CHECK-NEXT:    [[TMP17:%.*]] = insertelement <4 x i32> [[TMP16]], i32 [[S_1_2_CLONE_DEMOTED2_0]], i64 2
+; CHECK-NEXT:    [[S_1_3_CLONE_DEMOTED1_0:%.*]] = select i1 [[TMP13]], i32 [[I1_3_CLONE]], i32 [[S_1_2_CLONE_DEMOTED_0]]
+; CHECK-NEXT:    [[TMP15:%.*]] = insertelement <4 x i32> undef, i32 [[S_1_CLONE_DEMOTED_0]], i64 0
+; CHECK-NEXT:    [[TMP16:%.*]] = insertelement <4 x i32> [[TMP15]], i32 [[S_1_1_CLONE_DEMOTED_0]], i64 1
+; CHECK-NEXT:    [[TMP17:%.*]] = insertelement <4 x i32> [[TMP16]], i32 [[S_1_2_CLONE_DEMOTED_0]], i64 2
 ; CHECK-NEXT:    [[TMP18:%.*]] = insertelement <4 x i32> [[TMP17]], i32 [[S_1_3_CLONE_DEMOTED1_0]], i64 3
 ; CHECK-NEXT:    br label [[TMP20:%.*]]
 ; CHECK:       19:
@@ -63,55 +81,23 @@ define void @foo(ptr noundef %b, ptr noundef %c) #0 {
 ; CHECK-NEXT:    [[I2_1_VEC:%.*]] = load <4 x i32>, ptr [[C]], align 4
 ; CHECK-NEXT:    [[MUL_1_VEC:%.*]] = mul <4 x i32> [[S_1_1_VER_VEC_DEMOTED_0_MEM_0_PH]], [[I2_1_VEC]]
 ; CHECK-NEXT:    store <4 x i32> [[MUL_1_VEC]], ptr [[B]], align 4
-; CHECK-NEXT:    br label [[TMP30:%.*]]
+; CHECK-NEXT:    br label [[TMP24:%.*]]
 ; CHECK:       21:
-; CHECK-NEXT:    [[I1_1_CLONE14:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @d, i64 0, i64 1), align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[I2_1_CLONE140:%.*]] = load i32, ptr [[ARRAYIDX5_1]], align 4, !tbaa [[TBAA5]]
+; CHECK-NEXT:    [[I1_3_CLONE18:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @d, i64 0, i64 3), align 4, !tbaa [[TBAA5]]
+; CHECK-NEXT:    [[ARRAYIDX5_3265:%.*]] = getelementptr inbounds i32, ptr [[C]], i64 3
+; CHECK-NEXT:    [[I2_3_CLONE266:%.*]] = load i32, ptr [[ARRAYIDX5_3265]], align 4, !tbaa [[TBAA5]]
 ; CHECK-NEXT:    br label [[TMP23:%.*]]
 ; CHECK:       22:
-; CHECK-NEXT:    [[I2_1_CLONE:%.*]] = load i32, ptr [[ARRAYIDX5_1]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    br label [[TMP23]]
-; CHECK:       23:
-; CHECK-NEXT:    [[I2_1_CLONE142:%.*]] = phi i32 [ [[I2_1_CLONE140]], [[TMP21]] ], [ [[I2_1_CLONE]], [[TMP22]] ]
-; CHECK-NEXT:    [[S_1_1_CLONE_DEMOTED_0:%.*]] = phi i32 [ [[I1_1_CLONE14]], [[TMP21]] ], [ [[SPEC_SELECT]], [[TMP22]] ]
-; CHECK-NEXT:    [[CMP1_2_CLONE:%.*]] = icmp sgt i32 [[I_2_CLONE]], 0
-; CHECK-NEXT:    [[ARRAYIDX7_1:%.*]] = getelementptr inbounds i32, ptr [[B]], i64 1
-; CHECK-NEXT:    [[MUL_1_CLONE:%.*]] = mul nsw i32 [[S_1_1_CLONE_DEMOTED_0]], [[I2_1_CLONE142]]
-; CHECK-NEXT:    store i32 [[MUL_1_CLONE]], ptr [[ARRAYIDX7_1]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    br i1 [[CMP1_2_CLONE]], label [[TMP24:%.*]], label [[TMP25:%.*]]
-; CHECK:       24:
-; CHECK-NEXT:    [[I1_2_CLONE16:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @d, i64 0, i64 2), align 8, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[ARRAYIDX5_2146:%.*]] = getelementptr inbounds i32, ptr [[C]], i64 2
-; CHECK-NEXT:    [[I2_2_CLONE147:%.*]] = load i32, ptr [[ARRAYIDX5_2146]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    br label [[TMP26:%.*]]
-; CHECK:       25:
-; CHECK-NEXT:    [[ARRAYIDX5_2:%.*]] = getelementptr inbounds i32, ptr [[C]], i64 2
-; CHECK-NEXT:    [[I2_2_CLONE:%.*]] = load i32, ptr [[ARRAYIDX5_2]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    br label [[TMP26]]
-; CHECK:       26:
-; CHECK-NEXT:    [[I2_2_CLONE149:%.*]] = phi i32 [ [[I2_2_CLONE147]], [[TMP24]] ], [ [[I2_2_CLONE]], [[TMP25]] ]
-; CHECK-NEXT:    [[S_1_2_CLONE_DEMOTED_0:%.*]] = phi i32 [ [[I1_2_CLONE16]], [[TMP24]] ], [ [[S_1_1_CLONE_DEMOTED_0]], [[TMP25]] ]
-; CHECK-NEXT:    [[CMP1_3_CLONE:%.*]] = icmp sgt i32 [[I_3_CLONE]], 0
-; CHECK-NEXT:    [[ARRAYIDX7_2:%.*]] = getelementptr inbounds i32, ptr [[B]], i64 2
-; CHECK-NEXT:    [[MUL_2_CLONE:%.*]] = mul nsw i32 [[S_1_2_CLONE_DEMOTED_0]], [[I2_2_CLONE149]]
-; CHECK-NEXT:    store i32 [[MUL_2_CLONE]], ptr [[ARRAYIDX7_2]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    br i1 [[CMP1_3_CLONE]], label [[TMP27:%.*]], label [[TMP28:%.*]]
-; CHECK:       27:
-; CHECK-NEXT:    [[I1_3_CLONE18:%.*]] = load i32, ptr getelementptr inbounds ([4 x i32], ptr @d, i64 0, i64 3), align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[ARRAYIDX5_3153:%.*]] = getelementptr inbounds i32, ptr [[C]], i64 3
-; CHECK-NEXT:    [[I2_3_CLONE154:%.*]] = load i32, ptr [[ARRAYIDX5_3153]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    br label [[TMP29:%.*]]
-; CHECK:       28:
 ; CHECK-NEXT:    [[ARRAYIDX5_3:%.*]] = getelementptr inbounds i32, ptr [[C]], i64 3
 ; CHECK-NEXT:    [[I2_3_CLONE:%.*]] = load i32, ptr [[ARRAYIDX5_3]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    br label [[TMP29]]
-; CHECK:       29:
-; CHECK-NEXT:    [[I2_3_CLONE156:%.*]] = phi i32 [ [[I2_3_CLONE154]], [[TMP27]] ], [ [[I2_3_CLONE]], [[TMP28]] ]
-; CHECK-NEXT:    [[S_1_3_CLONE_DEMOTED_0:%.*]] = phi i32 [ [[I1_3_CLONE18]], [[TMP27]] ], [ [[S_1_2_CLONE_DEMOTED_0]], [[TMP28]] ]
-; CHECK-NEXT:    [[MUL_3_CLONE:%.*]] = mul nsw i32 [[S_1_3_CLONE_DEMOTED_0]], [[I2_3_CLONE156]]
+; CHECK-NEXT:    br label [[TMP23]]
+; CHECK:       23:
+; CHECK-NEXT:    [[I2_3_CLONE268:%.*]] = phi i32 [ [[I2_3_CLONE266]], [[TMP21]] ], [ [[I2_3_CLONE]], [[TMP22]] ]
+; CHECK-NEXT:    [[S_1_3_CLONE_DEMOTED_0:%.*]] = phi i32 [ [[I1_3_CLONE18]], [[TMP21]] ], [ [[S_1_2_CLONE_DEMOTED2_0_MEM_0]], [[TMP22]] ]
+; CHECK-NEXT:    [[MUL_3_CLONE:%.*]] = mul nsw i32 [[S_1_3_CLONE_DEMOTED_0]], [[I2_3_CLONE268]]
 ; CHECK-NEXT:    store i32 [[MUL_3_CLONE]], ptr [[ARRAYIDX7_3]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    br label [[TMP30]]
-; CHECK:       30:
+; CHECK-NEXT:    br label [[TMP24]]
+; CHECK:       24:
 ; CHECK-NEXT:    ret void
 ;
 entry:
