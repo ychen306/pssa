@@ -215,8 +215,9 @@ static void refineUnrollFactors(Function *F, DominatorTree &DT, LoopInfo &LI,
   LooseInstructionTable LIT;
   Matcher TheMatcher(RI, LIT);
 
+  VersioningPlan VerPlan;
   std::vector<Pack *> Packs =
-      packBottomUp(InstPool, PSSA, RI, LIT, TheMatcher,
+      packBottomUp(InstPool, VerPlan, PSSA, RI, LIT, TheMatcher,
                    F->getParent()->getDataLayout(), SE, DT, LI, AA, DI, *TTI);
 
   // FIXME: try to unroll more for loops that we decide to vectorize reductions

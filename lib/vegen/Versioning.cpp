@@ -12,9 +12,8 @@ using namespace llvm;
 static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
                            const ControlCondition *C,
                            VLoop::ItemIterator InsertBefore,
-                           DependenceChecker &DepChecker,
-                           IndependenceTracker &IndepTracker,
-                           ScalarEvolution &SE, const DataLayout &DL) {
+                           DependenceChecker &DepChecker, ScalarEvolution &SE,
+                           const DataLayout &DL) {
   // Create a dummy basic for the expander to emit code
   auto &Ctx = SE.getContext();
   auto *BB = BasicBlock::Create(Ctx, "", VL->getPSSA()->getFunction());
@@ -31,8 +30,7 @@ static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
   if (InsertBefore != VL->item_end()) {
     // Find dependences of the pred computation that occur *after* InsertBefore
     SmallVector<Item> Deps;
-    DependencesFinder DepFinder(Deps, *InsertBefore, VL, DepChecker,
-                                nullptr /*packs*/, &IndepTracker);
+    DependencesFinder DepFinder(Deps, *InsertBefore, VL, DepChecker);
     for (auto &I : *BB) {
       for (auto *O : I.operand_values()) {
         auto *OI = dyn_cast<Instruction>(O);
@@ -67,7 +65,6 @@ static Value *emitOverlappingChecks(const DepCondition &DepCond, VLoop *VL,
                                     const ControlCondition *C,
                                     VLoop::ItemIterator InsertBefore,
                                     DependenceChecker &DepChecker,
-                                    IndependenceTracker &IndepTracker,
                                     ScalarEvolution &SE, const DataLayout &DL) {
   assert(DepCond.isOverlapping());
   auto [R1, R2] = DepCond.getRanges();
@@ -78,12 +75,12 @@ static Value *emitOverlappingChecks(const DepCondition &DepCond, VLoop *VL,
   auto *Left = emitSCEVPred(
       SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT),
                              End1, R2.Base),
-      VL, C, InsertBefore, DepChecker, IndepTracker, SE, DL);
+      VL, C, InsertBefore, DepChecker, SE, DL);
   // Case 2: R2 is left of R1; i.e., End2 < Begin1.
   auto *Right = emitSCEVPred(
       SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT),
                              End2, R1.Base),
-      VL, C, InsertBefore, DepChecker, IndepTracker, SE, DL);
+      VL, C, InsertBefore, DepChecker, SE, DL);
   Inserter Insert(VL, C, InsertBefore);
   return Insert.CreateBinOp(Instruction::Or, Left, Right);
 }
@@ -310,9 +307,9 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
     // (We assume prior analyses have
     // made sure that it's indeed possible to materialize DepCond before Items)
     Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
-    auto *V = emitOverlappingChecks(DepCond, VL, getCommonCondition(VL, Items),
-                                    VL->toIterator(Earliest), DepChecker,
-                                    IndepTracker, SE, DL);
+    auto *V =
+        emitOverlappingChecks(DepCond, VL, getCommonCondition(VL, Items),
+                              VL->toIterator(Earliest), DepChecker, SE, DL);
     OverlappingChecks[DepCond] = V;
   }
 
@@ -342,8 +339,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
       auto &Items = CondSetToItemMap.at(DepConds);
       Item Earliest =
           *std::min_element(Items.begin(), Items.end(), ComesBefore);
-      DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker,
-                                  nullptr /*packs*/, &IndepTracker);
+      DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker);
       for (auto *V : Checks) {
         if (auto *Check = dyn_cast<Instruction>(V))
           DepFinder.findDep(Check, true /*add check to Deps*/);
@@ -763,4 +759,93 @@ void Versioner::run(ArrayRef<Versioning *> Versionings,
     removeRedundantConditions(PSSA, VersioningMap);
 
   runOnLoop(&PSSA.getTopLevel(), VersioningMap);
+}
+
+IndependenceTracker::IndependenceTracker(Versioner &TheVersioner,
+                                         PredicatedSSA &PSSA)
+    : TheVersioner(TheVersioner), PSSA(PSSA) {}
+
+void IndependenceTracker::ignoreDependences(
+    const DenseSet<DepEdge> &DepEdgesToIgnore,
+    const DenseSet<DepEdge> &AliasedEdgesToIgnore,
+    const DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps) {
+  Whitelist.insert(DepEdgesToIgnore.begin(), DepEdgesToIgnore.end());
+
+  for (auto [Src, Dst] : AliasedEdgesToIgnore) {
+    // Memory independence is reflexive (e.g., if ptr1 and
+    // ptr2 don't alias, then the independence goes both ways)
+    NodeToDepsMap[Src].insert(Dst);
+    NodeToDepsMap[Dst].insert(Src);
+  }
+
+  for (auto [LoopPairs, Edges] : InterLoopDeps) {
+    for (auto [Src, Dst] : Edges) {
+      NodeToDepsMap[Src].insert(Dst);
+      auto *VL = LoopPairs.first.asLoop();
+      LoopToDepsMap[{VL, Src}].insert(Dst);
+    }
+  }
+
+  errs() << "Dumping node to deps map\n";
+  for (auto [Src, Dsts] : NodeToDepsMap)
+    for (auto Dst : Dsts)
+      errs() << '\t' << Src << " -> " << Dst << '\n';
+}
+
+void IndependenceTracker::markInstAsVersioned(Instruction *Orig,
+                                              Instruction *Cloned) {
+  // The cloned instruction inherit the "independence" of the original
+  // instruction
+  // FIXME: this can make unnecessary allocation... We avoid putting empty
+  // entries in the map
+  IndependentFrom[Cloned] = IndependentFrom[Orig];
+  IndependentFrom[Orig] = NodeToDepsMap[Orig];
+}
+
+void IndependenceTracker::markLoopInstAsVersioned(Instruction *Orig,
+                                                  Instruction *Cloned,
+                                                  VLoop *VL) {
+  IndependentFrom[Cloned] = IndependentFrom[Orig];
+  auto It = LoopToDepsMap.find({VL, Orig});
+  if (It == LoopToDepsMap.end())
+    return;
+  auto &Nodes = It->second;
+  IndependentFrom[Orig].insert(Nodes.begin(), Nodes.end());
+}
+
+bool IndependenceTracker::checkIndependence(const DepNode &Src,
+                                            const DepNode &Dst) const {
+  auto *DstI = Dst.asInstruction();
+  if (auto It = NodeToDepsMap.find(Src);
+      It != NodeToDepsMap.end() &&
+      (It->second.count(Dst) ||
+       (TheVersioner.getOriginalIfCloned(DstI) &&
+        It->second.count(TheVersioner.getOriginalIfCloned(DstI)))))
+    return true;
+  // Try again if Dst is a cloned instruction
+  if (!DstI)
+    return false;
+  auto *OrigDst = TheVersioner.getOriginalIfCloned(DstI);
+  if (!OrigDst)
+    OrigDst = DstI;
+  if (auto It = IndependentFrom.find(Src);
+      It != IndependentFrom.end() && It->second.count(OrigDst))
+    return true;
+  return false;
+}
+
+bool IndependenceTracker::isIndependent(const DepNode &Src,
+                                        const DepNode &Dst) const {
+  // Check the white list first, which doesn't take cloning into account.
+  if (Whitelist.count({Src, Dst}))
+    return true;
+  auto *SrcI = Src.asInstruction();
+  auto *DstI = Dst.asInstruction();
+  // FIXME: also support inst-to-loop dep
+  if (SrcI && DstI) {
+    if (TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
+                                 PSSA.getInstCond(DstI)))
+      return true;
+  }
+  return checkIndependence(Src, Dst) || checkIndependence(Dst, Src);
 }

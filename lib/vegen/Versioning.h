@@ -12,6 +12,38 @@
 using VersioningMapTy =
     llvm::DenseMap<Item, std::vector<DepCondition>, ItemHashInfo>;
 
+class IndependenceTracker {
+  using NodeToNodeSetTy = llvm::DenseMap<DepNode, llvm::DenseSet<DepNode>>;
+  // Mapping a node -> nodes that it's *conditionally* independent from
+  NodeToNodeSetTy IndependentFrom;
+
+  // Mapping a node -> nodes that it's independent from once the node is fully
+  // versioned
+  NodeToNodeSetTy NodeToDepsMap;
+
+  llvm::DenseMap<std::pair<VLoop *, DepNode>, llvm::DenseSet<DepNode>>
+      LoopToDepsMap;
+
+  Versioner &TheVersioner;
+  PredicatedSSA &PSSA;
+  llvm::DenseSet<DepEdge> Whitelist;
+  bool checkIndependence(const DepNode &Src, const DepNode &Dest) const;
+
+public:
+  IndependenceTracker(Versioner &TheVersioner, PredicatedSSA &PSSA);
+  void ignoreDependences(
+      const llvm::DenseSet<DepEdge> &DepEdgesToIgnore,
+      const llvm::DenseSet<DepEdge> &AliasedEdgesToIgnore,
+      const llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps);
+  void markInstAsVersioned(llvm::Instruction *Orig, llvm::Instruction *Cloned);
+  // Mark a loop as versioned (and activate one of the loop instruction's
+  // conditional independences).
+  void markLoopInstAsVersioned(llvm::Instruction *Orig,
+                               llvm::Instruction *Cloned, VLoop *VL);
+
+  bool isIndependent(const DepNode &Src, const DepNode &Dest) const;
+};
+
 class Versioner {
   PredicatedSSA &PSSA;
   llvm::ScalarEvolution &SE;
@@ -44,15 +76,16 @@ public:
         DepChecker(PSSA, DI, AA, LI, SE, nullptr /*dead insts*/, this),
         IndepTracker(*this, PSSA), CUT(PSSA) {}
 
-  // Items in the same EC will get the same versioning conditions 
+  // Items in the same EC will get the same versioning conditions
   // (by merging their original versioning conditions)
   void
-  run(llvm::ArrayRef<Versioning *>,
-      const llvm::EquivalenceClasses<Item> &EC,
+  run(llvm::ArrayRef<Versioning *>, const llvm::EquivalenceClasses<Item> &EC,
       const llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
       bool RemoveRedundantConditions);
 
-  IndependenceTracker &getIndependenceTracker() { return IndepTracker; }
+  bool isIndependent(const Item &Src, const Item &Dst) const {
+    return IndepTracker.isIndependent(Src, Dst);
+  }
   llvm::Instruction *getOriginalIfCloned(llvm::Instruction *I) const {
     return CloneToOrigMap.lookup(I);
   }

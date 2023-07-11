@@ -18,15 +18,13 @@ class Pack;
 class PredicatedSSA;
 class ControlCondition;
 class Versioner;
-class IndepTracker;
 
 // Lower a set of packs to vector instructions.
 // May bail out due to circular deps introduced by the packs.
 // Return true if succeeded.
 bool lower(llvm::ArrayRef<Pack *>, PredicatedSSA &, llvm::DependenceInfo &,
            llvm::AAResults &, llvm::LoopInfo &, llvm::ScalarEvolution &,
-           Versioner *TheVersioner = nullptr,
-           const IndependenceTracker *IndepTracker = nullptr);
+           Versioner *TheVersioner = nullptr);
 
 const ControlCondition *
 findSpeculativeCond(llvm::Instruction *I,

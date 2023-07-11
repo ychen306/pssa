@@ -64,7 +64,8 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   LooseInstructionTable LIT;
   Matcher TheMatcher(RI, LIT);
 
-  std::vector<Pack *> Packs = packBottomUp(getTestInsts(), PSSA, RI, LIT,
+  VersioningPlan VerPlan;
+  std::vector<Pack *> Packs = packBottomUp(getTestInsts(), VerPlan, PSSA, RI, LIT,
                                            TheMatcher, DL, SE, DT, LI, AA, DI, TTI);
   if (Packs.empty()) {
     LIT.destroy();

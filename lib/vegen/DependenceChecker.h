@@ -254,38 +254,6 @@ public:
   llvm::ArrayRef<llvm::Instruction *> getLiveIns(VLoop *VL);
 };
 
-class IndependenceTracker {
-  using NodeToNodeSetTy = llvm::DenseMap<DepNode, llvm::DenseSet<DepNode>>;
-  // Mapping a node -> nodes that it's *conditionally* independent from
-  NodeToNodeSetTy IndependentFrom;
-
-  // Mapping a node -> nodes that it's independent from once the node is fully
-  // versioned
-  NodeToNodeSetTy NodeToDepsMap;
-
-  llvm::DenseMap<std::pair<VLoop *, DepNode>, llvm::DenseSet<DepNode>>
-      LoopToDepsMap;
-
-  Versioner &TheVersioner;
-  PredicatedSSA &PSSA;
-  llvm::DenseSet<DepEdge> Whitelist;
-  bool checkIndependence(const DepNode &Src, const DepNode &Dest) const;
-
-public:
-  IndependenceTracker(Versioner &TheVersioner, PredicatedSSA &PSSA);
-  void ignoreDependences(
-      const llvm::DenseSet<DepEdge> &DepEdgesToIgnore,
-      const llvm::DenseSet<DepEdge> &AliasedEdgesToIgnore,
-      const llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps);
-  void markInstAsVersioned(llvm::Instruction *Orig, llvm::Instruction *Cloned);
-  // Mark a loop as versioned (and activate one of the loop instruction's
-  // conditional independences).
-  void markLoopInstAsVersioned(llvm::Instruction *Orig,
-                               llvm::Instruction *Cloned, VLoop *VL);
-
-  bool isIndependent(const DepNode &Src, const DepNode &Dest) const;
-};
-
 class DependencesFinder {
   llvm::SmallVectorImpl<Item> &Deps;
   llvm::DenseMap<DepEdge, DepKind> DepEdges;
@@ -295,7 +263,6 @@ class DependencesFinder {
   PredicatedSSA *PSSA;
   DependenceChecker &DepChecker;
   const PackSet *Packs;
-  const IndependenceTracker *IndepTracker;
   llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> *InterLoopDeps;
 
   llvm::DenseSet<Item, ItemHashInfo> Visited, Processing;
@@ -310,11 +277,10 @@ public:
   DependencesFinder(
       llvm::SmallVectorImpl<Item> &Deps, Item Earliest, VLoop *VL,
       DependenceChecker &DepChecker, const PackSet *Packs = nullptr,
-      const IndependenceTracker *IndepTracker = nullptr,
       llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> *InterLoopDeps = nullptr)
       : Deps(Deps), FoundCycle(false), Earliest(Earliest), VL(VL),
         PSSA(VL->getPSSA()), DepChecker(DepChecker), Packs(Packs),
-        IndepTracker(IndepTracker), InterLoopDeps(InterLoopDeps) {}
+        InterLoopDeps(InterLoopDeps) {}
 
   // Find all dependencies of `It` that occurs *after* `Earliest`.
   // Return if there are dependence cycles.
@@ -349,8 +315,7 @@ public:
 bool findInBetweenDeps(llvm::SmallVectorImpl<Item> &Deps,
                        llvm::ArrayRef<Item> Items, VLoop *VL,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker,
-                       const PackSet *Packs = nullptr,
-                       const IndependenceTracker *IndepTracker = nullptr);
+                       const PackSet *Packs = nullptr);
 
 struct Versioning {
   // The nodes that we are duplicating
@@ -361,6 +326,12 @@ struct Versioning {
   Versioning *Primary = nullptr;
 };
 
+// Keep track of all the versionings that we need to do
+struct VersioningPlan {
+  std::vector<std::unique_ptr<Versioning>> Versionings;
+  llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> InterLoopDeps;
+};
+
 // Infer a versioning that will make `Nodes` independent from `Deps`.
 std::unique_ptr<Versioning>
 inferVersioning(llvm::ArrayRef<DepNode> Nodes, llvm::ArrayRef<Item> Deps,
@@ -369,10 +340,8 @@ inferVersioning(llvm::ArrayRef<DepNode> Nodes, llvm::ArrayRef<Item> Deps,
 
 // Find conditional dependences that, once removed, will `Insts` independent
 // from one another. (and false if no such set of deps exists).
-bool findNecessaryDeps(
-    std::vector<std::unique_ptr<Versioning>> &Versionings,
-    llvm::ArrayRef<llvm::Instruction *> Insts,
-    llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
-    PredicatedSSA &PSSA, DependenceChecker &DepChecker);
+bool findNecessaryDeps(VersioningPlan &VerPlan,
+                       llvm::ArrayRef<llvm::Instruction *> Insts,
+                       PredicatedSSA &PSSA, DependenceChecker &DepChecker);
 
 #endif // VEGEN_DEPENDENCECHECKER_H
