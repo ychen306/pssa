@@ -836,8 +836,9 @@ static void runBottomUp(Pack *P, BottomUpHeuristic &Heuristic,
     for (auto *I : P->values())
       if (!LIT.isLoose(I))
         Insts.push_back(I);
-    if (!Insts.empty() && !isIndependent(Insts, PSSA, DepChecker))
+    if (!Insts.empty() && !isIndependent(Insts, PSSA, DepChecker)) {
       return;
+    }
 
     Packs.add(P);
     Worklist.append(P->getOperands());
@@ -1089,8 +1090,8 @@ static void findPackableReductions(
 }
 
 std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
-                                 PredicatedSSA &PSSA, ReductionInfo &RI,
-                                 LooseInstructionTable &LIT,
+                                 VersioningPlan &VerPlan, PredicatedSSA &PSSA,
+                                 ReductionInfo &RI, LooseInstructionTable &LIT,
                                  Matcher &TheMatcher, const DataLayout &DL,
                                  ScalarEvolution &SE, DominatorTree &DT,
                                  LoopInfo &LI, AAResults &AA,

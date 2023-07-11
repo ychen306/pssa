@@ -485,18 +485,16 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   if (FindConditionalDeps) {
     // If we find any loop -> loop dep, also record all the conditional deps
     // that causes the loop->loop dep.
-    DenseMap<DepEdge, DenseSet<DepEdge>> InterLoopDeps;
-    std::vector<std::unique_ptr<Versioning>> Versionings;
+    VersioningPlan VerPlan;
     for (auto *P : Packs) {
-      if (!findNecessaryDeps(Versionings, P->values(), InterLoopDeps, PSSA,
-                             DepChecker)) {
+      if (!findNecessaryDeps(VerPlan, P->values(), PSSA, DepChecker)) {
         errs() << "!! impossible to speculate\n";
         return PreservedAnalyses::all();
       }
     }
 
     // Print out the cut edges for testing
-    for (auto &Ver : Versionings) {
+    for (auto &Ver : VerPlan.Versionings) {
       // Don't need to cut edges
       assert(!Ver->CutEdges.empty());
 
@@ -519,14 +517,14 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     // Visit all of the conditions and coalesce them
     ConditionSetTracker CST(SE, PSSA);
     // Add the conditions to tracker
-    for (auto &PrimaryVer : Versionings) {
+    for (auto &PrimaryVer : VerPlan.Versionings) {
       for (auto *Ver = PrimaryVer.get(); Ver; Ver = Ver->Secondary.get())
         for (auto DepConds : make_second_range(Ver->CutEdges))
           for (auto &DepCond : DepConds)
             CST.add(DepCond);
     }
     // Use the coalesced conditions
-    for (auto &PrimaryVer : Versionings) {
+    for (auto &PrimaryVer : VerPlan.Versionings) {
       for (auto *Ver = PrimaryVer.get(); Ver; Ver = Ver->Secondary.get()) {
         for (auto DepConds : make_second_range(Ver->CutEdges)) {
           std::vector<DepCondition> NewConds;
@@ -541,9 +539,10 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       }
     }
 
-    // Group the items into equivalence classes according to the packing decisions.
-    // If a pack of instructions come from the same loop, then they should be in the same class.
-    // If a pack of instructions come from different loops, then those loops should be in the same class.
+    // Group the items into equivalence classes according to the packing
+    // decisions. If a pack of instructions come from the same loop, then they
+    // should be in the same class. If a pack of instructions come from
+    // different loops, then those loops should be in the same class.
     EquivalenceClasses<Item> EC;
     for (auto *P : Packs) {
       auto Values = P->values();
@@ -552,19 +551,20 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
         EC.unionSets(Leader, V);
     }
 
-    for (auto &Ver : Versionings)
+    for (auto &Ver : VerPlan.Versionings)
       finalizeVersioning(Ver.get());
 
     // Lower the versionings from the secondaries to primaries.
     // Collect the outermost versionings first.
     SmallVector<Versioning *> Frontier;
-    for (auto &Ver : Versionings)
+    for (auto &Ver : VerPlan.Versionings)
       Frontier.push_back(getOutermostVersioning(Ver.get()));
 
     Versioner TheVersioner(PSSA, DI, AA, LI, SE);
 
     while (!Frontier.empty()) {
-      TheVersioner.run(Frontier, EC, InterLoopDeps, RemoveRedundantConditions);
+      TheVersioner.run(Frontier, EC, VerPlan.InterLoopDeps,
+                       RemoveRedundantConditions);
       SmallVector<Versioning *> NewFrontier;
       for (auto *Ver : Frontier) {
         if (Ver->Primary)
@@ -597,8 +597,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     }
     Packs.append(NewPacks.begin(), NewPacks.end());
 
-    bool Ok = lower(Packs, PSSA, DI, AA, LI, SE, &TheVersioner,
-                    &TheVersioner.getIndependenceTracker());
+    bool Ok = lower(Packs, PSSA, DI, AA, LI, SE, &TheVersioner);
     assert(Ok);
     lowerPSSAToLLVM(&F, PSSA);
     return PreservedAnalyses::none();

@@ -422,6 +422,10 @@ Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
 bool DependenceChecker::depends(
     const Item &It1, const Item &It2, DenseMap<DepEdge, DepKind> *DepEdges,
     DenseMap<DepEdge, DenseSet<DepEdge>> *InterLoopDeps) {
+  if (TheVersioner &&
+      TheVersioner->isIndependent(It2, It1))
+    return false;
+
   auto *I1 = It1.asInstruction();
   auto *I2 = It2.asInstruction();
   auto *VL1 = It1.asLoop();
@@ -573,9 +577,6 @@ void DependencesFinder::visitCond(const ControlCondition *C,
 }
 
 void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
-  if (IndepTracker && IndepTracker->isIndependent(Src, It))
-    return;
-
   if (!Processing.insert(It).second) {
     errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
     FoundCycle = true;
@@ -656,8 +657,7 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
 
 bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
                        VLoop *VL, PredicatedSSA &PSSA,
-                       DependenceChecker &DepChecker, const PackSet *Packs,
-                       const IndependenceTracker *IndepTracker) {
+                       DependenceChecker &DepChecker, const PackSet *Packs) {
   assert(all_of(Items,
                 [&](const Item &It) { return PSSA.getLoopForItem(It) == VL; }));
   auto ComesBefore = [VL](const Item &It1, const Item &It2) {
@@ -665,8 +665,7 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
   };
   Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
 
-  DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker, Packs,
-                              IndepTracker);
+  DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker, Packs);
   bool FoundCycle = false;
   for (auto It : Items)
     FoundCycle |= DepFinder.findDep(It);
@@ -685,8 +684,8 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   // We don't really care about the deps found by DepFinder. We only want the
   // dep edges
   SmallVector<Item> DummyDeps;
-  DependencesFinder DepFinder(DummyDeps, Earliest, VL, DepChecker, nullptr,
-                              nullptr, &InterLoopDeps);
+  DependencesFinder DepFinder(DummyDeps, Earliest, VL, DepChecker,
+                              nullptr /*packs*/, &InterLoopDeps);
   bool FoundCycle = false;
   for (auto Node : Nodes)
     FoundCycle |= DepFinder.findDepForNode(Node);
@@ -858,7 +857,7 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
       // Figure out the deps required to compute the versioning conditions
       for (auto &DepCond : Kind.getConds()) {
         // FIXME: also deal with overlap checks
-        if (auto *C =  DepCond.getCondition())
+        if (auto *C = DepCond.getCondition())
           CondComputations.push_back(C);
       }
       Ver->CutEdges.try_emplace(Edge, Kind.getConds());
@@ -888,8 +887,8 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   // conditionally depend on the boundary items (in which case there would be
   // imposible to schedule the versioning checks).
   if (!CondComputations.empty()) {
-    auto SecondaryVer = inferVersioning(CondComputations, Deps,
-                                        InterLoopDeps, VL, DepChecker);
+    auto SecondaryVer =
+        inferVersioning(CondComputations, Deps, InterLoopDeps, VL, DepChecker);
     if (!SecondaryVer)
       return nullptr;
 #if 0
@@ -961,9 +960,7 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) const {
   return DepCond;
 }
 
-bool findNecessaryDeps(std::vector<std::unique_ptr<Versioning>> &Versionings,
-                       ArrayRef<Instruction *> Insts,
-                       DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
+bool findNecessaryDeps(VersioningPlan &VerPlan, ArrayRef<Instruction *> Insts,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker) {
   SmallVector<DepNode> Nodes;
   SmallVector<Item> Items;
@@ -984,8 +981,7 @@ bool findNecessaryDeps(std::vector<std::unique_ptr<Versioning>> &Versionings,
     // make sure that they are independent
     for (auto &Insts2 : make_second_range(LoopToInstsMap))
       if (Insts2.size() > 1 &&
-          !findNecessaryDeps(Versionings, Insts2, InterLoopDeps, PSSA,
-                             DepChecker))
+          !findNecessaryDeps(VerPlan, Insts2, PSSA, DepChecker))
         return false;
 
     // Make sure the disjoint parent loops are independent
@@ -1005,99 +1001,11 @@ bool findNecessaryDeps(std::vector<std::unique_ptr<Versioning>> &Versionings,
     ParentVL = Loops.front()->getParent();
   }
 
-  auto Ver = inferVersioning(Nodes, Items, InterLoopDeps, ParentVL, DepChecker);
+  auto Ver = inferVersioning(Nodes, Items, VerPlan.InterLoopDeps, ParentVL,
+                             DepChecker);
   if (!Ver)
     return false;
   if (!Ver->CutEdges.empty())
-    Versionings.push_back(std::move(Ver));
+    VerPlan.Versionings.push_back(std::move(Ver));
   return true;
-}
-
-IndependenceTracker::IndependenceTracker(Versioner &TheVersioner,
-                                         PredicatedSSA &PSSA)
-    : TheVersioner(TheVersioner), PSSA(PSSA) {}
-
-void IndependenceTracker::ignoreDependences(
-    const DenseSet<DepEdge> &DepEdgesToIgnore,
-    const DenseSet<DepEdge> &AliasedEdgesToIgnore,
-    const DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps) {
-  Whitelist.insert(DepEdgesToIgnore.begin(), DepEdgesToIgnore.end());
-
-  for (auto [Src, Dst] : AliasedEdgesToIgnore) {
-    // Memory independence is reflexive (e.g., if ptr1 and
-    // ptr2 don't alias, then the independence goes both ways)
-    NodeToDepsMap[Src].insert(Dst);
-    NodeToDepsMap[Dst].insert(Src);
-  }
-
-  for (auto [LoopPairs, Edges] : InterLoopDeps) {
-    for (auto [Src, Dst] : Edges) {
-      NodeToDepsMap[Src].insert(Dst);
-      auto *VL = LoopPairs.first.asLoop();
-      LoopToDepsMap[{VL, Src}].insert(Dst);
-    }
-  }
-
-  errs() << "Dumping node to deps map\n";
-  for (auto [Src, Dsts] : NodeToDepsMap)
-    for (auto Dst : Dsts)
-      errs() << '\t' << Src << " -> " << Dst << '\n';
-}
-
-void IndependenceTracker::markInstAsVersioned(Instruction *Orig,
-                                              Instruction *Cloned) {
-  // The cloned instruction inherit the "independence" of the original
-  // instruction
-  // FIXME: this can make unnecessary allocation... We avoid putting empty
-  // entries in the map
-  IndependentFrom[Cloned] = IndependentFrom[Orig];
-  IndependentFrom[Orig] = NodeToDepsMap[Orig];
-}
-
-void IndependenceTracker::markLoopInstAsVersioned(Instruction *Orig,
-                                                  Instruction *Cloned,
-                                                  VLoop *VL) {
-  IndependentFrom[Cloned] = IndependentFrom[Orig];
-  auto It = LoopToDepsMap.find({VL, Orig});
-  if (It == LoopToDepsMap.end())
-    return;
-  auto &Nodes = It->second;
-  IndependentFrom[Orig].insert(Nodes.begin(), Nodes.end());
-}
-
-bool IndependenceTracker::checkIndependence(const DepNode &Src,
-                                            const DepNode &Dst) const {
-  auto *DstI = Dst.asInstruction();
-  if (auto It = NodeToDepsMap.find(Src);
-      It != NodeToDepsMap.end() &&
-      (It->second.count(Dst) ||
-       (TheVersioner.getOriginalIfCloned(DstI) &&
-        It->second.count(TheVersioner.getOriginalIfCloned(DstI)))))
-    return true;
-  // Try again if Dst is a cloned instruction
-  if (!DstI)
-    return false;
-  auto *OrigDst = TheVersioner.getOriginalIfCloned(DstI);
-  if (!OrigDst)
-    OrigDst = DstI;
-  if (auto It = IndependentFrom.find(Src);
-      It != IndependentFrom.end() && It->second.count(OrigDst))
-    return true;
-  return false;
-}
-
-bool IndependenceTracker::isIndependent(const DepNode &Src,
-                                        const DepNode &Dst) const {
-  // Check the white list first, which doesn't take cloning into account.
-  if (Whitelist.count({Src, Dst}))
-    return true;
-  auto *SrcI = Src.asInstruction();
-  auto *DstI = Dst.asInstruction();
-  // FIXME: also support inst-to-loop dep
-  if (SrcI && DstI) {
-    if (TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
-                                 PSSA.getInstCond(DstI)))
-      return true;
-  }
-  return checkIndependence(Src, Dst) || checkIndependence(Dst, Src);
 }

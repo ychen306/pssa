@@ -1,6 +1,7 @@
 #ifndef VEGEN_HEURISTICS_H
 #define VEGEN_HEURISTICS_H
 
+#include "DependenceChecker.h"
 #include "llvm/ADT/ArrayRef.h"
 #include <memory> // std::unique_ptr
 
@@ -19,9 +20,12 @@ class LooseInstructionTable;
 class ReductionInfo;
 class Matcher;
 class InstructionDescriptor;
+struct VersioningPlan;
 
 std::vector<Pack *>
-packBottomUp(llvm::ArrayRef<InstructionDescriptor> InstPool, PredicatedSSA &,
+packBottomUp(llvm::ArrayRef<InstructionDescriptor> InstPool, 
+             VersioningPlan &VerPlan,
+             PredicatedSSA &,
              ReductionInfo &, LooseInstructionTable &, Matcher &,
              const llvm::DataLayout &, llvm::ScalarEvolution &,
              llvm::DominatorTree &, llvm::LoopInfo &, llvm::AAResults &,

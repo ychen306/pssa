@@ -137,7 +137,6 @@ class VectorGen {
   LoopInfo &LI;
   ScalarEvolution &SE;
   Versioner *TheVersioner;
-  const IndependenceTracker *IndepTracker;
 
   ValueIndex<Value *, Pack> ValueIdx;
   ValueIndex<const ControlCondition *, ConditionPack> MaskIdx;
@@ -235,10 +234,10 @@ class VectorGen {
 public:
   VectorGen(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI,
             AAResults &AA, LoopInfo &LI, ScalarEvolution &SE,
-            Versioner *TheVersioner, const IndependenceTracker *IndepTracker)
+            Versioner *TheVersioner)
       : Packs(Packs), PSSA(PSSA), DI(DI), AA(AA), LI(LI), SE(SE),
-        TheVersioner(TheVersioner), IndepTracker(IndepTracker),
-        Remapper(VM, RF_None, nullptr, &Extracter) {}
+        TheVersioner(TheVersioner), Remapper(VM, RF_None, nullptr, &Extracter) {
+  }
   bool run();
 };
 
@@ -296,8 +295,8 @@ const char LoweringTimerGroupDesc[] = "Vector Lowering";
 
 // Move the items together while still preserving dependences
 static bool merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
-                  DependenceChecker &DepChecker, const PackSet *Packs = nullptr,
-                  const IndependenceTracker *IndepTracker = nullptr) {
+                  DependenceChecker &DepChecker,
+                  const PackSet *Packs = nullptr) {
   NamedRegionTimer T("scheduling", "moving instructions together",
                      LoweringTimerGroup, LoweringTimerGroupDesc,
                      TimeVectorLowering);
@@ -306,8 +305,7 @@ static bool merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
 
   auto *VL = PSSA.getLoopForItem(Items.front());
   SmallVector<Item> Deps;
-  bool FoundCycle =
-      findInBetweenDeps(Deps, Items, VL, PSSA, DepChecker, Packs, IndepTracker);
+  bool FoundCycle = findInBetweenDeps(Deps, Items, VL, PSSA, DepChecker, Packs);
   if (FoundCycle)
     return false;
 
@@ -581,8 +579,7 @@ coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
 static bool mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker,
                        DenseMap<Value *, Value *> &ExitGuards,
-                       DenseSet<PHINode *> &ActiveFlags,
-                       const IndependenceTracker *IndepTracker) {
+                       DenseSet<PHINode *> &ActiveFlags) {
   DenseMap<Instruction *, const ControlCondition *> OrigInstConds;
   DenseMap<VLoop *, const ControlCondition *> OrigLoopConds;
   ItemMap<Value *> ItemToActiveMap;
@@ -609,7 +606,7 @@ static bool mergeLoops(const EquivalenceClasses<VLoop *> &LoopsToFuse,
         return VL->comesBefore(VL1, VL2);
       });
       // Move the loops together first
-      if (!merge(PSSA, toItems(Loops), DepChecker, nullptr, IndepTracker))
+      if (!merge(PSSA, toItems(Loops), DepChecker, nullptr))
         return false;
       VLoop *Fused = nullptr;
       auto *LeaderVL = Loops.front();
@@ -1235,14 +1232,13 @@ bool VectorGen::run() {
   // Fuse the loops top-down
   DenseMap<Value *, Value *> ExitGuards;
   DenseSet<PHINode *> ActiveFlags;
-  if (!mergeLoops(LoopsToFuse, PSSA, DepChecker, ExitGuards, ActiveFlags,
-                  IndepTracker))
+  if (!mergeLoops(LoopsToFuse, PSSA, DepChecker, ExitGuards, ActiveFlags))
     return false;
   // Move the packed instructions together
   for (auto *P : llvm::reverse(Packs)) {
     if (isa<MuPack>(P))
       continue;
-    if (!merge(PSSA, toItems(P->values()), DepChecker, &Packs, IndepTracker))
+    if (!merge(PSSA, toItems(P->values()), DepChecker, &Packs))
       return false;
   }
   //==== End scheduling ====//
@@ -1310,7 +1306,7 @@ bool VectorGen::run() {
 
 bool lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI,
            AAResults &AA, LoopInfo &LI, ScalarEvolution &SE,
-           Versioner *TheVersioner, const IndependenceTracker *IndepTracker) {
-  VectorGen Gen(Packs, PSSA, DI, AA, LI, SE, TheVersioner, IndepTracker);
+           Versioner *TheVersioner) {
+  VectorGen Gen(Packs, PSSA, DI, AA, LI, SE, TheVersioner);
   return Gen.run();
 }
