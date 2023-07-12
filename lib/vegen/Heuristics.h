@@ -22,14 +22,19 @@ class Matcher;
 class InstructionDescriptor;
 struct VersioningPlan;
 
-std::vector<Pack *>
-packBottomUp(llvm::ArrayRef<InstructionDescriptor> InstPool, 
-             VersioningPlan &VerPlan,
-             PredicatedSSA &,
-             ReductionInfo &, LooseInstructionTable &, Matcher &,
-             const llvm::DataLayout &, llvm::ScalarEvolution &,
-             llvm::DominatorTree &, llvm::LoopInfo &, llvm::AAResults &,
-             llvm::DependenceInfo &, llvm::TargetTransformInfo &);
+std::vector<Pack *> packBottomUp(llvm::ArrayRef<InstructionDescriptor> InstPool,
+                                 VersioningPlan &VerPlan, PredicatedSSA &,
+                                 ReductionInfo &, LooseInstructionTable &,
+                                 Matcher &, const llvm::DataLayout &,
+                                 llvm::ScalarEvolution &, llvm::DominatorTree &,
+                                 llvm::LoopInfo &, llvm::AAResults &,
+                                 llvm::DependenceInfo &,
+                                 llvm::TargetTransformInfo &);
+
+// If we generate versioning phis for a packed value,
+// we try to also pack those versioning phis
+std::vector<Pack *> packVersioningPhis(llvm::ArrayRef<Pack *>,
+                                       const Versioner &, PredicatedSSA &PSSA);
 
 // Decompose a list of reductions with reducers and pack those instructions
 Pack *decomposeAndPack(PredicatedSSA &PSSA, ReductionInfo &RI,

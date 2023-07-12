@@ -8,6 +8,10 @@
 
 using namespace llvm;
 
+cl::opt<bool> RemoveRedundantConditions(
+    "remove-redundant-conds",
+    cl::desc("remove redundant versioning conditions"), cl::init(false));
+
 // Expand Pred before specified item
 static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
                            const ControlCondition *C,
@@ -848,4 +852,98 @@ bool IndependenceTracker::isIndependent(const DepNode &Src,
       return true;
   }
   return checkIndependence(Src, Dst) || checkIndependence(Dst, Src);
+}
+
+// Find the outermost versioning plan
+static Versioning *getOutermostVersioning(Versioning *Ver) {
+  auto *OutermostVer = Ver;
+  while (OutermostVer->Secondary)
+    OutermostVer = OutermostVer->Secondary.get();
+  return OutermostVer;
+}
+
+// Fix up a chain of nested versionings.
+static void finalizeVersioning(Versioning *PrimaryVer) {
+  DenseSet<DepNode> Nodes(PrimaryVer->Nodes.begin(), PrimaryVer->Nodes.end());
+  DenseSet<DepCondition> ImpliedConds;
+#ifndef NDEBUG
+  DenseSet<DepNode> Removed;
+#endif
+  auto RemoveFromNodes = [&](ArrayRef<DepNode> ToRemove) {
+    for (auto &Node : ToRemove) {
+      assert(Nodes.count(Node) || Removed.count(Node));
+      Nodes.erase(Node);
+#ifndef NDEBUG
+      Removed.insert(Node);
+#endif
+    }
+  };
+
+  for (auto *Ver = getOutermostVersioning(PrimaryVer); Ver;
+       Ver = Ver->Primary) {
+    auto OldNodes = std::move(Ver->Nodes);
+    llvm::append_range(Ver->Nodes, Nodes);
+    RemoveFromNodes(OldNodes);
+    DenseSet<DepEdge> ImpliedCutEdges;
+    for (auto [Edge, DepConds] : Ver->CutEdges) {
+      setSubtraction(DepConds, ImpliedConds);
+      // If a cut edge's conditions are all implied, we don't need to cut it.
+      if (DepConds.empty())
+        ImpliedCutEdges.insert(Edge);
+    }
+    for (auto &DepConds : llvm::make_second_range(Ver->CutEdges))
+      ImpliedConds.insert(DepConds.begin(), DepConds.end());
+    // Remove the implied cut edges
+    for (auto &Edge : ImpliedCutEdges)
+      Ver->CutEdges.erase(Edge);
+  }
+}
+
+void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
+                         const EquivalenceClasses<Item> &EC,
+                         PredicatedSSA &PSSA, ScalarEvolution &SE) {
+  // Visit all of the conditions and coalesce them
+  ConditionSetTracker CST(SE, PSSA);
+  // Add the conditions to tracker
+  for (auto &PrimaryVer : VerPlan.Versionings) {
+    for (auto *Ver = PrimaryVer.get(); Ver; Ver = Ver->Secondary.get())
+      for (auto DepConds : make_second_range(Ver->CutEdges))
+        for (auto &DepCond : DepConds)
+          CST.add(DepCond);
+  }
+  // Use the coalesced conditions
+  for (auto &PrimaryVer : VerPlan.Versionings) {
+    for (auto *Ver = PrimaryVer.get(); Ver; Ver = Ver->Secondary.get()) {
+      for (auto DepConds : make_second_range(Ver->CutEdges)) {
+        std::vector<DepCondition> NewConds;
+        DenseSet<DepCondition> Inserted;
+        for (auto &DepCond : DepConds) {
+          auto NewCond = CST.getCoalescedCondition(DepCond);
+          if (Inserted.insert(NewCond).second)
+            NewConds.push_back(NewCond);
+        }
+        DepConds = NewConds;
+      }
+    }
+  }
+
+  for (auto &Ver : VerPlan.Versionings)
+    finalizeVersioning(Ver.get());
+
+  // Lower the versionings from the secondaries to primaries.
+  // Collect the outermost versionings first.
+  SmallVector<Versioning *> Frontier;
+  for (auto &Ver : VerPlan.Versionings)
+    Frontier.push_back(getOutermostVersioning(Ver.get()));
+
+  while (!Frontier.empty()) {
+    TheVersioner.run(Frontier, EC, VerPlan.InterLoopDeps,
+                     RemoveRedundantConditions);
+    SmallVector<Versioning *> NewFrontier;
+    for (auto *Ver : Frontier) {
+      if (Ver->Primary)
+        NewFrontier.push_back(Ver->Primary);
+    }
+    Frontier = std::move(NewFrontier);
+  }
 }

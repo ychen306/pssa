@@ -109,4 +109,9 @@ public:
   bool isExclusive(const ControlCondition *, const ControlCondition *);
 };
 
+// See Versionier::run for EC for merging conditions
+void lowerVersioningPlan(VersioningPlan &, Versioner &,
+                         const llvm::EquivalenceClasses<Item> &EC,
+                         PredicatedSSA &, llvm::ScalarEvolution &);
+
 #endif // end VEGEN_VERSIONING_H

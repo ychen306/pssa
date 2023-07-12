@@ -1,4 +1,5 @@
 #include "vegen/GlobalSLP.h"
+#include "Versioning.h"
 #include "DependenceChecker.h"
 #include "Heuristics.h"
 #include "LoopUnrolling.h"
@@ -89,7 +90,31 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   lowerReductions(RI, PSSA, LIT, DepChecker, false /*replace insts*/);
   LIT.destroy();
 
-  if (!lower(Packs, PSSA, DI, AA, LI, SE)) {
+  Versioner TheVersioner(PSSA, DI, AA, LI, SE);
+  bool DoVersioning = !VerPlan.Versionings.empty();
+  // Lower the versioning plan
+  if (DoVersioning) {
+    // Group the items into equivalence classes according to the packing
+    // decisions. If a pack of instructions come from the same loop, then they
+    // should be in the same class. If a pack of instructions come from
+    // different loops, then those loops should be in the same class.
+    EquivalenceClasses<Item> EC;
+    for (auto *P : Packs) {
+      SmallVector<Instruction *> Insts;
+      P->getKilledInsts(Insts);
+      auto *I0 = Insts.front();
+      for (auto *I : drop_begin(Insts))
+        EC.unionSets(I0, I);
+    }
+
+    lowerVersioningPlan(VerPlan, TheVersioner, EC, PSSA, SE);
+
+    // Pack the versioning phis
+    auto NewPacks = packVersioningPhis(Packs, TheVersioner, PSSA);
+    append_range(Packs, NewPacks);
+  }
+
+  if (!lower(Packs, PSSA, DI, AA, LI, SE, DoVersioning ? &TheVersioner : nullptr)) {
     llvm_unreachable("failed to lower to pssa");
     return PreservedAnalyses::all();
   }

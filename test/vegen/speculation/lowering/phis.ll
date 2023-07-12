@@ -18,7 +18,7 @@ define void @foo() #0 {
 ; CHECK-NEXT:    [[CMP1_1_VEC:%.*]] = icmp sgt <4 x i32> [[I_1_VEC]], zeroinitializer
 ; CHECK-NEXT:    [[I1_1_VEC:%.*]] = load <4 x i32>, ptr @d, align 4
 ; CHECK-NEXT:    [[TMP0:%.*]] = xor <4 x i1> [[CMP1_1_VEC]], <i1 true, i1 true, i1 true, i1 true>
-; CHECK-NEXT:    [[TMP1:%.*]] = shufflevector <4 x i1> [[TMP0]], <4 x i1> undef, <3 x i32> <i32 1, i32 2, i32 3>
+; CHECK-NEXT:    [[TMP1:%.*]] = shufflevector <4 x i1> [[TMP0]], <4 x i1> undef
 ; CHECK-NEXT:    [[TMP2:%.*]] = call i1 @llvm.vector.reduce.or.v3i1(<3 x i1> [[TMP1]])
 ; CHECK-NEXT:    [[TMP3:%.*]] = xor i1 [[TMP2]], true
 ; CHECK-NEXT:    br i1 [[TMP3]], label [[TMP4:%.*]], label [[TMP6:%.*]]

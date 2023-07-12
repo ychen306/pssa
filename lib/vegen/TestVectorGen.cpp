@@ -39,10 +39,6 @@ cl::opt<bool>
                                  "checks in order to make each pack"),
                         cl::init(false));
 
-cl::opt<bool> RemoveRedundantConditions(
-    "remove-redundant-conds",
-    cl::desc("remove redundant versioning conditions"), cl::init(false));
-
 cl::opt<bool> RemoveDeadInsts(
     "remove-dead-insts",
     cl::desc("remove instructions killed by reductions before lowering"),
@@ -306,63 +302,6 @@ static const InstructionDescriptor &getInstByName(StringRef Name) {
   llvm_unreachable("Can't find requested instruction");
 }
 
-// Find the outermost versioning plan
-static Versioning *getOutermostVersioning(Versioning *Ver) {
-  auto *OutermostVer = Ver;
-  while (OutermostVer->Secondary)
-    OutermostVer = OutermostVer->Secondary.get();
-  return OutermostVer;
-}
-
-// Xs -= Ys
-namespace {
-template <typename T>
-void setSubtraction(std::vector<T> &Xs, const DenseSet<T> &Ys) {
-  std::vector<T> NewXs;
-  for (auto &X : Xs)
-    if (!Ys.count(X))
-      NewXs.push_back(X);
-  Xs = std::move(NewXs);
-}
-} // namespace
-
-// Fix up a chain of nested versionings.
-static void finalizeVersioning(Versioning *PrimaryVer) {
-  DenseSet<DepNode> Nodes(PrimaryVer->Nodes.begin(), PrimaryVer->Nodes.end());
-  DenseSet<DepCondition> ImpliedConds;
-#ifndef NDEBUG
-  DenseSet<DepNode> Removed;
-#endif
-  auto RemoveFromNodes = [&](ArrayRef<DepNode> ToRemove) {
-    for (auto &Node : ToRemove) {
-      assert(Nodes.count(Node) || Removed.count(Node));
-      Nodes.erase(Node);
-#ifndef NDEBUG
-      Removed.insert(Node);
-#endif
-    }
-  };
-
-  for (auto *Ver = getOutermostVersioning(PrimaryVer); Ver;
-       Ver = Ver->Primary) {
-    auto OldNodes = std::move(Ver->Nodes);
-    llvm::append_range(Ver->Nodes, Nodes);
-    RemoveFromNodes(OldNodes);
-    DenseSet<DepEdge> ImpliedCutEdges;
-    for (auto [Edge, DepConds] : Ver->CutEdges) {
-      setSubtraction(DepConds, ImpliedConds);
-      // If a cut edge's conditions are all implied, we don't need to cut it.
-      if (DepConds.empty())
-        ImpliedCutEdges.insert(Edge);
-    }
-    for (auto &DepConds : llvm::make_second_range(Ver->CutEdges))
-      ImpliedConds.insert(DepConds.begin(), DepConds.end());
-    // Remove the implied cut edges
-    for (auto &Edge : ImpliedCutEdges)
-      Ver->CutEdges.erase(Edge);
-  }
-}
-
 PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
   auto &DL = F.getParent()->getDataLayout();
@@ -483,8 +422,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   DependenceChecker DepChecker(PSSA, DI, AA, LI, SE, &DeadInsts);
 
   if (FindConditionalDeps) {
-    // If we find any loop -> loop dep, also record all the conditional deps
-    // that causes the loop->loop dep.
+    Versioner TheVersioner(PSSA, DI, AA, LI, SE);
     VersioningPlan VerPlan;
     for (auto *P : Packs) {
       if (!findNecessaryDeps(VerPlan, P->values(), PSSA, DepChecker)) {
@@ -514,87 +452,23 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
       }
     }
 
-    // Visit all of the conditions and coalesce them
-    ConditionSetTracker CST(SE, PSSA);
-    // Add the conditions to tracker
-    for (auto &PrimaryVer : VerPlan.Versionings) {
-      for (auto *Ver = PrimaryVer.get(); Ver; Ver = Ver->Secondary.get())
-        for (auto DepConds : make_second_range(Ver->CutEdges))
-          for (auto &DepCond : DepConds)
-            CST.add(DepCond);
-    }
-    // Use the coalesced conditions
-    for (auto &PrimaryVer : VerPlan.Versionings) {
-      for (auto *Ver = PrimaryVer.get(); Ver; Ver = Ver->Secondary.get()) {
-        for (auto DepConds : make_second_range(Ver->CutEdges)) {
-          std::vector<DepCondition> NewConds;
-          DenseSet<DepCondition> Inserted;
-          for (auto &DepCond : DepConds) {
-            auto NewCond = CST.getCoalescedCondition(DepCond);
-            if (Inserted.insert(NewCond).second)
-              NewConds.push_back(NewCond);
-          }
-          DepConds = NewConds;
-        }
-      }
-    }
-
     // Group the items into equivalence classes according to the packing
     // decisions. If a pack of instructions come from the same loop, then they
     // should be in the same class. If a pack of instructions come from
     // different loops, then those loops should be in the same class.
     EquivalenceClasses<Item> EC;
     for (auto *P : Packs) {
-      auto Values = P->values();
-      auto Leader = Values.front();
-      for (auto *V : drop_begin(Values))
-        EC.unionSets(Leader, V);
+      SmallVector<Instruction *> Insts;
+      P->getKilledInsts(Insts);
+      auto *I0 = Insts.front();
+      for (auto *I : drop_begin(Insts))
+        EC.unionSets(I0, I);
     }
 
-    for (auto &Ver : VerPlan.Versionings)
-      finalizeVersioning(Ver.get());
-
-    // Lower the versionings from the secondaries to primaries.
-    // Collect the outermost versionings first.
-    SmallVector<Versioning *> Frontier;
-    for (auto &Ver : VerPlan.Versionings)
-      Frontier.push_back(getOutermostVersioning(Ver.get()));
-
-    Versioner TheVersioner(PSSA, DI, AA, LI, SE);
-
-    while (!Frontier.empty()) {
-      TheVersioner.run(Frontier, EC, VerPlan.InterLoopDeps,
-                       RemoveRedundantConditions);
-      SmallVector<Versioning *> NewFrontier;
-      for (auto *Ver : Frontier) {
-        if (Ver->Primary)
-          NewFrontier.push_back(Ver->Primary);
-      }
-      Frontier = std::move(NewFrontier);
-    }
+    lowerVersioningPlan(VerPlan, TheVersioner, EC, PSSA, SE);
 
     // Pack the versioning phis
-    SmallVector<Pack *> NewPacks;
-    for (auto *P : Packs) {
-      auto Values = P->values();
-      ArrayRef VersioningPhis = TheVersioner.getVersioningPhis(Values.front());
-      unsigned NumVersions = VersioningPhis.size();
-      if (NumVersions == 0)
-        continue;
-      if (any_of(drop_begin(Values), [&](auto *I) {
-            return TheVersioner.getVersioningPhis(I).size() != NumVersions;
-          }))
-        continue;
-      for (unsigned i = 0; i < NumVersions; i++) {
-        SmallVector<Instruction *> Phis;
-        for (auto *I : Values)
-          Phis.push_back(TheVersioner.getVersioningPhis(I)[i]);
-        if (auto *PhiP = PHIPack::tryPack(Phis, PSSA)) {
-          errs() << "!!! packing " << *PhiP << '\n';
-          NewPacks.push_back(PhiP);
-        }
-      }
-    }
+    auto NewPacks = packVersioningPhis(Packs, TheVersioner, PSSA);
     Packs.append(NewPacks.begin(), NewPacks.end());
 
     bool Ok = lower(Packs, PSSA, DI, AA, LI, SE, &TheVersioner);

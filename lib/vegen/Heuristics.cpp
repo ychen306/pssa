@@ -7,6 +7,7 @@
 #include "Reducer.h"
 #include "Reduction.h"
 #include "TripCount.h"
+#include "Versioning.h"
 #include "pssa/VectorHashInfo.h"
 #include "pssa/Visitor.h"
 #include "vegen/Lower.h"
@@ -26,6 +27,11 @@ namespace {
 cl::opt<bool> NoReductionPacking("no-reduction-packing",
                                  cl::desc("Don't pack reductions horizontally"),
                                  cl::init(false));
+
+cl::opt<bool>
+    DoVersioning("do-versioning",
+                 cl::desc("do versioning to enable speculative vectorization"),
+                 cl::init(false));
 
 // A class that enumerates a list of packs
 // that can produce a given vector
@@ -779,7 +785,7 @@ static bool isIndependent(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
 static void runBottomUp(Pack *P, BottomUpHeuristic &Heuristic,
                         PredicatedSSA &PSSA, LooseInstructionTable &LIT,
                         ScalarEvolution &SE, DependenceChecker &DepChecker,
-                        PackSet &Packs) {
+                        PackSet &Packs, VersioningPlan &VerPlan) {
   auto IsPacked = [&Packs](Value *V) { return Packs.isPacked(V); };
 
   DenseSet<OperandPack, VectorHashInfo<OperandPack>> Visited;
@@ -836,8 +842,12 @@ static void runBottomUp(Pack *P, BottomUpHeuristic &Heuristic,
     for (auto *I : P->values())
       if (!LIT.isLoose(I))
         Insts.push_back(I);
+    // Check if the instructions are independent
     if (!Insts.empty() && !isIndependent(Insts, PSSA, DepChecker)) {
-      return;
+      // Try again and see if we can do versioning to get independence
+      if (!DoVersioning ||
+          !findNecessaryDeps(VerPlan, P->values(), PSSA, DepChecker))
+        return;
     }
 
     Packs.add(P);
@@ -1133,7 +1143,7 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
 
     errs() << "Found seed store pack: " << *StoreP << '\n';
     PackSet Scratch = Packs;
-    runBottomUp(StoreP, Heuristic, PSSA, LIT, SE, DepChecker, Scratch);
+    runBottomUp(StoreP, Heuristic, PSSA, LIT, SE, DepChecker, Scratch, VerPlan);
     auto NewCost = getTotalCost(PSSA, Scratch, RI, LIT, TTI);
     // FIXME: need to check for dep cycle
     errs() << "Prev cost: " << PrevCost << ", new cost: " << NewCost << '\n';
@@ -1154,7 +1164,7 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
     assert(isa<ReductionPack>(Seed));
 
     // Pack the horizontal reduction
-    runBottomUp(Seed, Heuristic, PSSA, LIT, SE, DepChecker, Scratch);
+    runBottomUp(Seed, Heuristic, PSSA, LIT, SE, DepChecker, Scratch, VerPlan);
 
     auto NewCost = getTotalCost(PSSA, Scratch, RI, LIT, TTI);
     // FIXME: need to check for dep cycle
@@ -1185,4 +1195,31 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
   for (auto *P : Packs)
     ThePacks.push_back(P->clone());
   return ThePacks;
+}
+
+std::vector<Pack *> packVersioningPhis(ArrayRef<Pack *> Packs,
+                                       const Versioner &TheVersioner,
+                                       PredicatedSSA &PSSA) {
+  std::vector<Pack *> NewPacks;
+  for (auto *P : Packs) {
+    auto Values = P->values();
+    ArrayRef VersioningPhis = TheVersioner.getVersioningPhis(Values.front());
+    unsigned NumVersions = VersioningPhis.size();
+    if (NumVersions == 0)
+      continue;
+    if (any_of(drop_begin(Values), [&](auto *I) {
+          return TheVersioner.getVersioningPhis(I).size() != NumVersions;
+        }))
+      continue;
+    for (unsigned i = 0; i < NumVersions; i++) {
+      SmallVector<Instruction *> Phis;
+      for (auto *I : Values)
+        Phis.push_back(TheVersioner.getVersioningPhis(I)[i]);
+      if (auto *PhiP = PHIPack::tryPack(Phis, PSSA)) {
+        errs() << "!!! packing " << *PhiP << '\n';
+        NewPacks.push_back(PhiP);
+      }
+    }
+  }
+  return NewPacks;
 }
