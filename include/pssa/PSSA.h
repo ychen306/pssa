@@ -199,6 +199,7 @@ class PredicatedSSA {
   // Mapping <PSSA Loop> -> <LLVM Loop>
   // Could be invalidated as PSSA is transformed.
   llvm::DenseMap<VLoop *, llvm::Loop *> VLoopToLoopMap;
+  llvm::DenseMap<llvm::Loop *, VLoop *> LoopToVLoopMap;
 
 public:
   // Convert from LLVM IR
@@ -309,6 +310,10 @@ public:
   }
 
   llvm::Loop *getOrigLoop(VLoop *VL) { return VLoopToLoopMap.lookup(VL); }
+  VLoop *getVLoop(llvm::Loop *L) {
+    assert(LoopToVLoopMap.count(L));
+    return LoopToVLoopMap.lookup(L);
+  }
   llvm::ScalarEvolution *getSE() { return SE; }
 
   unsigned getLoopDepth(VLoop *VL);

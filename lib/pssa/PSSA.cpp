@@ -192,6 +192,7 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
   while (!Worklist.empty()) {
     auto [VL, L] = Worklist.pop_back_val();
     VLoopToLoopMap[VL] = L;
+    LoopToVLoopMap[L] = VL;
 
     assert(L->isRotatedForm());
     VL->setLoopCond(CDA.getConditionForBlock(L->getLoopPreheader()));

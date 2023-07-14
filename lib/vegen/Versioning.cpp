@@ -3,6 +3,7 @@
 #include "ItemMover.h"
 #include "pssa/Inserter.h"
 #include "pssa/VectorHashInfo.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 
@@ -11,6 +12,52 @@ using namespace llvm;
 cl::opt<bool> RemoveRedundantConditions(
     "remove-redundant-conds",
     cl::desc("remove redundant versioning conditions"), cl::init(false));
+
+// Add a canonical induction variable for VL.
+// In an ideal world we only need to do this in PredicatedSSA.
+// We also need to insert these instructions in LLVM IR because SCEVExpander
+// still uses it.
+static void addIndvar(Loop *L, PredicatedSSA &PSSA) {
+  auto *VL = PSSA.getVLoop(L);
+  assert(VL);
+  auto &DL = PSSA.getFunction()->getParent()->getDataLayout();
+  auto *Ty = DL.getIndexType(PointerType::get(PSSA.getContext(), 0));
+  if (L->getCanonicalInductionVariable() &&
+      L->getCanonicalInductionVariable()->getType()->getScalarSizeInBits() >=
+          Ty->getScalarSizeInBits())
+    return;
+
+  auto *Header = L->getHeader();
+  auto *Preheader = L->getLoopPreheader();
+  auto *Latch = L->getLoopLatch();
+  assert(Preheader && Latch && "loop should have been canonicalized");
+  auto *Indvar = PHINode::Create(Ty, 2, "indvar", &Header->front());
+  auto *Add = BinaryOperator::CreateAdd(Indvar, ConstantInt::get(Ty, 1),
+                                        "indvar.next", Latch->getTerminator());
+  // By our convention, the first incoming must be the init value
+  Indvar->addIncoming(Constant::getNullValue(Ty), Preheader);
+  Indvar->addIncoming(Add, Latch);
+  VL->addMu(Indvar);
+  VL->insert(Add, nullptr);
+  assert(L->getCanonicalInductionVariable() &&
+         L->getCanonicalInductionVariable()->getType()->getScalarSizeInBits() >=
+             Ty->getScalarSizeInBits() &&
+         "failed to create indvar");
+}
+
+namespace {
+class AddRecLoopCollector : public SCEVRewriteVisitor<AddRecLoopCollector> {
+  DenseSet<Loop *> &Loops;
+
+public:
+  const SCEV *visitAddRecExpr(const SCEVAddRecExpr *AddRec) {
+    Loops.insert(const_cast<Loop *>(AddRec->getLoop()));
+    return AddRec;
+  }
+  AddRecLoopCollector(DenseSet<Loop *> &Loops, ScalarEvolution &SE)
+      : SCEVRewriteVisitor<AddRecLoopCollector>(SE), Loops(Loops) {}
+};
+} // namespace
 
 // Expand Pred before specified item
 static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
@@ -24,7 +71,7 @@ static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
   // Create a dummy instruction in the block (expander's insert point requires
   // an existing instruction)
   auto *End = new FreezeInst(UndefValue::get(Type::getInt1Ty(Ctx)), "", BB);
-  SCEVExpander Exp(SE, DL, "scev.pred");
+  SCEVExpander Exp(SE, DL, "scev.pred", false /*preserve lcssa*/);
   auto *Expanded = Exp.expandCodeForPredicate(Pred, End);
   End->eraseFromParent();
 
@@ -69,11 +116,22 @@ static Value *emitOverlappingChecks(const DepCondition &DepCond, VLoop *VL,
                                     const ControlCondition *C,
                                     VLoop::ItemIterator InsertBefore,
                                     DependenceChecker &DepChecker,
-                                    ScalarEvolution &SE, const DataLayout &DL) {
+                                    ScalarEvolution &SE, PredicatedSSA &PSSA,
+                                    const DataLayout &DL) {
   assert(DepCond.isOverlapping());
   auto [R1, R2] = DepCond.getRanges();
   auto *End1 = SE.getAddExpr(R1.Base, R1.Size);
   auto *End2 = SE.getAddExpr(R2.Base, R2.Size);
+
+  // In case any of the SCEV expressions involve addrec, we need to insert
+  // indvars for the involving loops.
+  DenseSet<Loop *> Loops;
+  AddRecLoopCollector LoopCollector(Loops, SE);
+  LoopCollector.visit(End1);
+  LoopCollector.visit(End2);
+  for (auto *L : Loops)
+    addIndvar(L, PSSA);
+
   // Case 1: R1 is left of R2; i.e., End1 < Begin2. Note that we are using the
   // inverse predicate here because SCEVExpander flips the evaluation...
   auto *Left = emitSCEVPred(
@@ -277,6 +335,13 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
   // Put the items in a vector to avoid iterator invalidation
   std::vector<Item> Items(VL->item_begin(), VL->item_end());
 
+  // Remember the *original* sub loops, which we will visit recursively
+  SmallVector<VLoop *> SubLoops;
+  for (auto It : Items) {
+    if (auto *SubVL = It.asLoop())
+      SubLoops.push_back(SubVL);
+  }
+
   // Figure out the items we need to version in this loop and their versioning
   // conditions
   DenseMap<DepCondition, std::vector<Item>> CondToItemMap;
@@ -311,9 +376,9 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
     // (We assume prior analyses have
     // made sure that it's indeed possible to materialize DepCond before Items)
     Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
-    auto *V =
-        emitOverlappingChecks(DepCond, VL, getCommonCondition(VL, Items),
-                              VL->toIterator(Earliest), DepChecker, SE, DL);
+    auto *V = emitOverlappingChecks(DepCond, VL, getCommonCondition(VL, Items),
+                                    VL->toIterator(Earliest), DepChecker, SE,
+                                    PSSA, DL);
     OverlappingChecks[DepCond] = V;
   }
 
@@ -390,8 +455,6 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
   // Mapping an item to the ancestor loop that we just versioned
   DenseMap<Item, VLoop *, ItemHashInfo> ItemToLoopMap;
   SmallVector<PHINode *> VersionedPhis;
-  // Remember the sub loops that we visit
-  SmallVector<VLoop *> SubLoops;
   // Clone the instructions/loops
   for (auto Item : ItemsToVersion) {
     auto It = VL->toIterator(Item);
@@ -447,7 +510,6 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
     } else {
       ValueToValueMapTy VMap;
       auto *SubVL = Item.asLoop();
-      SubLoops.push_back(SubVL);
       auto *SubVL2 = cloneLoop(SubVL, VMap, [&](auto It, auto ClonedIt) {
         ItemToLoopMap[It] = SubVL;
         OrigToCloneMap.try_emplace(It, ClonedIt);
