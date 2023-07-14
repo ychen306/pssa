@@ -84,6 +84,9 @@ struct MemRange {
   bool operator==(const MemRange &Other) const {
     return Base == Other.Base && Size == Other.Size;
   }
+  bool operator!=(const MemRange &Other) const {
+    return !((*this) == Other);
+  }
   // Get a total order for things like std::set
   bool operator<(const MemRange &Other) const {
     return std::tie(Base, Size, ParentLoop) <

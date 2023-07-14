@@ -139,7 +139,7 @@ Optional<MemRange> MemRange::promote(ScalarEvolution &SE, PredicatedSSA &PSSA) {
   if (SE.isLoopInvariant(Base, L))
     return MemRange{Base, Size, ParentLoop->getParent()};
 
-  // Otherwise we insistj the base pointer is an AddRec expr (and therefore
+  // Otherwise we insist the base pointer is an AddRec expr (and therefore
   // predictable)
   auto *BaseAR = dyn_cast<SCEVAddRecExpr>(Base);
   if (!BaseAR)
@@ -411,10 +411,14 @@ Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
 
   auto Dep = DI.depends(I1, I2, true);
   if (Dep && Dep->isOrdered()) {
-    // FIXME: in some trivial cases we know for sure that I1 depends on I2
-    // (e.g., A[i] and A[i]), report DepCondition::always() in those cases.
-    return DepCondition::ifOverlapping(MemRange::get(I1, SE, PSSA),
-                                       MemRange::get(I2, SE, PSSA));
+    auto R1 = MemRange::get(I1, SE, PSSA);
+    auto R2 = MemRange::get(I2, SE, PSSA);
+    auto *VL = nearestCommonParent(R1.ParentLoop, R2.ParentLoop);
+    auto PromotedR1 = promoteTo(R1, VL, SE, PSSA);
+    auto PromotedR2 = promoteTo(R2, VL, SE, PSSA);
+    if (PromotedR1 && PromotedR2 && *PromotedR1 != *PromotedR2)
+      return DepCondition::ifOverlapping(*PromotedR1, *PromotedR2);
+    return DepCondition::always();
   }
   return None;
 }
