@@ -158,6 +158,40 @@ Optional<MemRange> MemRange::promote(ScalarEvolution &SE, PredicatedSSA &PSSA) {
                   ParentLoop->getParent()};
 }
 
+DepCondition DepCondition::ifOverlapping(const MemRange &R1, const MemRange &R2,
+                                         ScalarEvolution &SE,
+                                         PredicatedSSA &PSSA) {
+  // Special case for simplifying affine ranges:
+  //   (base1+i*step, base1+i*step+size1) overlaps with (base2+i*step,
+  //   base2+i*step+size2)
+  // iff
+  //   (base1, base1+size1) overlaps with (base2, base2+size2)
+  auto *Base1 = dyn_cast<SCEVAddRecExpr>(R1.Base);
+  auto *Size1 = R1.Size;
+  auto *Base2 = dyn_cast<SCEVAddRecExpr>(R2.Base);
+  auto *Size2 = R2.Size;
+  assert(R1.ParentLoop == R2.ParentLoop);
+  auto *VL = R1.ParentLoop;
+  auto *L = PSSA.getOrigLoop(VL);
+  if (Base1 && Base2 && Base1->isAffine() && Base2->isAffine() &&
+      SE.isLoopInvariant(Size1, L) && SE.isLoopInvariant(Size2, L)) {
+    MemRange NewR1 = R1, NewR2 = R2;
+    NewR1.Base = Base1->getStart();
+    NewR2.Base = Base2->getStart();
+    NewR1.ParentLoop = R1.ParentLoop->getParent();
+    NewR2.ParentLoop = R2.ParentLoop->getParent();
+    return DepCondition(NewR1, NewR2);
+  }
+  return DepCondition(R1, R2);
+}
+
+bool DepCondition::isLoopInvariant(VLoop *VL) const {
+  if (!isOverlapping())
+    return false;
+  auto R = getRanges().first;
+  return R.ParentLoop->contains(VL) && R.ParentLoop != VL;
+}
+
 Optional<DepCondition> DepCondition::coalesce(const DepCondition &Cond1,
                                               const DepCondition &Cond2,
                                               ScalarEvolution &SE,
@@ -186,7 +220,7 @@ Optional<DepCondition> DepCondition::coalesce(const DepCondition &Cond1,
     if (!R2)
       return None;
   }
-  return DepCondition::ifOverlapping(*R1, *R2);
+  return DepCondition::ifOverlapping(*R1, *R2, SE, PSSA);
 }
 
 raw_ostream &operator<<(raw_ostream &OS, const MemRange &R) {
@@ -417,7 +451,7 @@ Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
     auto PromotedR1 = promoteTo(R1, VL, SE, PSSA);
     auto PromotedR2 = promoteTo(R2, VL, SE, PSSA);
     if (PromotedR1 && PromotedR2 && *PromotedR1 != *PromotedR2)
-      return DepCondition::ifOverlapping(*PromotedR1, *PromotedR2);
+      return DepCondition::ifOverlapping(*PromotedR1, *PromotedR2, SE, PSSA);
     return DepCondition::always();
   }
   return None;
@@ -426,8 +460,7 @@ Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
 bool DependenceChecker::depends(
     const Item &It1, const Item &It2, DenseMap<DepEdge, DepKind> *DepEdges,
     DenseMap<DepEdge, DenseSet<DepEdge>> *InterLoopDeps) {
-  if (TheVersioner &&
-      TheVersioner->isIndependent(It2, It1))
+  if (TheVersioner && TheVersioner->isIndependent(It2, It1))
     return false;
 
   auto *I1 = It1.asInstruction();
@@ -836,6 +869,7 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   ///////////
 
   auto Ver = std::make_unique<Versioning>();
+  Ver->ParentLoop = VL;
 
   // If we version any edges, remember their sources
   SmallVector<DepNode> Sources;

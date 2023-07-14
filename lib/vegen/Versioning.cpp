@@ -9,10 +9,6 @@
 
 using namespace llvm;
 
-cl::opt<bool> RemoveRedundantConditions(
-    "remove-redundant-conds",
-    cl::desc("remove redundant versioning conditions"), cl::init(false));
-
 // Add a canonical induction variable for VL.
 // In an ideal world we only need to do this in PredicatedSSA.
 // We also need to insert these instructions in LLVM IR because SCEVExpander
@@ -740,8 +736,7 @@ static void removeRedundantConditions(PredicatedSSA &PSSA,
 
 void Versioner::run(ArrayRef<Versioning *> Versionings,
                     const EquivalenceClasses<Item> &EC,
-                    const DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
-                    bool RemoveRedundantConditions) {
+                    const DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps) {
   VersioningMapTy VersioningMap;
   auto MarkForVersioning = [&](const DepNode &N, ArrayRef<DepCondition> Conds) {
     if (auto *I = N.asInstruction())
@@ -821,8 +816,7 @@ void Versioner::run(ArrayRef<Versioning *> Versionings,
     Conds = std::move(NewConds);
   }
 
-  if (RemoveRedundantConditions)
-    removeRedundantConditions(PSSA, VersioningMap);
+  removeRedundantConditions(PSSA, VersioningMap);
 
   runOnLoop(&PSSA.getTopLevel(), VersioningMap);
 }
@@ -961,6 +955,49 @@ static void finalizeVersioning(Versioning *PrimaryVer) {
   }
 }
 
+// Do loop-unswitching for loop-invariant versioning conditions
+static void hoistConditions(Versioning *Ver) {
+  if (Ver->Secondary)
+    hoistConditions(Ver->Secondary.get());
+
+  auto *VL = Ver->ParentLoop;
+
+  decltype(Versioning::CutEdges) InvariantEdges;
+  SmallVector<DepEdge> RemoveFromVersioning;
+  for (auto [Edge, DepConds] : Ver->CutEdges) {
+    for (auto &DepCond : DepConds)
+      if (DepCond.isLoopInvariant(VL))
+        InvariantEdges[Edge].push_back(DepCond);
+    // If all of the conditions of an edge are loop-invariant,
+    // remove that edge from this level of versioning
+    if (InvariantEdges.count(Edge) &&
+        InvariantEdges[Edge].size() == DepConds.size()) {
+      RemoveFromVersioning.push_back(Edge);
+    }
+  }
+
+  if (InvariantEdges.empty())
+    return;
+
+  auto OuterVer = std::make_unique<Versioning>();
+  assert(VL->isLoop());
+  OuterVer->ParentLoop = VL->getParent();
+  OuterVer->Nodes.push_back(Item(VL));
+  OuterVer->CutEdges = InvariantEdges;
+
+  for (auto Edge : RemoveFromVersioning)
+    Ver->CutEdges.erase(Edge);
+
+  if (Ver->CutEdges.empty()) {
+    // If all of the cut edges are implied, then the versioning plan is empty.
+    // In this case, we just replace the original versioning plan with the "outer" one.
+    *Ver = std::move(*OuterVer);
+  } else {
+    OuterVer->Secondary = std::move(Ver->Secondary);
+    Ver->Secondary = std::move(OuterVer);
+  }
+}
+
 void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
                          const EquivalenceClasses<Item> &EC,
                          PredicatedSSA &PSSA, ScalarEvolution &SE) {
@@ -989,8 +1026,10 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
     }
   }
 
-  for (auto &Ver : VerPlan.Versionings)
+  for (auto &Ver : VerPlan.Versionings) {
     finalizeVersioning(Ver.get());
+    hoistConditions(Ver.get());
+  }
 
   // Lower the versionings from the secondaries to primaries.
   // Collect the outermost versionings first.
@@ -999,8 +1038,7 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
     Frontier.push_back(getOutermostVersioning(Ver.get()));
 
   while (!Frontier.empty()) {
-    TheVersioner.run(Frontier, EC, VerPlan.InterLoopDeps,
-                     RemoveRedundantConditions);
+    TheVersioner.run(Frontier, EC, VerPlan.InterLoopDeps);
     SmallVector<Versioning *> NewFrontier;
     for (auto *Ver : Frontier) {
       if (Ver->Primary)

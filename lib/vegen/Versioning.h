@@ -80,8 +80,7 @@ public:
   // (by merging their original versioning conditions)
   void
   run(llvm::ArrayRef<Versioning *>, const llvm::EquivalenceClasses<Item> &EC,
-      const llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
-      bool RemoveRedundantConditions);
+      const llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps);
 
   bool isIndependent(const Item &Src, const Item &Dst) const {
     return IndepTracker.isIndependent(Src, Dst);

@@ -84,9 +84,7 @@ struct MemRange {
   bool operator==(const MemRange &Other) const {
     return Base == Other.Base && Size == Other.Size;
   }
-  bool operator!=(const MemRange &Other) const {
-    return !((*this) == Other);
-  }
+  bool operator!=(const MemRange &Other) const { return !((*this) == Other); }
   // Get a total order for things like std::set
   bool operator<(const MemRange &Other) const {
     return std::tie(Base, Size, ParentLoop) <
@@ -106,9 +104,8 @@ class DepCondition {
   DepCondition(const ControlCondition *C) : IsUnconditional(false), C(C) {}
 
 public:
-  static DepCondition ifOverlapping(const MemRange &R1, const MemRange &R2) {
-    return DepCondition(R1, R2);
-  }
+  static DepCondition ifOverlapping(const MemRange &R1, const MemRange &R2,
+                                    llvm::ScalarEvolution &, PredicatedSSA &);
   static DepCondition always() { return DepCondition(); }
   static DepCondition ifTrue(const ControlCondition *C) {
     return DepCondition(C);
@@ -141,6 +138,7 @@ public:
   }
   bool isUnconditional() const { return IsUnconditional; }
   bool isConditional() const { return !IsUnconditional; }
+  bool isLoopInvariant(VLoop *) const;
 };
 
 template <> struct llvm::DenseMapInfo<DepCondition> {
@@ -325,6 +323,7 @@ struct Versioning {
   std::vector<DepNode> Nodes;
   // Edges that we speculate to be non-existent
   llvm::DenseMap<DepEdge, std::vector<DepCondition>> CutEdges;
+  VLoop *ParentLoop;
   std::unique_ptr<Versioning> Secondary;
   Versioning *Primary = nullptr;
 };
