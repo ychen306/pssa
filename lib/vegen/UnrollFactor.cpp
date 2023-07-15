@@ -326,7 +326,6 @@ void computeUnrollFactor(ArrayRef<InstructionDescriptor> InstPool,
            << ')' << " " << UFs.lookup(L) << '\n';
     if (UFs[L] > 1) {
       UnrolledLoops.insert(L);
-      break;
     }
   }
   for (auto &KV : UFs) {
