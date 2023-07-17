@@ -282,14 +282,18 @@ static MemoryLocation getLocation(Instruction *I) {
 }
 
 static AliasResult::Kind isAliased(Instruction *I1, Instruction *I2,
-                                   AliasAnalysis &AA, ScalarEvolution &SE) {
+                                   AliasAnalysis &AA, ScalarEvolution &SE,
+                                   bool FromSameLoop) {
   auto Loc1 = getLocation(I1);
   auto Loc2 = getLocation(I2);
   Function *F = I1->getParent()->getParent();
   if (Loc1.Ptr && Loc2.Ptr && isSimple(I1) && isSimple(I2)) {
     // Do the alias check.
     auto Result = AA.alias(Loc1, Loc2);
-    if (Result != AliasResult::MayAlias)
+    // Stop here if it's must alias OR we are checking aliasing between
+    // instructions from different loops (because the SCEV check below assumes
+    // instructions come from the same loop).
+    if (Result != AliasResult::MayAlias || !FromSameLoop)
       return Result;
   }
 
@@ -426,7 +430,7 @@ Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
   auto *L1 = LI.getLoopFor(I1->getParent());
   auto *L2 = LI.getLoopFor(I2->getParent());
   // In case AA reports MayAlias, check DependenceInfo again
-  auto AliasKind = isAliased(I1, I2, AA, SE);
+  auto AliasKind = isAliased(I1, I2, AA, SE, L1 == L2 /*FromSameLoop*/);
   if (L1 == L2) {
     switch (AliasKind) {
     default:
