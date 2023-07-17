@@ -174,6 +174,7 @@ DepCondition DepCondition::ifOverlapping(const MemRange &R1, const MemRange &R2,
   auto *VL = R1.ParentLoop;
   auto *L = PSSA.getOrigLoop(VL);
   if (Base1 && Base2 && Base1->isAffine() && Base2->isAffine() &&
+      Base1->getStepRecurrence(SE) == Base2->getStepRecurrence(SE) &&
       SE.isLoopInvariant(Size1, L) && SE.isLoopInvariant(Size2, L)) {
     MemRange NewR1 = R1, NewR2 = R2;
     NewR1.Base = Base1->getStart();
