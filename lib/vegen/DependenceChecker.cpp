@@ -631,13 +631,13 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
   if (!VL->contains(It))
     return;
 
-  DepEdges.try_emplace({Src, It /*dst*/}, DepCondition::always());
-
   // Find out the outermost loop of `It` that's contained by `VL`.
   while (ParentVL != VL) {
     It = ParentVL;
     ParentVL = ParentVL->getParent();
   }
+
+  DepEdges.try_emplace({Src, It /*dst*/}, DepCondition::always());
 
   // Don't consider things that comes before earliest
   if (It != Earliest && (!VL->contains(It) || !VL->comesBefore(Earliest, It)))
