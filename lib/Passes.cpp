@@ -224,9 +224,9 @@ static void buildPasses(PassBuilder &PB) {
     PB.registerVectorizerStartEPCallback(
         [](FunctionPassManager &FPM, OptimizationLevel) {
           FPM.addPass(ScalarizerPass());
-          addPreprocessingPasses(FPM);
           FPM.addPass(GVNHoistPass());
           FPM.addPass(InstCombinePass());
+          addPreprocessingPasses(FPM);
           FPM.addPass(GlobalSLPPass());
           addCleanupPasses(FPM);
         });

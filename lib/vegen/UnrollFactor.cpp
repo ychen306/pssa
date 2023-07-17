@@ -81,17 +81,16 @@ struct Range {
       Hi = X;
   }
 };
-__attribute__((unused))
-raw_ostream &operator<<(raw_ostream &OS, const Range &R) {
+__attribute__((unused)) raw_ostream &operator<<(raw_ostream &OS,
+                                                const Range &R) {
   return OS << '[' << R.Lo << ',' << R.Hi << ']';
 }
 
 } // namespace
 
 void unrollLoops(
-    ScalarEvolution &SE, LoopInfo &LI, AssumptionCache &AC,
-    DominatorTree &DT, TargetTransformInfo *TTI,
-    const DenseMap<Loop *, unsigned> &UFs,
+    ScalarEvolution &SE, LoopInfo &LI, AssumptionCache &AC, DominatorTree &DT,
+    TargetTransformInfo *TTI, const DenseMap<Loop *, unsigned> &UFs,
     DenseMap<Loop *, UnrolledLoopTy> &DupToOrigLoopMap,
     DenseMap<Instruction *, UnrolledInstruction> *UnrolledIterations,
     DenseSet<BasicBlock *> *EpilogBlocks,
@@ -185,8 +184,11 @@ static void refineUnrollFactors(Function *F, DominatorTree &DT, LoopInfo &LI,
   // Mapping a basic block to its unrolled iteration
   DenseMap<Instruction *, UnrolledInstruction> UnrolledIterations;
   DenseSet<Loop *> OrigLoops;
-  for (auto *L : LI.getLoopsInPreorder())
+  for (auto *L : LI.getLoopsInPreorder()) {
+    assert(L->isRecursivelyLCSSAForm(DT, LI) &&
+           "loops sshould be in lcssa form before unrolling");
     OrigLoops.insert(L);
+  }
 
   auto GetOrigLoop = [&](Loop *L) {
     assert(OrigLoops.count(L) || DupToOrigLoopMap.count(L));
