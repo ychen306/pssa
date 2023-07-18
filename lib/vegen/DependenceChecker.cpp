@@ -14,6 +14,10 @@
 
 using namespace llvm;
 
+cl::opt<bool> DisablePhiSpeculation("disable-phi-speculation",
+                                    cl::desc("Don't speculate phi conditions"),
+                                    cl::init(false));
+
 bool mayReadOrWriteMemory(Instruction *I) {
   return isa<ReturnInst>(I) || I->mayReadOrWriteMemory();
 }
@@ -659,8 +663,10 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
       if (auto *PN = dyn_cast<PHINode>(I); PN && VL->isGatedPhi(PN)) {
         for (auto [C, V] :
              llvm::zip(VL->getPhiConditions(PN), I->operand_values())) {
-          if (auto *OperandI = dyn_cast<Instruction>(V))
+          if (auto *OperandI = dyn_cast<Instruction>(V);
+              OperandI && !DisablePhiSpeculation)
             DepEdges.try_emplace({I, OperandI}, DepCondition::ifTrue(C));
+
           visitCond(C, I);
           visitValue(V, I);
         }
