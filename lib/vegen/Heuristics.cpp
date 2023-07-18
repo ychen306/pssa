@@ -1116,20 +1116,7 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
   PackSet Packs;
   auto PrevCost = getTotalCost(PSSA, Packs, RI, LIT, TTI);
 
-  auto VectorizeStoreChain = [&](ArrayRef<Instruction *> Stores) {
-    if (Stores.size() <= 1)
-      return;
-
-    unsigned Depth = getLoopDepth(PSSA, Stores.front(), LIT);
-    for (auto *I : drop_begin(Stores))
-      if (getLoopDepth(PSSA, I, LIT) != Depth)
-        return;
-
-    SmallVector<Instruction *> SortedStores;
-    // FIXME: deal with cases when there are gaps between the stores
-    if (!sortByPointers(Stores, SortedStores, DL, SE, LI))
-      return;
-
+  auto VectorizeStoreChain = [&](ArrayRef<Instruction *> SortedStores) {
     if (auto *Ptr = dyn_cast<Instruction>(
             getLoadStorePointerOperand(SortedStores.front()))) {
       auto *C = findSpeculativeCond(Ptr, SortedStores, PSSA);
@@ -1153,10 +1140,41 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
     }
   };
 
+  // A group is an unordered set of stores, which we will first sort and divide
+  // up into chains of ordered stores and then vectorize
+  auto VectorizeStoreGroup = [&](ArrayRef<Instruction *> Stores) {
+    if (Stores.size() <= 1)
+      return;
+
+    unsigned Depth = getLoopDepth(PSSA, Stores.front(), LIT);
+    for (auto *I : drop_begin(Stores))
+      if (getLoopDepth(PSSA, I, LIT) != Depth)
+        return;
+
+    SmallVector<Instruction *> SortedStores;
+    // FIXME: deal with cases when there are gaps between the stores
+    if (!sortByPointers(Stores, SortedStores, DL, SE, LI))
+      return;
+
+    // Determine the maximum vector length for this type of stores
+    unsigned BitWidth = cast<StoreInst>(SortedStores.front())
+                            ->getValueOperand()
+                            ->getType()
+                            ->getScalarSizeInBits();
+    unsigned RegWidth = TTI.getLoadStoreVecRegBitWidth(0);
+    unsigned VL = RegWidth / BitWidth;
+
+    // Break up the stores into vectorizable chunks
+    unsigned NumChunks = SortedStores.size() / VL;
+    for (unsigned Chunk = 0; Chunk < NumChunks; Chunk++) {
+      VectorizeStoreChain(ArrayRef<Instruction *>(SortedStores).slice(Chunk * VL, VL));
+    }
+  };
+
   for (ArrayRef<Instruction *> Stores : make_second_range(ObjToStoreMap)) {
     StoreGroupType StoreGroups;
     partitionStores(Stores, StoreGroups, DL, SE, LI);
-    for_each(make_second_range(StoreGroups), VectorizeStoreChain);
+    for_each(make_second_range(StoreGroups), VectorizeStoreGroup);
   }
 
   auto VectorizeReduction = [&](Pack *Seed) {

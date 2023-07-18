@@ -1,7 +1,7 @@
 ; RUN: %opt -passes=global-slp -vectorize-only=kernel %s | lli
 ; RUN: %opt -passes=global-slp -vectorize-only=kernel -S %s | FileCheck %s
 
- ; CHECK:  call <8 x float> @llvm.sqrt.v8f32
+ ; CHECK:  call <4 x float> @llvm.sqrt.v4f32
 
 source_filename = "c-test-108.c"
 target triple = "x86_64-unknown-linux-gnu"
