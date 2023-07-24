@@ -249,7 +249,8 @@ static void refineUnrollFactors(Function *F, DominatorTree &DT, LoopInfo &LI,
       if (!OrigLoops.count(L) && !DupToOrigLoopMap.count(L))
         continue;
 
-      unsigned MinUF = R.size();
+      unsigned MinUF =
+          std::max<unsigned>(PowerOf2Ceil(R.size()), UFs.lookup(GetOrigLoop(L)));
       if (R.Lo / MinUF != R.Hi / MinUF)
         MinUF *= 2;
 
