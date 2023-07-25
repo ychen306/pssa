@@ -5,16 +5,16 @@ import shutil
 
 gcc = 'g++-12'
 clang = 'clang++'
-vegen = 'pssa-clang++'
+vegen = 'vegen-clang++'
 
 def compile_and_run(compiler):
   try:
     extra_args = []
     if compiler == vegen:
-        extra_args = ['-mllvm', '-test-rdx-lowering']
+        extra_args = ['-mllvm', '-do-versioning', '-mllvm', '-unroll-loops']
     subprocess.check_call([compiler, '-O3', 'func.cpp', 'driver.o']+extra_args, stderr=subprocess.DEVNULL, timeout=1200)
     return subprocess.check_output(['./a.out'], timeout=300).decode()
-  except:
+  except Exception as e:
     return None
 
 outdir = os.getcwd() + '/yarpgen_bugs'
@@ -23,7 +23,7 @@ def test(seed):
   print('Testing with seed', seed)
   with tempfile.TemporaryDirectory() as tmpdir:
     os.chdir(tmpdir)
-    subprocess.call(['yarpgen', f'--seed={seed}', '--emit-pragmas=all'], stdout=subprocess.DEVNULL)
+    subprocess.call(['yarpgen', f'--seed={seed}'], stdout=subprocess.DEVNULL)
 
     retcode = subprocess.call(['c++', 'driver.cpp', '-c'], stderr=subprocess.DEVNULL)
     if retcode != 0:
@@ -43,7 +43,7 @@ def test(seed):
       # Test the slp vectorizer on each loops separately
       vegen_out = compile_and_run(vegen)
       if vegen_out != clang_out:
-        print('Found bug')
+        print('Found bug', vegen_out, clang_out)
         subdir = f'{outdir}/seed_{seed}'
         os.makedirs(subdir)
         shutil.copyfile('func.cpp', subdir + '/func.cpp')

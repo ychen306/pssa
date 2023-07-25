@@ -107,6 +107,7 @@ void unrollLoops(
   Worklist.assign(LI.begin(), LI.end());
   while (!Worklist.empty()) {
     Loop *L = Worklist.pop_back_val();
+    auto *ParentLoop = L->getParentLoop();
 
     unsigned UF = UFs.lookup(GetOrigLoop(L));
     if (UF <= 1) {
@@ -128,11 +129,13 @@ void unrollLoops(
 
     ValueMap<Value *, UnrolledValue> UnrollToOrigMap;
     Loop *EpilogL = nullptr;
-    UnrollLoopWithVMap(L, ULO, &LI, &SE, &DT, &AC, TTI, true, UnrollToOrigMap,
-                       &EpilogL);
+    auto UnrollResult = UnrollLoopWithVMap(L, ULO, &LI, &SE, &DT, &AC, TTI,
+                                           true, UnrollToOrigMap, &EpilogL);
     if (EpilogBlocks && EpilogL && EpilogL->getNumBlocks())
       EpilogBlocks->insert(EpilogL->block_begin(), EpilogL->block_end());
 
+    // Figure out the new sub loops
+    SmallVector<Loop *> NewSubLoops;
     // Map the cloned sub loops back to original loops
     for (auto KV : UnrollToOrigMap) {
       auto *BB = dyn_cast<BasicBlock>(KV.first);
@@ -163,10 +166,16 @@ void unrollLoops(
       auto *OrigBB = cast<BasicBlock>(KV.second.V);
       DupToOrigLoopMap.try_emplace(NewLoop, GetOrigLoop(LI.getLoopFor(OrigBB)),
                                    KV.second.Iter);
+      if (UnrollResult == LoopUnrollResult::FullyUnrolled &&
+          NewLoop->getParentLoop() == ParentLoop)
+        NewSubLoops.push_back(NewLoop);
     }
 
     // Unroll the sub loops
-    Worklist.append(L->begin(), L->end());
+    if (UnrollResult == LoopUnrollResult::FullyUnrolled)
+      Worklist.append(NewSubLoops.begin(), NewSubLoops.end());
+    else
+      Worklist.append(L->begin(), L->end());
   }
 }
 
@@ -249,8 +258,8 @@ static void refineUnrollFactors(Function *F, DominatorTree &DT, LoopInfo &LI,
       if (!OrigLoops.count(L) && !DupToOrigLoopMap.count(L))
         continue;
 
-      unsigned MinUF =
-          std::max<unsigned>(PowerOf2Ceil(R.size()), UFs.lookup(GetOrigLoop(L)));
+      unsigned MinUF = std::max<unsigned>(PowerOf2Ceil(R.size()),
+                                          UFs.lookup(GetOrigLoop(L)));
       if (R.Lo / MinUF != R.Hi / MinUF)
         MinUF *= 2;
 
