@@ -751,25 +751,29 @@ void Versioner::run(ArrayRef<Versioning *> Versionings,
   for (auto *Ver : Versionings) {
     assert(!Ver->CutEdges.empty());
 
+    std::vector<DepCondition> GlobalDepConds;
     for (auto [Edge, DepConds] : Ver->CutEdges) {
+      llvm::append_range(GlobalDepConds, DepConds);
       auto [Src, Dst] = Edge;
       auto *SrcI = Src.asInstruction();
       auto *DstI = Dst.asInstruction();
-
       if (SrcI && DstI &&
           (DepConds.size() == 1 && DepConds.front().isOverlapping()))
         AliasedEdgesToIgnore.insert(Edge);
       else
         DepEdgesToIgnore.insert(Edge);
 
-      MarkForVersioning(Src, DepConds);
-      MarkForVersioning(Dst, DepConds);
-      for (auto Node : Ver->Nodes)
-        MarkForVersioning(Node, DepConds);
       if (auto It = InterLoopDeps.find(Edge); It != InterLoopDeps.end()) {
         for (auto &Edge : It->second)
           AliasedEdgesToIgnore.insert(Edge);
       }
+    }
+
+    for (auto [Src, Dst] : make_first_range(Ver->CutEdges)) {
+      MarkForVersioning(Src, GlobalDepConds);
+      MarkForVersioning(Dst, GlobalDepConds);
+      for (auto Node : Ver->Nodes)
+        MarkForVersioning(Node, GlobalDepConds);
     }
   }
 
