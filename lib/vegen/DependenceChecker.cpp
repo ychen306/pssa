@@ -795,9 +795,23 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   for (auto N : Deps)
     MaxFlow.AddArcWithCapacity(DstNodeToIds.lookup(N), T, UnconditionalWeight);
 
+  // Forward the dest nodes to the src nodes
   for (auto N : make_first_range(SrcNodeToIds))
     MaxFlow.AddArcWithCapacity(DstNodeToIds.lookup(N), SrcNodeToIds.lookup(N),
                                UnconditionalWeight);
+
+  // Forward the packed instructions
+  if (Packs) {
+    for (auto *P : *Packs) {
+      unsigned PackId = ++NodeCounter;
+      for (auto *I : P->values()) {
+        if (!SrcNodeToIds.count(I))
+          continue;
+        MaxFlow.AddArcWithCapacity(DstNodeToIds.lookup(I), PackId, UnconditionalWeight);
+        MaxFlow.AddArcWithCapacity(PackId, SrcNodeToIds.lookup(I), UnconditionalWeight);
+      }
+    }
+  }
 
   // Add the out-going edges from the source
   for (auto Node : Nodes)
@@ -830,17 +844,16 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
     else
       errs() << "n" << i << " [label=\"" << N << "\" color=\"blue\"]\n";
 
-    if (DstNodeToIds.count(N)) {
-      if (SCutSet.count(DstNodeToIds.lookup(N)))
-        errs() << "n" << DstNodeToIds.lookup(N) << " [label=\"" << N
-               << "\" color=\"red\"]\n";
-      else if (TCutSet.count(DstNodeToIds.count(N)))
-        errs() << "n" << DstNodeToIds.lookup(N) << " [label=\"" << N
-               << "\" color=\"green\"]\n";
-      else
-        errs() << "n" << DstNodeToIds.lookup(N) << " [label=\"" << N
-               << "\" color=\"blue\"]\n";
-    }
+    assert(DstNodeToIds.count(N));
+    if (SCutSet.count(DstNodeToIds.lookup(N)))
+      errs() << "n" << DstNodeToIds.lookup(N) << " [label=\"" << N
+        << "\" color=\"red\"]\n";
+    else if (TCutSet.count(DstNodeToIds.count(N)))
+      errs() << "n" << DstNodeToIds.lookup(N) << " [label=\"" << N
+        << "\" color=\"green\"]\n";
+    else
+      errs() << "n" << DstNodeToIds.lookup(N) << " [label=\"" << N
+        << "\" color=\"blue\"]\n";
   }
   errs() << "n" << S << "[label =\"SOURCE\"]\n";
   errs() << "n" << T << "[label =\"SINK\"]\n";

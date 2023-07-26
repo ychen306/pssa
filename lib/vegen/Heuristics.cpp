@@ -1167,7 +1167,8 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
     // Break up the stores into vectorizable chunks
     unsigned NumChunks = SortedStores.size() / VL;
     for (unsigned Chunk = 0; Chunk < NumChunks; Chunk++) {
-      VectorizeStoreChain(ArrayRef<Instruction *>(SortedStores).slice(Chunk * VL, VL));
+      VectorizeStoreChain(
+          ArrayRef<Instruction *>(SortedStores).slice(Chunk * VL, VL));
     }
   };
 
@@ -1202,6 +1203,27 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
         return A.second > B.second;
       });
       VectorizeReduction(RdxSeeds.front().first);
+    }
+  }
+
+  // Do a final cut on the speculation to make sure we dont have inter-pack
+  // circular deps
+  if (DoVersioning) {
+    VerPlan.Versionings.clear();
+    VerPlan.InterLoopDeps.clear();
+    for (auto *P : Packs) {
+      // Check the independence of all packed, non-loose insts
+      SmallVector<Instruction *> Insts;
+      for (auto *I : P->values())
+        if (!LIT.isLoose(I))
+          Insts.push_back(I);
+      // Check if the instructions are independent
+      if (!Insts.empty() && !isIndependent(Insts, PSSA, DepChecker)) {
+        // Try again and see if we can do versioning to get independence
+        if (!DoVersioning ||
+            !findNecessaryDeps(VerPlan, P->values(), PSSA, DepChecker, &Packs))
+          return {};
+      }
     }
   }
 

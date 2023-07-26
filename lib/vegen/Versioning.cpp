@@ -998,6 +998,7 @@ static void hoistConditions(Versioning *Ver) {
     *Ver = std::move(*OuterVer);
   } else {
     OuterVer->Secondary = std::move(Ver->Secondary);
+    OuterVer->Primary = Ver;
     Ver->Secondary = std::move(OuterVer);
   }
 }
