@@ -723,7 +723,7 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
 std::unique_ptr<Versioning>
 inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
                 DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps, VLoop *VL,
-                DependenceChecker &DepChecker) {
+                DependenceChecker &DepChecker, const PackSet *Packs) {
   auto ComesBefore = [VL](const Item &It1, const Item &It2) {
     return VL->comesBefore(It1, It2);
   };
@@ -740,19 +740,24 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   assert(!FoundCycle);
 
   // Mapping DepNode -> int
-  DenseMap<DepNode, int> NodeToIds;
+  DenseMap<DepNode, int> SrcNodeToIds;
+  DenseMap<DepNode, int> DstNodeToIds;
   SmallVector<DepNode> IdsToNodes;
   int NodeCounter = 0;
   auto TrackNode = [&](const DepNode Node) {
-    auto [It, Inserted] = NodeToIds.try_emplace(Node, 0);
+    auto [It, Inserted] = SrcNodeToIds.try_emplace(Node, 0);
     if (Inserted) {
       It->second = NodeCounter++;
+      DstNodeToIds[Node] = NodeCounter++;
+      IdsToNodes.push_back(Node);
       IdsToNodes.push_back(Node);
     }
-    assert(IdsToNodes[NodeToIds.lookup(Node)] == Node);
+    assert(IdsToNodes[SrcNodeToIds.lookup(Node)] == Node);
+    assert(IdsToNodes[DstNodeToIds.lookup(Node)] == Node);
   };
 
   llvm::for_each(Nodes, TrackNode);
+  llvm::for_each(Deps, TrackNode);
 
   // Assign ids to the nodes and edges
   int NumConditionalDeps = 0;
@@ -767,10 +772,6 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   int S = ++NodeCounter;
   int T = ++NodeCounter;
 
-  DenseMap<DepNode, int> AuxNodeIds;
-  for (auto It : Deps)
-    AuxNodeIds.try_emplace(It, ++NodeCounter);
-
   // Build the flow graph
   using namespace operations_research;
   SimpleMaxFlow MaxFlow;
@@ -783,26 +784,26 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
     if (Kind.getConds().size() == 1 && Kind.getConds().front().isOverlapping())
       Weight = 1;
     auto [Src, Dst] = Edge;
-    int SrcId = NodeToIds.lookup(Src);
-    int DstId = NodeToIds.lookup(Dst);
     if (Src == Dst)
       continue;
-    // If the edge *points to* one of the items, rewire them to the aux node
-    if (AuxNodeIds.count(Dst))
-      DstId = AuxNodeIds.lookup(Dst);
+    int SrcId = SrcNodeToIds.lookup(Src);
+    int DstId = DstNodeToIds.lookup(Dst);
     auto Arc = MaxFlow.AddArcWithCapacity(SrcId, DstId, Weight);
     EdgeToArcMap[Edge] = Arc;
   }
-  // Point the aux nodes to the sink
-  for (auto N : make_second_range(AuxNodeIds))
-    MaxFlow.AddArcWithCapacity(N, T, UnconditionalWeight);
+  // Point the deps to the sink
+  for (auto N : Deps)
+    MaxFlow.AddArcWithCapacity(DstNodeToIds.lookup(N), T, UnconditionalWeight);
+
+  for (auto N : make_first_range(SrcNodeToIds))
+    MaxFlow.AddArcWithCapacity(DstNodeToIds.lookup(N), SrcNodeToIds.lookup(N),
+                               UnconditionalWeight);
 
   // Add the out-going edges from the source
   for (auto Node : Nodes)
-    MaxFlow.AddArcWithCapacity(S, NodeToIds.lookup(Node), UnconditionalWeight);
+    MaxFlow.AddArcWithCapacity(S, SrcNodeToIds.lookup(Node),
+                               UnconditionalWeight);
   MaxFlow.Solve(S, T);
-  if (MaxFlow.OptimalFlow() >= UnconditionalWeight)
-    return nullptr;
   std::vector<NodeIndex> SCut;
   std::vector<NodeIndex> TCut;
   MaxFlow.GetSourceSideMinCut(&SCut);
@@ -821,7 +822,7 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
     }
   }
   errs() << "digraph mygraph {\n";
-  for (auto [N, i] : NodeToIds) {
+  for (auto [N, i] : SrcNodeToIds) {
     if (SCutSet.count(i))
       errs() << "n" << i << " [label=\"" << N << "\" color=\"red\"]\n";
     else if (TCutSet.count(i))
@@ -829,15 +830,15 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
     else
       errs() << "n" << i << " [label=\"" << N << "\" color=\"blue\"]\n";
 
-    if (AuxNodeIds.count(N)) {
-      if (SCutSet.count(AuxNodeIds.lookup(N)))
-        errs() << "n" << AuxNodeIds.lookup(N) << " [label=\"" << N
+    if (DstNodeToIds.count(N)) {
+      if (SCutSet.count(DstNodeToIds.lookup(N)))
+        errs() << "n" << DstNodeToIds.lookup(N) << " [label=\"" << N
                << "\" color=\"red\"]\n";
-      else if (TCutSet.count(AuxNodeIds.count(N)))
-        errs() << "n" << AuxNodeIds.lookup(N) << " [label=\"" << N
+      else if (TCutSet.count(DstNodeToIds.count(N)))
+        errs() << "n" << DstNodeToIds.lookup(N) << " [label=\"" << N
                << "\" color=\"green\"]\n";
       else
-        errs() << "n" << AuxNodeIds.lookup(N) << " [label=\"" << N
+        errs() << "n" << DstNodeToIds.lookup(N) << " [label=\"" << N
                << "\" color=\"blue\"]\n";
     }
   }
@@ -848,36 +849,40 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
     auto [Src, Dst] = Edge;
     if (Src == Dst)
       continue;
-    if (ActiveArcs.count({NodeToIds.lookup(Src), NodeToIds.lookup(Dst)})) {
+    if (ActiveArcs.count({SrcNodeToIds.lookup(Src), DstNodeToIds.lookup(Dst)})) {
       if (Kind.isConditional())
-        errs() << "n" << NodeToIds.lookup(Src) << " -> n" << NodeToIds.lookup(Dst)
+        errs() << "n" << SrcNodeToIds.lookup(Src) << " -> n" << DstNodeToIds.lookup(Dst)
           << " [color=\"red\" style=\"dashed\"]\n";
       else
-        errs() << "n" << NodeToIds.lookup(Src) << " -> n" << NodeToIds.lookup(Dst)
+        errs() << "n" << SrcNodeToIds.lookup(Src) << " -> n" << DstNodeToIds.lookup(Dst)
           << " [color=\"red\"]\n";
     } else if (ActiveArcs.count(
-                   {NodeToIds.lookup(Src), AuxNodeIds.lookup(Dst)})) {
+                   {SrcNodeToIds.lookup(Src), DstNodeToIds.lookup(Dst)})) {
       if (Kind.isConditional())
-        errs() << "n" << NodeToIds.lookup(Src) << " -> n"
-          << AuxNodeIds.lookup(Dst) << " [color=\"red\" style=\"dashed\"]\n";
+        errs() << "n" << SrcNodeToIds.lookup(Src) << " -> n"
+          << DstNodeToIds.lookup(Dst) << " [color=\"red\" style=\"dashed\"]\n";
       else
-        errs() << "n" << NodeToIds.lookup(Src) << " -> n"
-          << AuxNodeIds.lookup(Dst) << " [color=\"red\"]\n";
-    } else if (AuxNodeIds.count(Dst)) {
-      errs() << "n" << NodeToIds.lookup(Src) << " -> n"
-             << AuxNodeIds.lookup(Dst) << '\n';
+        errs() << "n" << SrcNodeToIds.lookup(Src) << " -> n"
+          << DstNodeToIds.lookup(Dst) << " [color=\"red\"]\n";
+    } else if (DstNodeToIds.count(Dst)) {
+      errs() << "n" << SrcNodeToIds.lookup(Src) << " -> n"
+             << DstNodeToIds.lookup(Dst) << '\n';
     } else {
-      errs() << "n" << NodeToIds.lookup(Src) << " -> n" << NodeToIds.lookup(Dst)
+      errs() << "n" << SrcNodeToIds.lookup(Src) << " -> n" << DstNodeToIds.lookup(Dst)
              << '\n';
     }
   }
-  for (auto N : make_second_range(AuxNodeIds))
-    errs() << "n" << N << " -> n" << T << '\n';
   for (auto Node : Nodes)
-    errs() << "n" << S << " -> n" << NodeToIds.lookup(Node) << '\n';
+    errs() << "n" << S << " -> n" << SrcNodeToIds.lookup(Node) << '\n';
+  for (auto N : Deps)
+    errs() << "n" << DstNodeToIds.lookup(N) << " -> n" << T << '\n';
   errs() << "}\n";
 #endif
   ///////////
+  if (MaxFlow.OptimalFlow() >= UnconditionalWeight) {
+    errs() << "max flow eight = " << MaxFlow.OptimalFlow() << ", unconditional weight = " << UnconditionalWeight << '\n';
+    return nullptr;
+  }
 
   auto Ver = std::make_unique<Versioning>();
   Ver->ParentLoop = VL;
@@ -892,12 +897,8 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
     auto [Src, Dst] = Edge;
     if (Src == Dst)
       continue;
-    (void)Kind;
-    bool SrcInSCut = SCutSet.count(NodeToIds.lookup(Src));
-    bool DstInSCut = AuxNodeIds.count(Dst)
-                         ? SCutSet.count(AuxNodeIds.lookup(Dst))
-                         : SCutSet.count(NodeToIds.lookup(Dst));
-
+    bool SrcInSCut = SCutSet.count(SrcNodeToIds.lookup(Src));
+    bool DstInSCut = SCutSet.count(DstNodeToIds.lookup(Dst));
     assert(EdgeToArcMap.count(Edge));
     if (SrcInSCut && !DstInSCut) {
       // Can't cut an unconditional edge
@@ -936,8 +937,8 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   // conditionally depend on the boundary items (in which case there would be
   // imposible to schedule the versioning checks).
   if (!CondComputations.empty()) {
-    auto SecondaryVer =
-        inferVersioning(CondComputations, Deps, InterLoopDeps, VL, DepChecker);
+    auto SecondaryVer = inferVersioning(CondComputations, Deps, InterLoopDeps,
+                                        VL, DepChecker, Packs);
     if (!SecondaryVer)
       return nullptr;
 #if 0
@@ -1010,7 +1011,8 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) const {
 }
 
 bool findNecessaryDeps(VersioningPlan &VerPlan, ArrayRef<Instruction *> Insts,
-                       PredicatedSSA &PSSA, DependenceChecker &DepChecker) {
+                       PredicatedSSA &PSSA, DependenceChecker &DepChecker,
+                       const PackSet *Packs) {
   SmallVector<DepNode> Nodes;
   SmallVector<Item> Items;
   auto *ParentVL = PSSA.getLoopForInst(Insts.front());
@@ -1030,7 +1032,7 @@ bool findNecessaryDeps(VersioningPlan &VerPlan, ArrayRef<Instruction *> Insts,
     // make sure that they are independent
     for (auto &Insts2 : make_second_range(LoopToInstsMap))
       if (Insts2.size() > 1 &&
-          !findNecessaryDeps(VerPlan, Insts2, PSSA, DepChecker))
+          !findNecessaryDeps(VerPlan, Insts2, PSSA, DepChecker, Packs))
         return false;
 
     // Make sure the disjoint parent loops are independent
@@ -1051,7 +1053,7 @@ bool findNecessaryDeps(VersioningPlan &VerPlan, ArrayRef<Instruction *> Insts,
   }
 
   auto Ver = inferVersioning(Nodes, Items, VerPlan.InterLoopDeps, ParentVL,
-                             DepChecker);
+                             DepChecker, Packs);
   if (!Ver)
     return false;
   if (!Ver->CutEdges.empty())

@@ -338,12 +338,13 @@ struct VersioningPlan {
 std::unique_ptr<Versioning>
 inferVersioning(llvm::ArrayRef<DepNode> Nodes, llvm::ArrayRef<Item> Deps,
                 llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
-                VLoop *VL, DependenceChecker &DepChecker);
+                VLoop *VL, DependenceChecker &DepChecker, const PackSet *Packs);
 
 // Find conditional dependences that, once removed, will `Insts` independent
 // from one another. (and false if no such set of deps exists).
 bool findNecessaryDeps(VersioningPlan &VerPlan,
                        llvm::ArrayRef<llvm::Instruction *> Insts,
-                       PredicatedSSA &PSSA, DependenceChecker &DepChecker);
+                       PredicatedSSA &PSSA, DependenceChecker &DepChecker,
+                       const PackSet *Packs = nullptr);
 
 #endif // VEGEN_DEPENDENCECHECKER_H
