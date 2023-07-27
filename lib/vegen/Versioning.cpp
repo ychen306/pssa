@@ -234,16 +234,21 @@ static const ControlCondition *getCommonCondition(VLoop *VL,
   return getGreatestCommonCondition(Conds);
 }
 
+void Versioner::registerNewCondition(const ControlCondition *C,
+                                     const ControlCondition *C2) {
+  if (OrigConds.count(C))
+    OrigConds[C2] = OrigConds[C];
+  else
+    OrigConds[C2] = C;
+}
+
 // TODO: cache this
 const ControlCondition *
 Versioner::strengthenCondition(const ControlCondition *C, Value *Flag,
                                bool IsTrue) {
   auto *FlagC = PSSA.getInstCond(cast<Instruction>(Flag));
   auto *C2 = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, IsTrue), C);
-  if (OrigConds.count(C))
-    OrigConds[C2] = OrigConds[C];
-  else
-    OrigConds[C2] = C;
+  registerNewCondition(C, C2);
   StrengthenedConds[C2] = {Flag, IsTrue};
   return C2;
 }
@@ -323,6 +328,10 @@ public:
       VL->setInstCond(I, C2);
     }
     return Changed;
+  }
+
+  const decltype(RewrittenConds) &getRewrittenConds() const {
+    return RewrittenConds;
   }
 };
 } // namespace
@@ -624,6 +633,15 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
       }
     }
 
+    for (auto [OldC, NewC] : RewriteWithPhi.getRewrittenConds()) {
+      if (OldC != NewC)
+        registerNewCondition(OldC, NewC);
+    }
+    for (auto [OldC, NewC] : RewriteWithClone.getRewrittenConds()) {
+      if (OldC != NewC)
+        registerNewCondition(OldC, NewC);
+    }
+
     if (UsedPhi)
       UsedInstToVersioningPhiMap.insert(InstToVersioningPhiMap.lookup(I));
   };
@@ -653,6 +671,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
     assert(VersioningMap.count(PN));
     ArrayRef<DepCondition> DepConds = VersioningMap.find(PN)->second;
     for (auto X : llvm::enumerate(VL->getPhiConditions(PN))) {
+      errs() << "!!! " << *X.value() << '\n';
       auto *C = getOriginalCondition(X.value());
       assert(C);
       unsigned i = X.index();
@@ -994,7 +1013,8 @@ static void hoistConditions(Versioning *Ver) {
 
   if (Ver->CutEdges.empty()) {
     // If all of the cut edges are implied, then the versioning plan is empty.
-    // In this case, we just replace the original versioning plan with the "outer" one.
+    // In this case, we just replace the original versioning plan with the
+    // "outer" one.
     *Ver = std::move(*OuterVer);
   } else {
     OuterVer->Secondary = std::move(Ver->Secondary);

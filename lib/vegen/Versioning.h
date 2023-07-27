@@ -68,6 +68,7 @@ class Versioner {
                    CallbackTy Callback);
 
   void runOnLoop(VLoop *, const VersioningMapTy &);
+  void registerNewCondition(const ControlCondition *, const ControlCondition *);
 
 public:
   Versioner(PredicatedSSA &PSSA, llvm::DependenceInfo &DI, llvm::AAResults &AA,
