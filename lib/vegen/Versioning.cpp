@@ -247,7 +247,11 @@ const ControlCondition *
 Versioner::strengthenCondition(const ControlCondition *C, Value *Flag,
                                bool IsTrue) {
   auto *FlagC = PSSA.getInstCond(cast<Instruction>(Flag));
-  auto *C2 = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, IsTrue), C);
+  const ControlCondition *C2;
+  if (FlagC != C)
+    C2 = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, IsTrue), C);
+  else
+    C2 = PSSA.getAnd(FlagC, Flag, IsTrue);
   registerNewCondition(C, C2);
   StrengthenedConds[C2] = {Flag, IsTrue};
   return C2;
@@ -440,6 +444,8 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
                                                           Insert.getTrue()));
       }
       CondSets[DepConds] = NoDep;
+      static int counter;
+      NoDep->setName("flag"+std::to_string(counter++));
     }
     VersioningFlags[It] = CondSets[DepConds];
   }
@@ -788,12 +794,10 @@ void Versioner::run(ArrayRef<Versioning *> Versionings,
       }
     }
 
-    for (auto [Src, Dst] : make_first_range(Ver->CutEdges)) {
-      MarkForVersioning(Src, GlobalDepConds);
-      MarkForVersioning(Dst, GlobalDepConds);
+    //for (auto [Src, Dst] : make_first_range(Ver->CutEdges)) {
       for (auto Node : Ver->Nodes)
         MarkForVersioning(Node, GlobalDepConds);
-    }
+    //}
   }
 
   IndepTracker.ignoreDependences(DepEdgesToIgnore, AliasedEdgesToIgnore,
@@ -823,6 +827,10 @@ void Versioner::run(ArrayRef<Versioning *> Versionings,
         VersioningMap[It] = MergedConds;
     }
   }
+
+  errs() << "!! !dumping versioning map: {\n";
+  for (auto item : make_first_range(VersioningMap))
+      errs() << "\t " << item << '\n';
 
   // Go over the versioning map and deduplicate the conditions (after
   // coalescing)
@@ -950,7 +958,7 @@ static void finalizeVersioning(Versioning *PrimaryVer) {
 #endif
   auto RemoveFromNodes = [&](ArrayRef<DepNode> ToRemove) {
     for (auto &Node : ToRemove) {
-      assert(Nodes.count(Node) || Removed.count(Node));
+      //assert(Nodes.count(Node) || Removed.count(Node));
       Nodes.erase(Node);
 #ifndef NDEBUG
       Removed.insert(Node);
@@ -1038,7 +1046,7 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
   // Use the coalesced conditions
   for (auto &PrimaryVer : VerPlan.Versionings) {
     for (auto *Ver = PrimaryVer.get(); Ver; Ver = Ver->Secondary.get()) {
-      for (auto DepConds : make_second_range(Ver->CutEdges)) {
+      for (auto &DepConds : make_second_range(Ver->CutEdges)) {
         std::vector<DepCondition> NewConds;
         DenseSet<DepCondition> Inserted;
         for (auto &DepCond : DepConds) {
@@ -1063,6 +1071,7 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
     Frontier.push_back(getOutermostVersioning(Ver.get()));
 
   while (!Frontier.empty()) {
+    errs() << "!!! frontier size = " << Frontier.size() << '\n';
     TheVersioner.run(Frontier, EC, VerPlan.InterLoopDeps);
     SmallVector<Versioning *> NewFrontier;
     for (auto *Ver : Frontier) {

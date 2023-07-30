@@ -1,5 +1,4 @@
 #include "vegen/GlobalSLP.h"
-#include "Versioning.h"
 #include "DependenceChecker.h"
 #include "Heuristics.h"
 #include "LoopUnrolling.h"
@@ -7,6 +6,7 @@
 #include "Matcher.h"
 #include "Reduction.h"
 #include "UnrollFactor.h"
+#include "Versioning.h"
 #include "pssa/Lower.h"
 #include "pssa/PSSA.h"
 #include "vegen/Lower.h"
@@ -59,6 +59,8 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
                 &UnrolledIterations);
   }
 
+  F.getParent()->dump();
+
   PostDominatorTree PDT(F);
   PredicatedSSA PSSA(&F, LI, DT, PDT, &SE);
   ReductionInfo RI(PSSA);
@@ -66,8 +68,9 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   Matcher TheMatcher(RI, LIT);
 
   VersioningPlan VerPlan;
-  std::vector<Pack *> Packs = packBottomUp(getTestInsts(), VerPlan, PSSA, RI, LIT,
-                                           TheMatcher, DL, SE, DT, LI, AA, DI, TTI);
+  std::vector<Pack *> Packs =
+      packBottomUp(getTestInsts(), VerPlan, PSSA, RI, LIT, TheMatcher, DL, SE,
+                   DT, LI, AA, DI, TTI);
   if (Packs.empty()) {
     LIT.destroy();
     return PreservedAnalyses::all();
@@ -94,6 +97,32 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   bool DoVersioning = !VerPlan.Versionings.empty();
   // Lower the versioning plan
   if (DoVersioning) {
+    for (auto &Ver : VerPlan.Versionings) {
+      errs() << "!!! dumping primary versioning:\n";
+      errs() << "\t has secondary? " << (bool)Ver->Secondary << '\n';
+      // Don't need to cut edges
+      assert(!Ver->CutEdges.empty());
+      errs() << "Nodes to version: {\n";
+      for (auto N : Ver->Nodes)
+        errs() << '\t' << N << '\n';
+      errs() << "}\n";
+
+      ConditionSetTracker CST(SE, PSSA);
+      for (auto DepConds : make_second_range(Ver->CutEdges))
+        for (auto &DepCond : DepConds)
+          CST.add(DepCond);
+
+      for (auto [Edge, DepConds] : Ver->CutEdges) {
+        auto [Src, Dst] = Edge;
+        errs() << "Cut edge: " << Src << " -> " << Dst << '\n';
+        for (auto DepCond : DepConds) {
+          errs() << "\tIF " << DepCond << '\n';
+          errs() << "\t coalesced condition: "
+                 << CST.getCoalescedCondition(DepCond) << '\n';
+        }
+      }
+    }
+
     // Group the items into equivalence classes according to the packing
     // decisions. If a pack of instructions come from the same loop, then they
     // should be in the same class. If a pack of instructions come from
@@ -110,11 +139,14 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
     lowerVersioningPlan(VerPlan, TheVersioner, EC, PSSA, SE);
 
     // Pack the versioning phis
-    auto NewPacks = packVersioningPhis(Packs, TheVersioner, PSSA);
+    DependenceChecker DepChecker(PSSA, DI, AA, LI, SE, nullptr /*dead insts*/,
+                                 &TheVersioner);
+    auto NewPacks = packVersioningPhis(Packs, DepChecker, TheVersioner, PSSA);
     append_range(Packs, NewPacks);
   }
 
-  if (!lower(Packs, PSSA, DI, AA, LI, SE, DoVersioning ? &TheVersioner : nullptr)) {
+  if (!lower(Packs, PSSA, DI, AA, LI, SE,
+             DoVersioning ? &TheVersioner : nullptr)) {
     llvm_unreachable("failed to lower to pssa");
     return PreservedAnalyses::all();
   }

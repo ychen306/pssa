@@ -34,6 +34,7 @@ std::vector<Pack *> packBottomUp(llvm::ArrayRef<InstructionDescriptor> InstPool,
 // If we generate versioning phis for a packed value,
 // we try to also pack those versioning phis
 std::vector<Pack *> packVersioningPhis(llvm::ArrayRef<Pack *>,
+                                       DependenceChecker &DepChecker,
                                        const Versioner &, PredicatedSSA &PSSA);
 
 // Decompose a list of reductions with reducers and pack those instructions

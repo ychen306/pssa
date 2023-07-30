@@ -735,7 +735,8 @@ static bool haveSameParent(ArrayRef<VLoop *> Loops) {
 
 // Return whether the Insts are independent
 static bool isIndependent(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
-                          DependenceChecker &DepChecker) {
+                          DependenceChecker &DepChecker,
+                          const PackSet *Packs = nullptr) {
   SmallVector<Item> Items;
 
   auto *ParentVL = PSSA.getLoopForInst(Insts.front());
@@ -773,7 +774,10 @@ static bool isIndependent(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
   }
 
   SmallVector<Item> Deps;
-  findInBetweenDeps(Deps, Items, ParentVL, PSSA, DepChecker);
+  bool FoundCycle =
+      findInBetweenDeps(Deps, Items, ParentVL, PSSA, DepChecker, Packs);
+  if (FoundCycle)
+    return false;
   SmallDenseSet<Item, 8, ItemHashInfo> ItemSet(Items.begin(), Items.end());
   for (auto &Dep : Deps)
     if (ItemSet.count(Dep))
@@ -1218,7 +1222,7 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
         if (!LIT.isLoose(I))
           Insts.push_back(I);
       // Check if the instructions are independent
-      if (!Insts.empty() && !isIndependent(Insts, PSSA, DepChecker)) {
+      if (!Insts.empty() && !isIndependent(Insts, PSSA, DepChecker, &Packs)) {
         // Try again and see if we can do versioning to get independence
         if (!DoVersioning ||
             !findNecessaryDeps(VerPlan, P->values(), PSSA, DepChecker, &Packs))
@@ -1238,6 +1242,7 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
 }
 
 std::vector<Pack *> packVersioningPhis(ArrayRef<Pack *> Packs,
+                                       DependenceChecker &DepChecker,
                                        const Versioner &TheVersioner,
                                        PredicatedSSA &PSSA) {
   std::vector<Pack *> NewPacks;
@@ -1255,6 +1260,8 @@ std::vector<Pack *> packVersioningPhis(ArrayRef<Pack *> Packs,
       SmallVector<Instruction *> Phis;
       for (auto *I : Values)
         Phis.push_back(TheVersioner.getVersioningPhis(I)[i]);
+      if (!isIndependent(Phis, PSSA, DepChecker))
+        continue;
       if (auto *PhiP = PHIPack::tryPack(Phis, PSSA)) {
         errs() << "!!! packing " << *PhiP << '\n';
         NewPacks.push_back(PhiP);

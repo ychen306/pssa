@@ -484,11 +484,10 @@ bool DependenceChecker::depends(
 
     auto Kind = getDepKind(I1, I2);
     if (DepEdges && Kind) {
-      if (isImplied(C1, C2))
+      if (isImplied(C1, C2) || !Kind->isUnconditional())
         DepEdges->try_emplace({I2, I1}, *Kind);
       else
-        DepEdges->try_emplace({I2, I1},
-                              DepKind({*Kind, DepCondition::ifTrue(C1)}));
+        DepEdges->try_emplace({I2, I1}, DepCondition::ifTrue(C1));
     }
     return Kind.hasValue();
   } else if (VL1 && VL2) {
@@ -733,11 +732,9 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   // dep edges
   SmallVector<Item> DummyDeps;
   DependencesFinder DepFinder(DummyDeps, Earliest, VL, DepChecker,
-                              nullptr /*packs*/, &InterLoopDeps);
-  bool FoundCycle = false;
+                              Packs, &InterLoopDeps);
   for (auto Node : Nodes)
-    FoundCycle |= DepFinder.findDepForNode(Node);
-  assert(!FoundCycle);
+    DepFinder.findDepForNode(Node);
 
   // Mapping DepNode -> int
   DenseMap<DepNode, int> SrcNodeToIds;
@@ -828,7 +825,7 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
          << ", num conditional deps: " << NumConditionalDeps << '\n';
 
   /////////
-#if 0
+#if 1
   DenseSet<std::pair<int, int>> ActiveArcs;
   for (int Arc = 0; Arc < MaxFlow.NumArcs(); Arc++) {
     if (MaxFlow.Flow(Arc) != 0) {
@@ -924,6 +921,8 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
           CondComputations.push_back(C);
       }
       Ver->CutEdges.try_emplace(Edge, Kind.getConds());
+      Ver->Nodes.push_back(Src);
+      Ver->Nodes.push_back(Dst);
       Sources.push_back(Src);
     }
   }
@@ -954,7 +953,7 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
                                         VL, DepChecker, Packs);
     if (!SecondaryVer)
       return nullptr;
-#if 0
+#if 1
     for (auto [Edge, Conds] : SecondaryVer->CutEdges) {
       auto [Src, Dst] = Edge;
       errs() << "<<<<< dumping secondary versioning\n";

@@ -468,7 +468,9 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     lowerVersioningPlan(VerPlan, TheVersioner, EC, PSSA, SE);
 
     // Pack the versioning phis
-    auto NewPacks = packVersioningPhis(Packs, TheVersioner, PSSA);
+    DependenceChecker DepChecker(PSSA, DI, AA, LI, SE, nullptr /*dead insts*/,
+                                 &TheVersioner);
+    auto NewPacks = packVersioningPhis(Packs, DepChecker, TheVersioner, PSSA);
     Packs.append(NewPacks.begin(), NewPacks.end());
 
     bool Ok = lower(Packs, PSSA, DI, AA, LI, SE, &TheVersioner);
