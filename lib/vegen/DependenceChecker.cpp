@@ -825,7 +825,7 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
          << ", num conditional deps: " << NumConditionalDeps << '\n';
 
   /////////
-#if 1
+#if 0
   DenseSet<std::pair<int, int>> ActiveArcs;
   for (int Arc = 0; Arc < MaxFlow.NumArcs(); Arc++) {
     if (MaxFlow.Flow(Arc) != 0) {
@@ -921,8 +921,6 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
           CondComputations.push_back(C);
       }
       Ver->CutEdges.try_emplace(Edge, Kind.getConds());
-      Ver->Nodes.push_back(Src);
-      Ver->Nodes.push_back(Dst);
       Sources.push_back(Src);
     }
   }
@@ -953,7 +951,7 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
                                         VL, DepChecker, Packs);
     if (!SecondaryVer)
       return nullptr;
-#if 1
+#if 0
     for (auto [Edge, Conds] : SecondaryVer->CutEdges) {
       auto [Src, Dst] = Edge;
       errs() << "<<<<< dumping secondary versioning\n";

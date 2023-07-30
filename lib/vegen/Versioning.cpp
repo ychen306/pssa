@@ -247,11 +247,7 @@ const ControlCondition *
 Versioner::strengthenCondition(const ControlCondition *C, Value *Flag,
                                bool IsTrue) {
   auto *FlagC = PSSA.getInstCond(cast<Instruction>(Flag));
-  const ControlCondition *C2;
-  if (FlagC != C)
-    C2 = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, IsTrue), C);
-  else
-    C2 = PSSA.getAnd(FlagC, Flag, IsTrue);
+  auto *C2 = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, IsTrue), C);
   registerNewCondition(C, C2);
   StrengthenedConds[C2] = {Flag, IsTrue};
   return C2;
@@ -444,8 +440,6 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
                                                           Insert.getTrue()));
       }
       CondSets[DepConds] = NoDep;
-      static int counter;
-      NoDep->setName("flag"+std::to_string(counter++));
     }
     VersioningFlags[It] = CondSets[DepConds];
   }
@@ -677,7 +671,6 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
     assert(VersioningMap.count(PN));
     ArrayRef<DepCondition> DepConds = VersioningMap.find(PN)->second;
     for (auto X : llvm::enumerate(VL->getPhiConditions(PN))) {
-      errs() << "!!! " << *X.value() << '\n';
       auto *C = getOriginalCondition(X.value());
       assert(C);
       unsigned i = X.index();
@@ -794,10 +787,12 @@ void Versioner::run(ArrayRef<Versioning *> Versionings,
       }
     }
 
-    //for (auto [Src, Dst] : make_first_range(Ver->CutEdges)) {
+    for (auto [Src, Dst] : make_first_range(Ver->CutEdges)) {
+      MarkForVersioning(Src, GlobalDepConds);
+      MarkForVersioning(Dst, GlobalDepConds);
       for (auto Node : Ver->Nodes)
         MarkForVersioning(Node, GlobalDepConds);
-    //}
+    }
   }
 
   IndepTracker.ignoreDependences(DepEdgesToIgnore, AliasedEdgesToIgnore,
@@ -827,10 +822,6 @@ void Versioner::run(ArrayRef<Versioning *> Versionings,
         VersioningMap[It] = MergedConds;
     }
   }
-
-  errs() << "!! !dumping versioning map: {\n";
-  for (auto item : make_first_range(VersioningMap))
-      errs() << "\t " << item << '\n';
 
   // Go over the versioning map and deduplicate the conditions (after
   // coalescing)
@@ -1071,7 +1062,6 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
     Frontier.push_back(getOutermostVersioning(Ver.get()));
 
   while (!Frontier.empty()) {
-    errs() << "!!! frontier size = " << Frontier.size() << '\n';
     TheVersioner.run(Frontier, EC, VerPlan.InterLoopDeps);
     SmallVector<Versioning *> NewFrontier;
     for (auto *Ver : Frontier) {

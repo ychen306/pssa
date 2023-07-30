@@ -97,32 +97,6 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   bool DoVersioning = !VerPlan.Versionings.empty();
   // Lower the versioning plan
   if (DoVersioning) {
-    for (auto &Ver : VerPlan.Versionings) {
-      errs() << "!!! dumping primary versioning:\n";
-      errs() << "\t has secondary? " << (bool)Ver->Secondary << '\n';
-      // Don't need to cut edges
-      assert(!Ver->CutEdges.empty());
-      errs() << "Nodes to version: {\n";
-      for (auto N : Ver->Nodes)
-        errs() << '\t' << N << '\n';
-      errs() << "}\n";
-
-      ConditionSetTracker CST(SE, PSSA);
-      for (auto DepConds : make_second_range(Ver->CutEdges))
-        for (auto &DepCond : DepConds)
-          CST.add(DepCond);
-
-      for (auto [Edge, DepConds] : Ver->CutEdges) {
-        auto [Src, Dst] = Edge;
-        errs() << "Cut edge: " << Src << " -> " << Dst << '\n';
-        for (auto DepCond : DepConds) {
-          errs() << "\tIF " << DepCond << '\n';
-          errs() << "\t coalesced condition: "
-                 << CST.getCoalescedCondition(DepCond) << '\n';
-        }
-      }
-    }
-
     // Group the items into equivalence classes according to the packing
     // decisions. If a pack of instructions come from the same loop, then they
     // should be in the same class. If a pack of instructions come from

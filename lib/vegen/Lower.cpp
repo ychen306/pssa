@@ -311,15 +311,9 @@ static bool merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
 
   // The items should be independent
   SmallDenseSet<Item, 8, ItemHashInfo> ItemSet(Items.begin(), Items.end());
-  errs() << "items to merge : {\n";
-  for (auto It : ItemSet)
-    errs() << "\t " << It << '\n';
-  errs() << "}\n";
   for (auto It : Deps)
-    if (ItemSet.count(It)) {
-      errs() << "bad! depending " << It << '\n';
+    if (ItemSet.count(It))
       return false;
-    }
 
   ItemMover Mover(VL);
 
