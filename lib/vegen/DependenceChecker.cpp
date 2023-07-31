@@ -623,7 +623,7 @@ void DependencesFinder::visitCond(const ControlCondition *C,
 
 void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
   if (!Processing.insert(It).second) {
-    errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
+    //errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
     FoundCycle = true;
     return;
   }

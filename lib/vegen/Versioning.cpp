@@ -201,7 +201,7 @@ VLoop *Versioner::cloneLoop(VLoop *OrigVL, ValueToValueMapTy &VMap,
     Mapper.remapInstruction(*ClonedI);
     if (auto *PN = dyn_cast<PHINode>(ClonedI)) {
       SmallVector<const ControlCondition *> PhiConds;
-      for (auto *IncomingC : VL->getPhiConditions(PN))
+      for (auto *IncomingC : OrigVL->getPhiConditions(cast<PHINode>(I)))
         PhiConds.push_back(RemapCondition(IncomingC));
       VL->insert(PN, PhiConds, C);
     } else {
@@ -798,11 +798,13 @@ void Versioner::run(ArrayRef<Versioning *> Versionings,
   IndepTracker.ignoreDependences(DepEdgesToIgnore, AliasedEdgesToIgnore,
                                  InterLoopDeps);
 
+#if 0
   ConditionSetTracker CST(SE, PSSA);
   // Visit all of the conditions for coalescing
   for (auto &DepConds : make_second_range(VersioningMap))
     for (auto &DepCond : DepConds)
       CST.add(DepCond);
+#endif
 
   // Merge the conditions for items in the same equivalence classes
   for (auto I = EC.begin(), E = EC.end(); I != E; ++I) {
@@ -829,7 +831,7 @@ void Versioner::run(ArrayRef<Versioning *> Versionings,
     std::vector<DepCondition> NewConds;
     DenseSet<DepCondition> Inserted;
     for (const auto &DepCond : Conds) {
-      auto NewCond = CST.getCoalescedCondition(DepCond);
+      auto NewCond = DepCond;//CST.getCoalescedCondition(DepCond);
       if (Inserted.insert(NewCond).second)
         NewConds.push_back(NewCond);
     }
