@@ -982,10 +982,7 @@ static void finalizeVersioning(Versioning *PrimaryVer) {
 }
 
 // Do loop-unswitching for loop-invariant versioning conditions
-static void hoistConditions(Versioning *Ver) {
-  if (Ver->Secondary)
-    hoistConditions(Ver->Secondary.get());
-
+static std::unique_ptr<Versioning> hoistConditions(Versioning *Ver) {
   auto *VL = Ver->ParentLoop;
 
   decltype(Versioning::CutEdges) InvariantEdges;
@@ -994,6 +991,7 @@ static void hoistConditions(Versioning *Ver) {
     for (auto &DepCond : DepConds)
       if (DepCond.isLoopInvariant(VL))
         InvariantEdges[Edge].push_back(DepCond);
+
     // If all of the conditions of an edge are loop-invariant,
     // remove that edge from this level of versioning
     if (InvariantEdges.count(Edge) &&
@@ -1003,7 +1001,7 @@ static void hoistConditions(Versioning *Ver) {
   }
 
   if (InvariantEdges.empty())
-    return;
+    return nullptr;
 
   auto OuterVer = std::make_unique<Versioning>();
   assert(VL->isLoop());
@@ -1014,16 +1012,7 @@ static void hoistConditions(Versioning *Ver) {
   for (auto Edge : RemoveFromVersioning)
     Ver->CutEdges.erase(Edge);
 
-  if (Ver->CutEdges.empty()) {
-    // If all of the cut edges are implied, then the versioning plan is empty.
-    // In this case, we just replace the original versioning plan with the
-    // "outer" one.
-    *Ver = std::move(*OuterVer);
-  } else {
-    OuterVer->Secondary = std::move(Ver->Secondary);
-    OuterVer->Primary = Ver;
-    Ver->Secondary = std::move(OuterVer);
-  }
+  return OuterVer;
 }
 
 void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
@@ -1054,10 +1043,8 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
     }
   }
 
-  for (auto &Ver : VerPlan.Versionings) {
+  for (auto &Ver : VerPlan.Versionings)
     finalizeVersioning(Ver.get());
-    hoistConditions(Ver.get());
-  }
 
   // Lower the versionings from the secondaries to primaries.
   // Collect the outermost versionings first.
@@ -1066,6 +1053,20 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
     Frontier.push_back(getOutermostVersioning(Ver.get()));
 
   while (!Frontier.empty()) {
+    // For each versioning in the frontier, try to hoist any loop invariant conditions
+    SmallVector<Versioning *> TempFrontier;
+    std::vector<std::unique_ptr<Versioning>> OuterFrontiers;
+    for (auto *Ver : Frontier) {
+      auto OuterVer = hoistConditions(Ver);
+      if (!Ver->CutEdges.empty())
+        TempFrontier.push_back(Ver);
+      if (OuterVer) {
+        TempFrontier.push_back(OuterVer.get());
+        OuterFrontiers.push_back(std::move(OuterVer));
+      }
+    }
+    Frontier = std::move(TempFrontier);
+
     TheVersioner.run(Frontier, EC, VerPlan.InterLoopDeps);
     SmallVector<Versioning *> NewFrontier;
     for (auto *Ver : Frontier) {
