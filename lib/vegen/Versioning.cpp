@@ -47,6 +47,8 @@ class AddRecLoopCollector : public SCEVRewriteVisitor<AddRecLoopCollector> {
 
 public:
   const SCEV *visitAddRecExpr(const SCEVAddRecExpr *AddRec) {
+    for (auto *Op : AddRec->operands())
+      visit(Op);
     Loops.insert(const_cast<Loop *>(AddRec->getLoop()));
     return AddRec;
   }

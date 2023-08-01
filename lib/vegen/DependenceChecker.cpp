@@ -623,7 +623,7 @@ void DependencesFinder::visitCond(const ControlCondition *C,
 
 void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
   if (!Processing.insert(It).second) {
-    //errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
+    // errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
     FoundCycle = true;
     return;
   }
@@ -689,10 +689,11 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
          ++I) {
       if (!mayReadOrWriteMemory(*I))
         continue;
-      for (auto &It2 : Coupled)
+      for (auto &It2 : Coupled) {
         if (VL->comesBefore(*I, It2) &&
             DepChecker.depends(*I, It2, &DepEdges, InterLoopDeps))
           visit(*I, true, It2);
+      }
     }
   }
 
@@ -731,8 +732,8 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   // We don't really care about the deps found by DepFinder. We only want the
   // dep edges
   SmallVector<Item> DummyDeps;
-  DependencesFinder DepFinder(DummyDeps, Earliest, VL, DepChecker,
-                              Packs, &InterLoopDeps);
+  DependencesFinder DepFinder(DummyDeps, Earliest, VL, DepChecker, Packs,
+                              &InterLoopDeps);
   for (auto Node : Nodes)
     DepFinder.findDepForNode(Node);
 
@@ -804,8 +805,10 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
       for (auto *I : P->values()) {
         if (!SrcNodeToIds.count(I))
           continue;
-        MaxFlow.AddArcWithCapacity(DstNodeToIds.lookup(I), PackId, UnconditionalWeight);
-        MaxFlow.AddArcWithCapacity(PackId, SrcNodeToIds.lookup(I), UnconditionalWeight);
+        MaxFlow.AddArcWithCapacity(DstNodeToIds.lookup(I), PackId,
+                                   UnconditionalWeight);
+        MaxFlow.AddArcWithCapacity(PackId, SrcNodeToIds.lookup(I),
+                                   UnconditionalWeight);
       }
     }
   }
@@ -890,12 +893,14 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
 #endif
   ///////////
   if (MaxFlow.OptimalFlow() >= UnconditionalWeight) {
-    errs() << "max flow eight = " << MaxFlow.OptimalFlow() << ", unconditional weight = " << UnconditionalWeight << '\n';
+    errs() << "max flow eight = " << MaxFlow.OptimalFlow()
+           << ", unconditional weight = " << UnconditionalWeight << '\n';
     return nullptr;
   }
 
   auto Ver = std::make_unique<Versioning>();
   Ver->ParentLoop = VL;
+  Ver->Primary = nullptr;
 
   // If we version any edges, remember their sources
   SmallVector<DepNode> Sources;
