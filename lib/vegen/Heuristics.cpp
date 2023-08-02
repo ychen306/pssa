@@ -251,6 +251,17 @@ Pack *decomposeAndPack(PredicatedSSA &PSSA, ReductionInfo &RI,
   return SIMDPack::tryPack(Reducers);
 }
 
+
+// Make sure when we pack divergent loads we can speculate the address
+static bool canSpeculativelyComputeAddr(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA) {
+  auto *Ptr = dyn_cast<Instruction>(getLoadStorePointerOperand(Insts.front()));
+  // Can speculate if the pointer is not an instruction (e.g., global or function arg)
+  if (!Ptr)
+    return true;
+  auto *C = findSpeculativeCond(Ptr, Insts, PSSA);
+  return canSpeculateAt(Ptr, C, PSSA);
+}
+
 // FIXME: make sure that the packed instructions are independent
 // FIXME: make sure we are packing instructions that have the same nesting depth
 TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
@@ -270,13 +281,7 @@ TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
       return {};
 
   if (auto *P = LoadPack::tryPack(Insts, DL, SE, DT, LI, PSSA)) {
-    // Make sure when we pack divergent loads we can speculate the address
-    auto *Ptr =
-        dyn_cast<Instruction>(getLoadStorePointerOperand(P->values().front()));
-    if (!Ptr)
-      return {P};
-    auto *C = findSpeculativeCond(Ptr, Insts, PSSA);
-    if (canSpeculateAt(Ptr, C, PSSA))
+    if (canSpeculativelyComputeAddr(Insts, PSSA))
       return {P};
   }
 
@@ -366,8 +371,10 @@ SmallVector<Pack *> Packer::getLoadPacks(ArrayRef<Value *> Values) {
     SmallVector<Instruction *> Insts(EC.member_begin(I), EC.member_end());
     if (!llvm::isPowerOf2_32(Insts.size()))
       continue;
-    if (auto *P = LoadPack::tryPack(Insts, DL, SE, DT, LI, PSSA))
-      LoadPacks.push_back(P);
+    if (auto *P = LoadPack::tryPack(Insts, DL, SE, DT, LI, PSSA)) {
+      if (canSpeculativelyComputeAddr(Insts, PSSA))
+        LoadPacks.push_back(P);
+    }
   }
   return LoadPacks;
 }
@@ -1121,12 +1128,8 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
   auto PrevCost = getTotalCost(PSSA, Packs, RI, LIT, TTI);
 
   auto VectorizeStoreChain = [&](ArrayRef<Instruction *> SortedStores) {
-    if (auto *Ptr = dyn_cast<Instruction>(
-            getLoadStorePointerOperand(SortedStores.front()))) {
-      auto *C = findSpeculativeCond(Ptr, SortedStores, PSSA);
-      if (!canSpeculateAt(Ptr, C, PSSA))
-        return;
-    }
+    if (!canSpeculativelyComputeAddr(SortedStores, PSSA))
+      return;
 
     auto *StoreP = StorePack::tryPack(SortedStores, DL, SE, LI, PSSA);
     if (!StoreP)
