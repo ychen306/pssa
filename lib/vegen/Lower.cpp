@@ -306,8 +306,13 @@ static bool merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
   auto *VL = PSSA.getLoopForItem(Items.front());
   SmallVector<Item> Deps;
   bool FoundCycle = findInBetweenDeps(Deps, Items, VL, PSSA, DepChecker, Packs);
-  if (FoundCycle)
+  if (FoundCycle) {
+    errs() << "Found cycle while trying to merge: {\n";
+    for (auto it : Items)
+      errs() << '\t' << it << '\n';
+    errs() << "}\n";
     return false;
+  }
 
   // The items should be independent
   SmallDenseSet<Item, 8, ItemHashInfo> ItemSet(Items.begin(), Items.end());

@@ -576,9 +576,6 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
 
       auto *VL = PSSA.getLoopForInst(I);
       auto *UserVL = PSSA.getLoopForInst(UserI);
-      // FIXME: instead of checking for equality, we *have* to check that the
-      // versioning of UserI is *implied by* the versioning of I (i.e., <=
-      // instead of ==).
       if (VL->contains(UserVL) && CondsAreImplied(DepConds, UserI)) {
         // If the use comes from another instruction that gets versioned under
         // the same condition we just change that instruction (and its clone)
@@ -929,6 +926,8 @@ bool IndependenceTracker::isIndependent(const DepNode &Src,
   auto *DstI = Dst.asInstruction();
   // FIXME: also support inst-to-loop dep
   if (SrcI && DstI) {
+    //errs() << "checking independence: " << Src << ", " << Dst << " CONDS = " 
+    //  << *PSSA.getInstCond(SrcI) << ", " << *PSSA.getInstCond(DstI) << '\n';
     if (TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
                                  PSSA.getInstCond(DstI)))
       return true;
@@ -1016,7 +1015,7 @@ static std::unique_ptr<Versioning> hoistConditions(Versioning *Ver) {
 }
 
 void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
-                         const EquivalenceClasses<Item> &EC,
+                         EquivalenceClasses<Item> EC,
                          PredicatedSSA &PSSA, ScalarEvolution &SE) {
   // Visit all of the conditions and coalesce them
   ConditionSetTracker CST(SE, PSSA);
@@ -1068,6 +1067,25 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
     }
     Frontier = std::move(TempFrontier);
 
+#if 1
+    // Union the conditions for nodes in the same versioning
+    auto OldEC = EC;
+    for (auto *Ver : Frontier) {
+      SmallVector<Item> Items;
+      for (auto N : Ver->Nodes) {
+        if (auto *I = N.asInstruction())
+          Items.push_back(I);
+        else if (auto *VL = N.asLoop())
+          Items.push_back(VL);
+      }
+      if (Items.empty())
+        continue;
+      auto I0 = Items.front();
+      for (auto I : Items)
+        EC.unionSets(I, I0);
+    }
+#endif
+
     TheVersioner.run(Frontier, EC, VerPlan.InterLoopDeps);
     SmallVector<Versioning *> NewFrontier;
     for (auto *Ver : Frontier) {
@@ -1075,5 +1093,6 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
         NewFrontier.push_back(Ver->Primary);
     }
     Frontier = std::move(NewFrontier);
+    EC = std::move(OldEC);
   }
 }

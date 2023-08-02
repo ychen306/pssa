@@ -155,6 +155,8 @@ Optional<MemRange> MemRange::promote(ScalarEvolution &SE, PredicatedSSA &PSSA) {
     return None;
 
   auto *BackedgeTakenCount = SE.getBackedgeTakenCount(L);
+  if (isa<SCEVCouldNotCompute>(BackedgeTakenCount))
+    return None;
   auto *TripCount =
       getAdd(SE.getOne(BackedgeTakenCount->getType()), BackedgeTakenCount, SE);
   return MemRange{BaseAR->getStart(),
