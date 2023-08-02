@@ -125,8 +125,10 @@ static Value *emitOverlappingChecks(const DepCondition &DepCond, VLoop *VL,
   // indvars for the involving loops.
   DenseSet<Loop *> Loops;
   AddRecLoopCollector LoopCollector(Loops, SE);
-  LoopCollector.visit(End1);
-  LoopCollector.visit(End2);
+  LoopCollector.visit(R1.Base);
+  LoopCollector.visit(R1.Size);
+  LoopCollector.visit(R2.Base);
+  LoopCollector.visit(R2.Size);
   for (auto *L : Loops)
     addIndvar(L, PSSA);
 

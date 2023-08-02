@@ -245,8 +245,8 @@ static void refineUnrollFactors(Function *F, DominatorTree &DT, LoopInfo &LI,
         continue;
       PackedIterations[L].update(
           UnrolledIterations.count(I) ? UnrolledIterations.lookup(I).Iter : 0);
-      for (L = L->getParentLoop(); L; L = L->getParentLoop()) {
-        PackedIterations[L].update(
+      for (/*L = L->getParentLoop()*/; L; L = L->getParentLoop()) {
+        PackedIterations[L->getParentLoop()].update(
             DupToOrigLoopMap.count(L) ? DupToOrigLoopMap.lookup(L).Iter : 0);
       }
     }
