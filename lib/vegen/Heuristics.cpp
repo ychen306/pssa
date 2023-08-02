@@ -1090,8 +1090,11 @@ static void findPackableReductions(
       if (SubRdxs.size() < 2)
         continue;
 
-      // Round the number of reduction elements to even and use as the seed
-      ArrayRef<Value *> Seed(SubRdxs.data(), SubRdxs.size() / 2 * 2);
+      // Round the number of reduction elements to the next power of 2
+      unsigned RdxSize = SubRdxs.size();
+      if (!isPowerOf2_32(RdxSize))
+        RdxSize = PowerOf2Ceil(RdxSize) / 2;
+      ArrayRef<Value *> Seed(SubRdxs.data(), RdxSize);
 
       if (auto *P = Heuristic.getSingleProducer(Seed)) {
         SmallVector<Value *> Args;

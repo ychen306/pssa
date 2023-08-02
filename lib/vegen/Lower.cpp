@@ -868,6 +868,9 @@ const ControlCondition *findSpeculativeCond(Instruction *I,
       continue;
     }
 
+    if (!VL->contains(UserVL))
+      return nullptr;
+
     // Tougher case: the def is in an outer loop that contains the uses.
     // In this case, we want the loop condition of
     // the immediate child loop that containes the use.
