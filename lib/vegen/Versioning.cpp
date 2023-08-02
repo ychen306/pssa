@@ -833,7 +833,7 @@ void Versioner::run(ArrayRef<Versioning *> Versionings,
     std::vector<DepCondition> NewConds;
     DenseSet<DepCondition> Inserted;
     for (const auto &DepCond : Conds) {
-      auto NewCond = DepCond;//CST.getCoalescedCondition(DepCond);
+      auto NewCond = DepCond; // CST.getCoalescedCondition(DepCond);
       if (Inserted.insert(NewCond).second)
         NewConds.push_back(NewCond);
     }
@@ -953,7 +953,7 @@ static void finalizeVersioning(Versioning *PrimaryVer) {
 #endif
   auto RemoveFromNodes = [&](ArrayRef<DepNode> ToRemove) {
     for (auto &Node : ToRemove) {
-      //assert(Nodes.count(Node) || Removed.count(Node));
+      // assert(Nodes.count(Node) || Removed.count(Node));
       Nodes.erase(Node);
 #ifndef NDEBUG
       Removed.insert(Node);
@@ -1053,7 +1053,8 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
     Frontier.push_back(getOutermostVersioning(Ver.get()));
 
   while (!Frontier.empty()) {
-    // For each versioning in the frontier, try to hoist any loop invariant conditions
+    // For each versioning in the frontier, try to hoist any loop invariant
+    // conditions
     SmallVector<Versioning *> TempFrontier;
     std::vector<std::unique_ptr<Versioning>> OuterFrontiers;
     for (auto *Ver : Frontier) {

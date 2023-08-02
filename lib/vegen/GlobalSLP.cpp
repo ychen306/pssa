@@ -47,7 +47,7 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   auto &AA = AM.getResult<AAManager>(F);
 
   if (!isConvertibleToPSSA(F, LI, DT))
-    return PreservedAnalyses::all();
+    return PreservedAnalyses::none();
 
   if (DoUnroll) {
     DenseMap<Loop *, UnrolledLoopTy> DupToOrigLoopMap;
@@ -73,7 +73,7 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
                    DT, LI, AA, DI, TTI);
   if (Packs.empty()) {
     LIT.destroy();
-    return PreservedAnalyses::all();
+    return PreservedAnalyses::none();
   }
 
   SmallVector<Instruction *> LooseInsts;
@@ -122,7 +122,7 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   if (!lower(Packs, PSSA, DI, AA, LI, SE,
              DoVersioning ? &TheVersioner : nullptr)) {
     llvm_unreachable("failed to lower to pssa");
-    return PreservedAnalyses::all();
+    return PreservedAnalyses::none();
   }
 
   for (auto *P : Packs)
