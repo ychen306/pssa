@@ -304,6 +304,8 @@ bool isDereferenceableInLoop(LoadInst *LI, Loop *L, ScalarEvolution &SE,
     Base = StartS->getValue();
   } else {
     Base = getBaseValue(AddRec);
+    if (!Base)
+      return false;
     auto *Offset = SE.getMinusSCEV(AddRec->getStart(), SE.getSCEV(Base));
     auto *OffsetC = dyn_cast<SCEVConstant>(Offset);
     if (!OffsetC)
