@@ -49,7 +49,10 @@ MemRange MemRange::get(const DataLayout &DL, Value *Ptr, Type *Ty, VLoop *VL,
 }
 
 static bool isLessThan(ScalarEvolution &SE, const SCEV *A, const SCEV *B) {
-  return SE.isKnownNegative(SE.getMinusSCEV(A, B));
+  auto *Minus = SE.getMinusSCEV(A, B);
+  if (isa<SCEVCouldNotCompute>(Minus))
+    return false;
+  return SE.isKnownNegative(Minus);
 }
 
 // Promote R until its ParentLoop is VL
