@@ -91,6 +91,7 @@ static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
       }
     }
     // Move the deps before InsertBefore
+    assert(!llvm::count(Deps, *InsertBefore));
     ItemMover Mover(VL);
     for (auto Dep : Deps)
       Mover.remove(Dep);

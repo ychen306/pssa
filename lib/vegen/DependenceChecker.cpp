@@ -535,8 +535,6 @@ bool DependenceChecker::depends(
         }
       }
     }
-    if (!isImplied(VL1->getLoopCond(), VL2->getLoopCond()))
-      DepConds.push_back(DepCondition::ifTrue(VL1->getLoopCond()));
     if (DepEdges && !DepConds.empty()) {
       DepEdges->try_emplace({It2, It1}, DepConds);
     }
