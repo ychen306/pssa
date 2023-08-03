@@ -962,6 +962,10 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   // conditionally depend on the boundary items (in which case there would be
   // imposible to schedule the versioning checks).
   if (!CondComputations.empty()) {
+    DenseSet<DepNode> NodeSet(Nodes.begin(), Nodes.end());
+    // If all of condition computations is part of the node set, then we can't make further progress
+    if (all_of(CondComputations, [&](auto N) { return NodeSet.count(N); }))
+      return nullptr;
     auto SecondaryVer = inferVersioning(CondComputations, Deps, InterLoopDeps,
                                         VL, DepChecker, Packs);
     if (!SecondaryVer)
