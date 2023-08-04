@@ -11,7 +11,6 @@ class LoopInfo;
 class ScalarEvolution;
 class DependenceInfo;
 class TargetTransformInfo;
-class AAResults;
 } // namespace llvm
 
 class Pack;
@@ -20,6 +19,7 @@ class LooseInstructionTable;
 class ReductionInfo;
 class Matcher;
 class InstructionDescriptor;
+class CachingAA;
 struct VersioningPlan;
 
 std::vector<Pack *> packBottomUp(llvm::ArrayRef<InstructionDescriptor> InstPool,
@@ -27,7 +27,7 @@ std::vector<Pack *> packBottomUp(llvm::ArrayRef<InstructionDescriptor> InstPool,
                                  ReductionInfo &, LooseInstructionTable &,
                                  Matcher &, const llvm::DataLayout &,
                                  llvm::ScalarEvolution &, llvm::DominatorTree &,
-                                 llvm::LoopInfo &, llvm::AAResults &,
+                                 llvm::LoopInfo &, CachingAA &,
                                  llvm::DependenceInfo &,
                                  llvm::TargetTransformInfo &);
 

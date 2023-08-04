@@ -1118,7 +1118,7 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
                                  ReductionInfo &RI, LooseInstructionTable &LIT,
                                  Matcher &TheMatcher, const DataLayout &DL,
                                  ScalarEvolution &SE, DominatorTree &DT,
-                                 LoopInfo &LI, AAResults &AA,
+                                 LoopInfo &LI, CachingAA &AA,
                                  DependenceInfo &DI, TargetTransformInfo &TTI) {
   StoreGrouper::ObjToInstMapTy ObjToStoreMap;
   visitWith<StoreGrouper>(PSSA, ObjToStoreMap);

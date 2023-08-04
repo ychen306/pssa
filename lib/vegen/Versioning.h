@@ -78,7 +78,7 @@ class Versioner {
   llvm::Instruction *cloneInst(llvm::Instruction *);
 
 public:
-  Versioner(PredicatedSSA &PSSA, llvm::DependenceInfo &DI, llvm::AAResults &AA,
+  Versioner(PredicatedSSA &PSSA, llvm::DependenceInfo &DI, CachingAA &AA,
             llvm::LoopInfo &LI, llvm::ScalarEvolution &SE)
       : PSSA(PSSA), SE(SE),
         DepChecker(PSSA, DI, AA, LI, SE, nullptr /*dead insts*/, this),

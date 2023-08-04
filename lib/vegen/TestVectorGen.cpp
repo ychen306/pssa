@@ -419,10 +419,11 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     Packs.push_back(new ReductionPack(RootR, SubRdxs.size(), SubRdxs.size()));
   }
 
-  DependenceChecker DepChecker(PSSA, DI, AA, LI, SE, &DeadInsts);
+  CachingAA CAA(AA);
+  DependenceChecker DepChecker(PSSA, DI, CAA, LI, SE, &DeadInsts);
 
   if (FindConditionalDeps) {
-    Versioner TheVersioner(PSSA, DI, AA, LI, SE);
+    Versioner TheVersioner(PSSA, DI, CAA, LI, SE);
     VersioningPlan VerPlan;
     for (auto *P : Packs) {
       if (!findNecessaryDeps(VerPlan, P->values(), PSSA, DepChecker)) {
@@ -468,12 +469,12 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
     lowerVersioningPlan(VerPlan, TheVersioner, EC, PSSA, SE);
 
     // Pack the versioning phis
-    DependenceChecker DepChecker(PSSA, DI, AA, LI, SE, nullptr /*dead insts*/,
+    DependenceChecker DepChecker(PSSA, DI, CAA, LI, SE, nullptr /*dead insts*/,
                                  &TheVersioner);
     auto NewPacks = packVersioningPhis(Packs, DepChecker, TheVersioner, PSSA);
     Packs.append(NewPacks.begin(), NewPacks.end());
 
-    bool Ok = lower(Packs, PSSA, DI, AA, LI, SE, &TheVersioner);
+    bool Ok = lower(Packs, PSSA, DI, CAA, LI, SE, &TheVersioner);
     assert(Ok);
     lowerPSSAToLLVM(&F, PSSA);
     return PreservedAnalyses::none();
@@ -494,7 +495,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
 
   LIT.destroy();
 
-  Ok = lower(Packs, PSSA, DI, AA, LI, SE);
+  Ok = lower(Packs, PSSA, DI, CAA, LI, SE);
   assert(Ok && "can't lower due to circular dep");
   lowerPSSAToLLVM(&F, PSSA);
 

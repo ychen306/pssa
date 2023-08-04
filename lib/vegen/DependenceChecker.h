@@ -6,11 +6,11 @@
 #include "llvm/ADT/SmallVector.h"
 #include <list>
 #include <map>
+#include "llvm/Analysis/AliasAnalysis.h"
 
 namespace llvm {
 class DependenceInfo;
 class Instruction;
-class AAResults;
 class ScalarEvolution;
 class LoopInfo;
 class SCEV;
@@ -202,6 +202,20 @@ public:
   const DepCondition &getCoalescedCondition(const DepCondition &DepCond) const;
 };
 
+class CachingAA {
+  llvm::AAResults &AA;
+  using AAQuery = std::pair<llvm::MemoryLocation, llvm::MemoryLocation>;
+  llvm::DenseMap<AAQuery, llvm::AliasResult> Cache;
+public:
+  CachingAA(llvm::AAResults &AA) : AA(AA) {}
+  llvm::AliasResult alias(const llvm::MemoryLocation &LocA, const llvm::MemoryLocation &LocB) {
+    auto [It, Inserted] = Cache.try_emplace({LocA, LocB}, llvm::AliasResult::NoAlias);
+    if (!Inserted)
+      return It->second;
+    return It->second = AA.alias(LocA, LocB);
+  }
+};
+
 class DependenceChecker {
   struct LoopSummary {
     llvm::SmallVector<llvm::Instruction *, 8> LiveIns, MemoryInsts;
@@ -209,7 +223,7 @@ class DependenceChecker {
 
   PredicatedSSA &PSSA;
   llvm::DependenceInfo &DI;
-  llvm::AAResults &AA;
+  CachingAA &AA;
   llvm::LoopInfo &LI;
   llvm::ScalarEvolution &SE;
 
@@ -236,7 +250,7 @@ class DependenceChecker {
 public:
   // DeadInsts is an optional set of instructions known to be dead
   DependenceChecker(PredicatedSSA &PSSA, llvm::DependenceInfo &DI,
-                    llvm::AAResults &AA, llvm::LoopInfo &LI,
+                    CachingAA &AA, llvm::LoopInfo &LI,
                     llvm::ScalarEvolution &SE,
                     llvm::DenseSet<llvm::Instruction *> *DeadInsts = nullptr,
                     Versioner *TheVersioner = nullptr)

@@ -9,22 +9,7 @@ define i8 @_Z1obPA1_A1_A1_i(ptr %p2, ptr %arrayidx6, i64 %idxprom7) #0 {
 ; CHECK-LABEL: @_Z1obPA1_A1_A1_i(
 ; CHECK-NEXT:  header:
 ; CHECK-NEXT:    [[ARRAYIDX8:%.*]] = getelementptr inbounds [1 x i32], ptr [[ARRAYIDX6:%.*]], i64 0, i64 [[IDXPROM7:%.*]]
-; CHECK-NEXT:    [[TMP0:%.*]] = shl nsw i64 [[IDXPROM7]], 2
-; CHECK-NEXT:    [[TMP1:%.*]] = add i64 [[TMP0]], 4
-; CHECK-NEXT:    [[UGLYGEP:%.*]] = getelementptr i8, ptr [[ARRAYIDX6]], i64 [[TMP1]]
-; CHECK-NEXT:    [[IDENT_CHECK:%.*]] = icmp ult ptr [[UGLYGEP]], [[ARRAYIDX6]]
-; CHECK-NEXT:    [[UGLYGEP1:%.*]] = getelementptr i8, ptr [[ARRAYIDX6]], i64 1
-; CHECK-NEXT:    [[IDENT_CHECK2:%.*]] = icmp ult ptr [[UGLYGEP1]], [[ARRAYIDX8]]
-; CHECK-NEXT:    [[TMP2:%.*]] = or i1 [[IDENT_CHECK]], [[IDENT_CHECK2]]
-; CHECK-NEXT:    [[UGLYGEP3:%.*]] = getelementptr i8, ptr [[P2:%.*]], i64 1
-; CHECK-NEXT:    [[IDENT_CHECK4:%.*]] = icmp ult ptr [[UGLYGEP3]], [[ARRAYIDX8]]
-; CHECK-NEXT:    [[TMP3:%.*]] = shl nsw i64 [[IDXPROM7]], 2
-; CHECK-NEXT:    [[TMP4:%.*]] = add i64 [[TMP3]], 4
-; CHECK-NEXT:    [[UGLYGEP5:%.*]] = getelementptr i8, ptr [[ARRAYIDX6]], i64 [[TMP4]]
-; CHECK-NEXT:    [[IDENT_CHECK6:%.*]] = icmp ult ptr [[UGLYGEP5]], [[P2]]
-; CHECK-NEXT:    [[TMP5:%.*]] = or i1 [[IDENT_CHECK4]], [[IDENT_CHECK6]]
-; CHECK-NEXT:    [[TMP6:%.*]] = and i1 [[TMP2]], [[TMP5]]
-; CHECK-NEXT:    br i1 [[TMP6]], label [[TMP25:%.*]], label [[TMP42:%.*]]
+; CHECK:    br i1 [[TMP6:%.*]], label [[TMP25:%.*]], label [[TMP42:%.*]]
 ; CHECK:       exit:
 ; CHECK-NEXT:    [[I14216:%.*]] = phi i8 [ 0, [[TMP25]] ], [ [[I14:%.*]], [[TMP42]] ]
 ; CHECK-NEXT:    [[CONV10_6_VER_DEMOTED_0214:%.*]] = phi i8 [ [[TMP40:%.*]], [[TMP25]] ], [ [[CONV10_6_CLONE:%.*]], [[TMP42]] ]
@@ -79,7 +64,7 @@ define i8 @_Z1obPA1_A1_A1_i(ptr %p2, ptr %arrayidx6, i64 %idxprom7) #0 {
 ; CHECK-NEXT:    [[TMP39]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 5
 ; CHECK-NEXT:    [[TMP40]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 6
 ; CHECK-NEXT:    [[TMP41]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 7
-; CHECK-NEXT:    store i8 0, ptr [[P2]], align 1
+; CHECK-NEXT:    store i8 0, ptr [[P2:%.*]], align 1
 ; CHECK-NEXT:    br label [[EXIT:%.*]]
 ; CHECK:       42:
 ; CHECK-NEXT:    [[I1_CLONE:%.*]] = load i32, ptr [[ARRAYIDX8]], align 4

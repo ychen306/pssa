@@ -610,7 +610,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
       } else {
         // Otherwise, we should change it to use the verioning phi
         auto *Phi = InstToVersioningPhiMap.lookup(I);
-        errs() << "!!! using versioning phi for " << *I << "\n";
+        errs() << "!!! using versioning phi for " << *I << '\n';
         assert(Phi);
         U->set(Phi);
         UsedInstToVersioningPhiMap.insert(Phi);

@@ -218,6 +218,7 @@ static void refineUnrollFactors(Function *F, DominatorTree &DT, LoopInfo &LI,
   };
   AAResultsBuilder AABuilder(*M, *F, GetTLI, AC, DT);
   AAResults &AA = AABuilder.getResult();
+  CachingAA CAA(AA);
   DependenceInfo DI(F, &AA, &SE, &LI);
   PostDominatorTree PDT(*F);
 
@@ -229,7 +230,7 @@ static void refineUnrollFactors(Function *F, DominatorTree &DT, LoopInfo &LI,
   VersioningPlan VerPlan;
   std::vector<Pack *> Packs =
       packBottomUp(InstPool, VerPlan, PSSA, RI, LIT, TheMatcher,
-                   F->getParent()->getDataLayout(), SE, DT, LI, AA, DI, *TTI);
+                   F->getParent()->getDataLayout(), SE, DT, LI, CAA, DI, *TTI);
 
   // FIXME: try to unroll more for loops that we decide to vectorize reductions
   for (auto *P : Packs) {

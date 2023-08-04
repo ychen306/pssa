@@ -5,7 +5,6 @@
 #include "ortools/graph/max_flow.h"
 #include "pssa/PSSA.h"
 #include "vegen/Pack.h"
-#include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
@@ -291,7 +290,7 @@ static MemoryLocation getLocation(Instruction *I) {
 }
 
 static AliasResult::Kind isAliased(Instruction *I1, Instruction *I2,
-                                   AliasAnalysis &AA, ScalarEvolution &SE,
+                                   CachingAA &AA, ScalarEvolution &SE,
                                    bool FromSameLoop) {
   auto Loc1 = getLocation(I1);
   auto Loc2 = getLocation(I2);

@@ -48,6 +48,8 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   auto &DI = AM.getResult<DependenceAnalysis>(F);
   auto &AA = AM.getResult<AAManager>(F);
 
+  CachingAA CAA(AA);
+
   if (!isConvertibleToPSSA(F, LI, DT))
     return PreservedAnalyses::none();
 
@@ -72,7 +74,7 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   VersioningPlan VerPlan;
   std::vector<Pack *> Packs =
       packBottomUp(getTestInsts(), VerPlan, PSSA, RI, LIT, TheMatcher, DL, SE,
-                   DT, LI, AA, DI, TTI);
+                   DT, LI, CAA, DI, TTI);
   if (Packs.empty()) {
     LIT.destroy();
     return PreservedAnalyses::none();
@@ -81,7 +83,7 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   SmallVector<Instruction *> LooseInsts;
   // FIXME: track dead instructions and remove them to remove false dependences
   // due to reductions
-  DependenceChecker DepChecker(PSSA, DI, AA, LI, SE);
+  DependenceChecker DepChecker(PSSA, DI, CAA, LI, SE);
   for (auto *P : Packs)
     P->getLooseInsts(LooseInsts, LIT);
 
@@ -95,7 +97,7 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   lowerReductions(RI, PSSA, LIT, DepChecker, false /*replace insts*/);
   LIT.destroy();
 
-  Versioner TheVersioner(PSSA, DI, AA, LI, SE);
+  Versioner TheVersioner(PSSA, DI, CAA, LI, SE);
   bool DoVersioning = !VerPlan.Versionings.empty();
   // Lower the versioning plan
   if (DoVersioning) {
@@ -115,7 +117,7 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
     lowerVersioningPlan(VerPlan, TheVersioner, EC, PSSA, SE);
 
     // Pack the versioning phis
-    DependenceChecker DepChecker(PSSA, DI, AA, LI, SE, nullptr /*dead insts*/,
+    DependenceChecker DepChecker(PSSA, DI, CAA, LI, SE, nullptr /*dead insts*/,
                                  &TheVersioner);
     auto NewPacks = packVersioningPhis(Packs, DepChecker, TheVersioner, PSSA);
     append_range(Packs, NewPacks);
@@ -133,7 +135,7 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
     }
   }
 
-  if (!lower(Packs, PSSA, DI, AA, LI, SE,
+  if (!lower(Packs, PSSA, DI, CAA, LI, SE,
              DoVersioning ? &TheVersioner : nullptr)) {
     llvm_unreachable("failed to lower to pssa");
     return PreservedAnalyses::none();
