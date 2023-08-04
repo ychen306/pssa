@@ -4,9 +4,9 @@
 #include "pssa/PSSA.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/AliasAnalysis.h"
 #include <list>
 #include <map>
-#include "llvm/Analysis/AliasAnalysis.h"
 
 namespace llvm {
 class DependenceInfo;
@@ -206,10 +206,13 @@ class CachingAA {
   llvm::AAResults &AA;
   using AAQuery = std::pair<llvm::MemoryLocation, llvm::MemoryLocation>;
   llvm::DenseMap<AAQuery, llvm::AliasResult> Cache;
+
 public:
   CachingAA(llvm::AAResults &AA) : AA(AA) {}
-  llvm::AliasResult alias(const llvm::MemoryLocation &LocA, const llvm::MemoryLocation &LocB) {
-    auto [It, Inserted] = Cache.try_emplace({LocA, LocB}, llvm::AliasResult::NoAlias);
+  llvm::AliasResult alias(const llvm::MemoryLocation &LocA,
+                          const llvm::MemoryLocation &LocB) {
+    auto [It, Inserted] =
+        Cache.try_emplace({LocA, LocB}, llvm::AliasResult::NoAlias);
     if (!Inserted)
       return It->second;
     return It->second = AA.alias(LocA, LocB);
@@ -295,7 +298,11 @@ public:
       llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> *InterLoopDeps = nullptr)
       : Deps(Deps), FoundCycle(false), Earliest(Earliest), VL(VL),
         PSSA(VL->getPSSA()), DepChecker(DepChecker), Packs(Packs),
-        InterLoopDeps(InterLoopDeps) {}
+        InterLoopDeps(InterLoopDeps) {
+    auto *PN = llvm::dyn_cast_or_null<llvm::PHINode>(Earliest.asInstruction());
+    if (PN && VL->isMu(PN))
+      this->Earliest = *VL->item_begin();
+  }
 
   // Find all dependencies of `It` that occurs *after* `Earliest`.
   // Return if there are dependence cycles.
