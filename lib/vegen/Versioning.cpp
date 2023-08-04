@@ -62,6 +62,136 @@ public:
   AddRecLoopCollector(DenseSet<Loop *> &Loops, ScalarEvolution &SE)
       : SCEVRewriteVisitor<AddRecLoopCollector>(SE), Loops(Loops) {}
 };
+
+class SCEVEmitter {
+  VLoop *VL;
+  const ControlCondition *C;
+  VLoop::ItemIterator InsertBefore;
+  DependenceChecker &DepChecker;
+  ScalarEvolution &SE;
+  SCEVExpander Exp;
+
+  BasicBlock *BB;
+  Instruction *End;
+
+  void emitProlog() {
+    // Create a dummy basic for the expander to emit code
+    auto &Ctx = SE.getContext();
+    BB = BasicBlock::Create(Ctx, "", VL->getPSSA()->getFunction());
+    // Create a dummy instruction in the block (expander's insert point requires
+    // an existing instruction)
+    End = new FreezeInst(UndefValue::get(Type::getInt1Ty(Ctx)), "", BB);
+  }
+
+  void emitEpilog() {
+    End->eraseFromParent();
+
+    // The computation may use instructions that show up before
+    // `InsertBefore`. In which case, we need to move those instructions before
+    // `InsertBefore`
+    if (InsertBefore != VL->item_end()) {
+      // Find dependences of the pred computation that occur *after*
+      // InsertBefore
+      SmallVector<Item> Deps;
+      DependencesFinder DepFinder(Deps, *InsertBefore, VL, DepChecker);
+      for (auto &I : *BB) {
+        for (auto *O : I.operand_values()) {
+          auto *OI = dyn_cast<Instruction>(O);
+          if (!OI || OI->getParent() == BB)
+            continue;
+          bool FoundCycle = DepFinder.findDep(OI, true /*add OI as a dep*/);
+          (void)FoundCycle;
+          assert(!FoundCycle);
+        }
+      }
+      // Move the deps before InsertBefore
+      assert(!llvm::count(Deps, *InsertBefore));
+      ItemMover Mover(VL);
+      for (auto Dep : Deps)
+        Mover.remove(Dep);
+      Mover.reinsert(InsertBefore);
+    }
+
+    // Move the expanded instruction into the PSSA
+    SmallVector<Instruction *> Insts;
+    for (auto &I : *BB) {
+      VL->insert(&I, C, InsertBefore);
+      Insts.push_back(&I);
+    }
+
+    for (auto *I : Insts)
+      I->removeFromParent();
+    BB->eraseFromParent();
+  }
+
+public:
+  SCEVEmitter(VLoop *VL, const ControlCondition *C,
+              VLoop::ItemIterator InsertBefore, DependenceChecker &DepChecker,
+              ScalarEvolution &SE, const DataLayout &DL)
+      : VL(VL), C(C), InsertBefore(InsertBefore), DepChecker(DepChecker),
+        SE(SE), Exp(SE, DL, "scev.pred", false /*preserve lcssa*/),
+        BB(nullptr) {}
+  Value *emitPredicate(const SCEVPredicate *Pred) {
+    emitProlog();
+    auto *Expanded = Exp.expandCodeForPredicate(Pred, End);
+    emitEpilog();
+    return Expanded;
+  }
+  Value *emitSCEV(const SCEV *S) {
+    emitProlog();
+    auto *Expanded = Exp.expandCodeFor(S, S->getType(), End);
+    emitEpilog();
+    return Expanded;
+  }
+};
+
+struct AddRecNarrower : public SCEVRewriteVisitor<AddRecNarrower> {
+  VLoop *VL;
+  const ControlCondition *C;
+  VLoop::ItemIterator InsertBefore;
+  DependenceChecker &DepChecker;
+  const DataLayout &DL;
+
+  PredicatedSSA &PSSA;
+
+  DenseMap<const SCEV *, const SCEV *> Memo;
+
+  AddRecNarrower(VLoop *VL, const ControlCondition *C,
+                 VLoop::ItemIterator InsertBefore,
+                 DependenceChecker &DepChecker, ScalarEvolution &SE,
+                 const DataLayout &DL)
+      : SCEVRewriteVisitor<AddRecNarrower>(SE), VL(VL), C(C),
+        InsertBefore(InsertBefore), DepChecker(DepChecker), DL(DL),
+        PSSA(*VL->getPSSA()) {}
+
+  const SCEV *visitAddRecExpr(const SCEVAddRecExpr *AddRec) {
+    if (auto *Rewritten = Memo.lookup(AddRec))
+      return Rewritten;
+
+    SmallVector<const SCEV *> Operands;
+    for (auto *Op : AddRec->operands())
+      Operands.push_back(visit(Op));
+
+    auto *L = AddRec->getLoop();
+    auto *CanonicalIV = L->getCanonicalInductionVariable();
+    auto *Ty = AddRec->getType();
+    bool IsNarrower = SE.getTypeSizeInBits(CanonicalIV->getType()) >
+                          SE.getTypeSizeInBits(Ty) &&
+                      !AddRec->getType()->isPointerTy();
+    if (!IsNarrower)
+      return Memo[AddRec] =
+                 SE.getAddRecExpr(Operands, L, AddRec->getNoWrapFlags());
+    for (unsigned i = 0; i < Operands.size(); i++)
+      Operands[i] = SE.getAnyExtendExpr(Operands[i], CanonicalIV->getType());
+    SCEVEmitter Emitter(VL, C, InsertBefore, DepChecker, SE, DL);
+    auto *V = Emitter.emitSCEV(
+        SE.getAddRecExpr(Operands, L, AddRec->getNoWrapFlags(SCEV::FlagNW)));
+    Inserter Insert(VL, C, InsertBefore);
+    return Memo[AddRec] =
+               SE.getUnknown(Insert.make<TruncInst>(V, AddRec->getType()));
+  }
+};
+
 } // namespace
 
 // Expand Pred before specified item
@@ -70,52 +200,8 @@ static Value *emitSCEVPred(const SCEVPredicate *Pred, VLoop *VL,
                            VLoop::ItemIterator InsertBefore,
                            DependenceChecker &DepChecker, ScalarEvolution &SE,
                            const DataLayout &DL) {
-  // Create a dummy basic for the expander to emit code
-  auto &Ctx = SE.getContext();
-  auto *BB = BasicBlock::Create(Ctx, "", VL->getPSSA()->getFunction());
-  // Create a dummy instruction in the block (expander's insert point requires
-  // an existing instruction)
-  auto *End = new FreezeInst(UndefValue::get(Type::getInt1Ty(Ctx)), "", BB);
-  SCEVExpander Exp(SE, DL, "scev.pred", false /*preserve lcssa*/);
-  auto *Expanded = Exp.expandCodeForPredicate(Pred, End);
-  End->eraseFromParent();
-
-  // The predicate computation may use instructions that show up before
-  // `InsertBefore`. In which case, we need to move those instructions before
-  // `InsertBefore`
-  if (InsertBefore != VL->item_end()) {
-    // Find dependences of the pred computation that occur *after* InsertBefore
-    SmallVector<Item> Deps;
-    DependencesFinder DepFinder(Deps, *InsertBefore, VL, DepChecker);
-    for (auto &I : *BB) {
-      for (auto *O : I.operand_values()) {
-        auto *OI = dyn_cast<Instruction>(O);
-        if (!OI || OI->getParent() == BB)
-          continue;
-        bool FoundCycle = DepFinder.findDep(OI, true /*add OI as a dep*/);
-        (void)FoundCycle;
-        assert(!FoundCycle);
-      }
-    }
-    // Move the deps before InsertBefore
-    assert(!llvm::count(Deps, *InsertBefore));
-    ItemMover Mover(VL);
-    for (auto Dep : Deps)
-      Mover.remove(Dep);
-    Mover.reinsert(InsertBefore);
-  }
-
-  // Move the expanded instruction into the PSSA
-  SmallVector<Instruction *> Insts;
-  for (auto &I : *BB) {
-    VL->insert(&I, C, InsertBefore);
-    Insts.push_back(&I);
-  }
-
-  for (auto *I : Insts)
-    I->removeFromParent();
-  BB->eraseFromParent();
-  return Expanded;
+  SCEVEmitter Emitter(VL, C, InsertBefore, DepChecker, SE, DL);
+  return Emitter.emitPredicate(Pred);
 }
 
 static Value *emitOverlappingChecks(const DepCondition &DepCond, VLoop *VL,
@@ -140,16 +226,21 @@ static Value *emitOverlappingChecks(const DepCondition &DepCond, VLoop *VL,
   for (auto *L : Loops)
     addIndvar(L, PSSA);
 
+  // Rewrite add rec narrower than the canonical indvar as trunc
+  // SCEVExpander actually does this, but it inserts the trunc instruction
+  // implicitly (and sometimes not in the specified block)
+  AddRecNarrower Narrower(VL, C, InsertBefore, DepChecker, SE, DL);
+
   // Case 1: R1 is left of R2; i.e., End1 < Begin2. Note that we are using the
   // inverse predicate here because SCEVExpander flips the evaluation...
   auto *Left = emitSCEVPred(
       SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT),
-                             End1, R2.Base),
+                             Narrower.visit(End1), Narrower.visit(R2.Base)),
       VL, C, InsertBefore, DepChecker, SE, DL);
   // Case 2: R2 is left of R1; i.e., End2 < Begin1.
   auto *Right = emitSCEVPred(
       SE.getComparePredicate(CmpInst::getInversePredicate(CmpInst::ICMP_ULT),
-                             End2, R1.Base),
+                             Narrower.visit(End2), Narrower.visit(R1.Base)),
       VL, C, InsertBefore, DepChecker, SE, DL);
   Inserter Insert(VL, C, InsertBefore);
   return Insert.CreateBinOp(Instruction::Or, Left, Right);
@@ -952,10 +1043,12 @@ bool IndependenceTracker::isIndependent(const DepNode &Src,
   auto *DstI = Dst.asInstruction();
   // FIXME: also support inst-to-loop dep
   if (SrcI && DstI) {
-    //errs() << "checking independence: " << Src << ", " << Dst << " CONDS = "
-    //  << *PSSA.getInstCond(SrcI) << ", " << *PSSA.getInstCond(DstI)
-    //  << "\n\t exclusive? " << TheVersioner.isExclusive(PSSA.getInstCond(SrcI), PSSA.getInstCond(DstI))
-    //  << '\n';
+    // errs() << "checking independence: " << Src << ", " << Dst << " CONDS = "
+    //   << *PSSA.getInstCond(SrcI) << ", " << *PSSA.getInstCond(DstI)
+    //   << "\n\t exclusive? " <<
+    //   TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
+    //   PSSA.getInstCond(DstI))
+    //   << '\n';
     if (TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
                                  PSSA.getInstCond(DstI)))
       return true;
