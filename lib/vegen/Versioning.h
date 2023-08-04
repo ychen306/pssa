@@ -44,6 +44,10 @@ public:
   bool isIndependent(const DepNode &Src, const DepNode &Dest) const;
 };
 
+namespace llvm {
+class Reducer;
+}
+
 class Versioner {
   PredicatedSSA &PSSA;
   llvm::ScalarEvolution &SE;
@@ -63,12 +67,15 @@ class Versioner {
 
   ConditionUserTracker CUT;
 
+  llvm::SmallVector<llvm::Reducer *> ClonedReducers;
+
   using CallbackTy = std::function<void(Item, Item)>;
   VLoop *cloneLoop(VLoop *OrigVL, llvm::ValueToValueMapTy &VMap,
                    CallbackTy Callback);
 
   void runOnLoop(VLoop *, const VersioningMapTy &);
   void registerNewCondition(const ControlCondition *, const ControlCondition *);
+  llvm::Instruction *cloneInst(llvm::Instruction *);
 
 public:
   Versioner(PredicatedSSA &PSSA, llvm::DependenceInfo &DI, llvm::AAResults &AA,
@@ -107,11 +114,14 @@ public:
   const ControlCondition *strengthenCondition(const ControlCondition *C,
                                               llvm::Value *Flag, bool IsTrue);
   bool isExclusive(const ControlCondition *, const ControlCondition *);
+  llvm::ArrayRef<llvm::Reducer *> getClonedReducers() const {
+    return ClonedReducers;
+  }
 };
 
 // See Versionier::run for EC for merging conditions
 void lowerVersioningPlan(VersioningPlan &, Versioner &,
-                         llvm::EquivalenceClasses<Item> EC,
-                         PredicatedSSA &, llvm::ScalarEvolution &);
+                         llvm::EquivalenceClasses<Item> EC, PredicatedSSA &,
+                         llvm::ScalarEvolution &);
 
 #endif // end VEGEN_VERSIONING_H

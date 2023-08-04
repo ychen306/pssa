@@ -1,6 +1,7 @@
 #include "Versioning.h"
 #include "DependenceChecker.h"
 #include "ItemMover.h"
+#include "Reducer.h"
 #include "pssa/Inserter.h"
 #include "pssa/VectorHashInfo.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -8,6 +9,12 @@
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 
 using namespace llvm;
+
+Instruction *Versioner::cloneInst(Instruction *I) {
+  if (auto *R = dyn_cast<Reducer>(I))
+    return ClonedReducers.emplace_back(Reducer::clone(R));
+  return I->clone();
+}
 
 // Add a canonical induction variable for VL.
 // In an ideal world we only need to do this in PredicatedSSA.
@@ -176,7 +183,7 @@ VLoop *Versioner::cloneLoop(VLoop *OrigVL, ValueToValueMapTy &VMap,
                        OrigVL->getParent());
 
   auto Clone = [&](Instruction *I) {
-    auto *I2 = I->clone();
+    auto *I2 = cloneInst(I);
     VMap[I] = I2;
     if (auto *Orig = CloneToOrigMap.lookup(I))
       CloneToOrigMap[I2] = Orig;
@@ -216,8 +223,14 @@ VLoop *Versioner::cloneLoop(VLoop *OrigVL, ValueToValueMapTy &VMap,
 
   // Remap the mus at last when we've cloned everything
   // (coulddn't remap when they were first cloned due to circular dep)
-  for (auto *Mu : VL->mus())
-    Mapper.remapInstruction(*Mu);
+  for (auto *Mu : VL->mus()) {
+    // Not calling Mapper.remapInstruction because it also tries to remap the
+    // incoming blocks of the phi (mu) nodes, which can be empty in our IR
+    for (Use &Op : Mu->operands()) {
+      if (auto *V = Mapper.mapValue(*Op.get()))
+        Op.set(V);
+    }
+  }
 
   // Remap the continue/back-edge cond. (couldn't do it before cloning)
   VL->setBackEdgeCond(RemapCondition(VL->getBackEdgeCond()));
@@ -245,6 +258,14 @@ void Versioner::registerNewCondition(const ControlCondition *C,
     OrigConds[C2] = OrigConds[C];
   else
     OrigConds[C2] = C;
+
+  auto It = StrengthenedConds.find(C);
+  if (It == StrengthenedConds.end())
+    return;
+
+  // If C is a strengthened version of something then C2 should also be
+  auto Tmp = It->second;
+  StrengthenedConds[C2] = Tmp;
 }
 
 // TODO: cache this
@@ -492,7 +513,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
     };
 
     if (auto *I = Item.asInstruction()) {
-      auto *I2 = I->clone();
+      auto *I2 = cloneInst(I);
       if (I->hasName())
         I2->setName(I->getName() + ".clone");
       if (auto *Orig = CloneToOrigMap.lookup(I))
@@ -884,14 +905,16 @@ void IndependenceTracker::markInstAsVersioned(Instruction *Orig,
   // instruction
   // FIXME: this can make unnecessary allocation... We avoid putting empty
   // entries in the map
-  IndependentFrom[Cloned] = IndependentFrom[Orig];
+  auto Tmp = IndependentFrom[Orig];
+  IndependentFrom[Cloned] = Tmp;
   IndependentFrom[Orig] = NodeToDepsMap[Orig];
 }
 
 void IndependenceTracker::markLoopInstAsVersioned(Instruction *Orig,
                                                   Instruction *Cloned,
                                                   VLoop *VL) {
-  IndependentFrom[Cloned] = IndependentFrom[Orig];
+  auto Tmp = IndependentFrom[Orig];
+  IndependentFrom[Cloned] = Tmp;
   auto It = LoopToDepsMap.find({VL, Orig});
   if (It == LoopToDepsMap.end())
     return;
@@ -929,8 +952,10 @@ bool IndependenceTracker::isIndependent(const DepNode &Src,
   auto *DstI = Dst.asInstruction();
   // FIXME: also support inst-to-loop dep
   if (SrcI && DstI) {
-    //errs() << "checking independence: " << Src << ", " << Dst << " CONDS = " 
-    //  << *PSSA.getInstCond(SrcI) << ", " << *PSSA.getInstCond(DstI) << '\n';
+    //errs() << "checking independence: " << Src << ", " << Dst << " CONDS = "
+    //  << *PSSA.getInstCond(SrcI) << ", " << *PSSA.getInstCond(DstI)
+    //  << "\n\t exclusive? " << TheVersioner.isExclusive(PSSA.getInstCond(SrcI), PSSA.getInstCond(DstI))
+    //  << '\n';
     if (TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
                                  PSSA.getInstCond(DstI)))
       return true;
@@ -1018,8 +1043,8 @@ static std::unique_ptr<Versioning> hoistConditions(Versioning *Ver) {
 }
 
 void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
-                         EquivalenceClasses<Item> EC,
-                         PredicatedSSA &PSSA, ScalarEvolution &SE) {
+                         EquivalenceClasses<Item> EC, PredicatedSSA &PSSA,
+                         ScalarEvolution &SE) {
   // Visit all of the conditions and coalesce them
   ConditionSetTracker CST(SE, PSSA);
   // Add the conditions to tracker

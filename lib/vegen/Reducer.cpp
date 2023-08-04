@@ -33,3 +33,8 @@ void Reducer::dump(raw_ostream &OS) {
   }
   OS << ')';
 }
+
+Reducer *Reducer::clone(Reducer *R) {
+  SmallVector<Value *> Operands(R->value_op_begin(), R->value_op_end());
+  return Create(R->getResult(), Operands);
+}

@@ -4,9 +4,11 @@
 #include "LoopUnrolling.h"
 #include "LooseInstructionTable.h"
 #include "Matcher.h"
+#include "Reducer.h"
 #include "Reduction.h"
 #include "UnrollFactor.h"
 #include "Versioning.h"
+#include "pssa/Inserter.h"
 #include "pssa/Lower.h"
 #include "pssa/PSSA.h"
 #include "vegen/Lower.h"
@@ -117,6 +119,18 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
                                  &TheVersioner);
     auto NewPacks = packVersioningPhis(Packs, DepChecker, TheVersioner, PSSA);
     append_range(Packs, NewPacks);
+
+    // Replace the cloned reducers with proper llvm compute instructions
+    for (auto *R : TheVersioner.getClonedReducers()) {
+      auto *VL = PSSA.getLoopForInst(R);
+      Inserter Insert(VL, VL->getInstCond(R), VL->toIterator(R));
+      auto *Acc = R->getOperand(0);
+      for (auto *X : drop_begin(R->operand_values()))
+        Acc = emitBinaryReduction(R->getKind(), Acc, X, Insert);
+      R->replaceAllUsesWith(Acc);
+      VL->erase(R);
+      delete R;
+    }
   }
 
   if (!lower(Packs, PSSA, DI, AA, LI, SE,

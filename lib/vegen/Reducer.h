@@ -30,6 +30,8 @@ public:
     return llvm::isa<Instruction>(V) && classof(llvm::cast<Instruction>(V));
   }
   void dump(llvm::raw_ostream &);
+
+  static Reducer *clone(Reducer *);
 };
 
 template <>

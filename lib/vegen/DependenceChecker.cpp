@@ -645,14 +645,14 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
   DepEdges.try_emplace({Src, It /*dst*/}, DepCondition::always());
 
   if (!Processing.insert(It).second) {
-    // errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
+    //errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
     FoundCycle = true;
     return;
   }
 
   EraseOnReturnGuard EraseOnReturn(Processing, It);
 
-  // errs() << "visiting " << Src << " -> " << It << '\n';
+  //errs() << "visiting " << Src << " -> " << It << '\n';
 
   // Don't consider things that comes before earliest
   if (It != Earliest && (!VL->contains(It) || !VL->comesBefore(Earliest, It)))
