@@ -270,6 +270,7 @@ public:
                    nullptr);
 
   llvm::ArrayRef<llvm::Instruction *> getLiveIns(VLoop *VL);
+  llvm::ScalarEvolution &getSE() { return SE; }
 };
 
 class DependencesFinder {

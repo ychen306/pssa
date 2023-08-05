@@ -1067,12 +1067,12 @@ bool IndependenceTracker::isIndependent(const DepNode &Src,
   auto *DstI = Dst.asInstruction();
   // FIXME: also support inst-to-loop dep
   if (SrcI && DstI) {
-    errs() << "checking independence: " << Src << ", " << Dst
-           << " CONDS = " << *PSSA.getInstCond(SrcI) << ", "
-           << *PSSA.getInstCond(DstI) << "\n\t exclusive? "
-           << TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
-                                       PSSA.getInstCond(DstI))
-           << '\n';
+    //errs() << "checking independence: " << Src << ", " << Dst
+    //       << " CONDS = " << *PSSA.getInstCond(SrcI) << ", "
+    //       << *PSSA.getInstCond(DstI) << "\n\t exclusive? "
+    //       << TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
+    //                                   PSSA.getInstCond(DstI))
+    //       << '\n';
     if (TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
                                  PSSA.getInstCond(DstI)))
       return true;

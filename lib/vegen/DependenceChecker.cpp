@@ -648,14 +648,14 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
   DepEdges.try_emplace({Src, It /*dst*/}, DepCondition::always());
 
   if (!Processing.insert(It).second) {
-    //errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
+    // errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
     FoundCycle = true;
     return;
   }
 
   EraseOnReturnGuard EraseOnReturn(Processing, It);
 
-  //errs() << "visiting " << Src << " -> " << It << '\n';
+  // errs() << "visiting " << Src << " -> " << It << '\n';
 
   // Don't consider things that comes before earliest
   if (It != Earliest && (!VL->contains(It) || !VL->comesBefore(Earliest, It)))
@@ -734,6 +734,36 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
     FoundCycle |= DepFinder.findDep(It);
   return FoundCycle;
 }
+
+namespace {
+// Utility to find the dependencies of a scev
+struct SCEVDepFinder : SCEVRewriteVisitor<SCEVDepFinder> {
+  PredicatedSSA &PSSA;
+  VLoop *VL;
+  SmallVectorImpl<DepNode> &Deps;
+
+  SCEVDepFinder(ScalarEvolution &SE, VLoop *VL, SmallVectorImpl<DepNode> &Deps)
+      : SCEVRewriteVisitor<SCEVDepFinder>(SE), PSSA(*VL->getPSSA()), VL(VL),
+        Deps(Deps) {}
+
+  const SCEV *visitAddRecExpr(const SCEVAddRecExpr *S) {
+    auto *VL2 = PSSA.getVLoop(const_cast<Loop *>(S->getLoop()));
+    if (VL2 != VL) {
+      assert(VL->contains(VL2) || VL2->contains(VL));
+      if (VL->contains(VL2))
+        Deps.push_back(Item(VL2));
+    }
+    return S;
+  }
+
+  const SCEV *visitUnknown(const SCEVUnknown *S) {
+    auto *I = dyn_cast<Instruction>(S->getValue());
+    if (I && VL->contains(I))
+      Deps.push_back(I);
+    return S;
+  }
+};
+} // namespace
 
 std::unique_ptr<Versioning>
 inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
@@ -923,6 +953,7 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   // Keep track of the computations that are required to compute the versioning
   // conditions
   SmallVector<DepNode> CondComputations;
+  SCEVDepFinder SDF(DepChecker.getSE(), VL, CondComputations);
   // Find the cut edges; abort if any of the cut edges are unconditional
   for (auto [Edge, Kind] : DepFinder.getDepEdges()) {
     auto [Src, Dst] = Edge;
@@ -938,8 +969,16 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
       // Figure out the deps required to compute the versioning conditions
       for (auto &DepCond : Kind.getConds()) {
         // FIXME: also deal with overlap checks
-        if (auto *C = DepCond.getCondition())
+        if (auto *C = DepCond.getCondition()) {
           CondComputations.push_back(C);
+        } else {
+          assert(DepCond.isOverlapping());
+          auto [R1, R2] = DepCond.getRanges();
+          SDF.visit(R1.Base);
+          SDF.visit(R1.Size);
+          SDF.visit(R2.Base);
+          SDF.visit(R2.Size);
+        }
       }
       Ver->CutEdges.try_emplace(Edge, Kind.getConds());
       Sources.push_back(Src);
