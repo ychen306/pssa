@@ -18,6 +18,10 @@ cl::opt<bool> DisablePhiSpeculation("disable-phi-speculation",
                                     cl::init(false));
 
 bool mayReadOrWriteMemory(Instruction *I) {
+  if (auto *Call = dyn_cast<CallInst>(I);
+      Call && Call->getCalledFunction() &&
+      Call->getCalledFunction()->getName() == "llvm.assume")
+    return false;
   return isa<ReturnInst>(I) || I->mayReadOrWriteMemory();
 }
 
@@ -370,7 +374,7 @@ void DependenceChecker::processLoop(VLoop *VL) {
       auto *I = It.asInstruction();
       if (!isLive(I))
         continue;
-      if (I->mayReadOrWriteMemory())
+      if (mayReadOrWriteMemory(I))
         Summary.MemoryInsts.push_back(I);
       for (Value *O : I->operand_values()) {
         auto *OI = dyn_cast<Instruction>(O);
@@ -965,7 +969,8 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   // imposible to schedule the versioning checks).
   if (!CondComputations.empty()) {
     DenseSet<DepNode> NodeSet(Nodes.begin(), Nodes.end());
-    // If all of condition computations is part of the node set, then we can't make further progress
+    // If all of condition computations is part of the node set, then we can't
+    // make further progress
     if (all_of(CondComputations, [&](auto N) { return NodeSet.count(N); }))
       return nullptr;
     auto SecondaryVer = inferVersioning(CondComputations, Deps, InterLoopDeps,

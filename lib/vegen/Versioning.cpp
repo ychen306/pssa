@@ -370,8 +370,34 @@ Versioner::strengthenCondition(const ControlCondition *C, Value *Flag,
   return C2;
 }
 
+static bool isExclusiveAux(const ControlCondition *C1,
+                           const ControlCondition *C2) {
+  // If any one is true then it's definitely not exclusive
+  if (!C1 || !C2)
+    return false;
+
+  auto *And1 = dyn_cast<ConditionAnd>(C1);
+  if (And1 && And1->Complement == C2)
+    return true;
+
+  auto *And2 = dyn_cast<ConditionAnd>(C2);
+  if (And1 && And2)
+    return isExclusiveAux(And1->Parent, And2->Parent);
+
+  return false;
+}
+
 bool Versioner::isExclusive(const ControlCondition *C1,
                             const ControlCondition *C2) {
+  auto GetOriginalCond = [&](auto *C) {
+    auto It = OrigConds.find(C);
+    if (It != OrigConds.end())
+      return It->second;
+    return C;
+  };
+  if (isExclusiveAux(GetOriginalCond(C1), GetOriginalCond(C2)))
+    return true;
+
   auto It1 = StrengthenedConds.find(C1);
   if (It1 == StrengthenedConds.end())
     return false;
@@ -689,9 +715,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
       if (VersioningPhis.count(UserI))
         continue;
 
-      auto *VL = PSSA.getLoopForInst(I);
-      auto *UserVL = PSSA.getLoopForInst(UserI);
-      if (/*VL->contains(UserVL) && */CondsAreImplied(DepConds, UserI)) {
+      if (CondsAreImplied(DepConds, UserI)) {
         // If the use comes from another instruction that gets versioned under
         // the same condition we just change that instruction (and its clone)
         // to use (the clone of) I
@@ -1043,12 +1067,12 @@ bool IndependenceTracker::isIndependent(const DepNode &Src,
   auto *DstI = Dst.asInstruction();
   // FIXME: also support inst-to-loop dep
   if (SrcI && DstI) {
-    //errs() << "checking independence: " << Src << ", " << Dst << " CONDS = "
-    //  << *PSSA.getInstCond(SrcI) << ", " << *PSSA.getInstCond(DstI)
-    //  << "\n\t exclusive? " <<
-    //  TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
-    //  PSSA.getInstCond(DstI))
-    //  << '\n';
+    errs() << "checking independence: " << Src << ", " << Dst
+           << " CONDS = " << *PSSA.getInstCond(SrcI) << ", "
+           << *PSSA.getInstCond(DstI) << "\n\t exclusive? "
+           << TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
+                                       PSSA.getInstCond(DstI))
+           << '\n';
     if (TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
                                  PSSA.getInstCond(DstI)))
       return true;
