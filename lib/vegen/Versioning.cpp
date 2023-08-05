@@ -691,7 +691,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
 
       auto *VL = PSSA.getLoopForInst(I);
       auto *UserVL = PSSA.getLoopForInst(UserI);
-      if (VL->contains(UserVL) && CondsAreImplied(DepConds, UserI)) {
+      if (/*VL->contains(UserVL) && */CondsAreImplied(DepConds, UserI)) {
         // If the use comes from another instruction that gets versioned under
         // the same condition we just change that instruction (and its clone)
         // to use (the clone of) I
@@ -1043,12 +1043,12 @@ bool IndependenceTracker::isIndependent(const DepNode &Src,
   auto *DstI = Dst.asInstruction();
   // FIXME: also support inst-to-loop dep
   if (SrcI && DstI) {
-    // errs() << "checking independence: " << Src << ", " << Dst << " CONDS = "
-    //   << *PSSA.getInstCond(SrcI) << ", " << *PSSA.getInstCond(DstI)
-    //   << "\n\t exclusive? " <<
-    //   TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
-    //   PSSA.getInstCond(DstI))
-    //   << '\n';
+    //errs() << "checking independence: " << Src << ", " << Dst << " CONDS = "
+    //  << *PSSA.getInstCond(SrcI) << ", " << *PSSA.getInstCond(DstI)
+    //  << "\n\t exclusive? " <<
+    //  TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
+    //  PSSA.getInstCond(DstI))
+    //  << '\n';
     if (TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
                                  PSSA.getInstCond(DstI)))
       return true;
