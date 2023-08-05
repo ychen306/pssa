@@ -366,7 +366,8 @@ Versioner::strengthenCondition(const ControlCondition *C, Value *Flag,
   auto *FlagC = PSSA.getInstCond(cast<Instruction>(Flag));
   auto *C2 = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, IsTrue), C);
   registerNewCondition(C, C2);
-  StrengthenedConds[C2] = {Flag, IsTrue};
+  //StrengthenedConds[C2] = {Flag, IsTrue};
+  StrengthenedConds[C2].emplace_back(Flag, IsTrue);
   return C2;
 }
 
@@ -404,9 +405,14 @@ bool Versioner::isExclusive(const ControlCondition *C1,
   auto It2 = StrengthenedConds.find(C2);
   if (It2 == StrengthenedConds.end())
     return false;
-  auto [Flag1, IsTrue1] = It1->second;
-  auto [Flag2, IsTrue2] = It2->second;
-  return Flag1 == Flag2 && (IsTrue1 ^ IsTrue2);
+  //auto [Flag1, IsTrue1] = It1->second;
+  //auto [Flag2, IsTrue2] = It2->second;
+  //return Flag1 == Flag2 && (IsTrue1 ^ IsTrue2);
+  for (auto [Flag1, IsTrue1] : It1->second)
+    for (auto [Flag2, IsTrue2] : It2->second)
+      if (Flag1 == Flag2 && (IsTrue1 ^ IsTrue2))
+        return true;
+  return false;
 }
 
 namespace {
@@ -906,7 +912,6 @@ void Versioner::run(ArrayRef<Versioning *> Versionings,
   DenseSet<DepEdge> AliasedEdgesToIgnore, DepEdgesToIgnore;
   for (auto *Ver : Versionings) {
     assert(!Ver->CutEdges.empty());
-
     std::vector<DepCondition> GlobalDepConds;
     for (auto [Edge, DepConds] : Ver->CutEdges) {
       llvm::append_range(GlobalDepConds, DepConds);
@@ -919,6 +924,13 @@ void Versioner::run(ArrayRef<Versioning *> Versionings,
       else
         DepEdgesToIgnore.insert(Edge);
 
+      if (auto It = InterLoopDeps.find(Edge); It != InterLoopDeps.end()) {
+        for (auto &Edge : It->second)
+          AliasedEdgesToIgnore.insert(Edge);
+      }
+    }
+    for (auto Edge : Ver->ImpliedCutEdges) {
+      AliasedEdgesToIgnore.insert(Edge);
       if (auto It = InterLoopDeps.find(Edge); It != InterLoopDeps.end()) {
         for (auto &Edge : It->second)
           AliasedEdgesToIgnore.insert(Edge);
@@ -1092,24 +1104,30 @@ static Versioning *getOutermostVersioning(Versioning *Ver) {
 static void finalizeVersioning(Versioning *PrimaryVer) {
   DenseSet<DepNode> Nodes(PrimaryVer->Nodes.begin(), PrimaryVer->Nodes.end());
   DenseSet<DepCondition> ImpliedConds;
-#ifndef NDEBUG
-  DenseSet<DepNode> Removed;
-#endif
   auto RemoveFromNodes = [&](ArrayRef<DepNode> ToRemove) {
-    for (auto &Node : ToRemove) {
-      // assert(Nodes.count(Node) || Removed.count(Node));
+    for (auto &Node : ToRemove)
       Nodes.erase(Node);
-#ifndef NDEBUG
-      Removed.insert(Node);
-#endif
-    }
   };
 
+
+  DenseSet<DepNode> Versioned;
   for (auto *Ver = getOutermostVersioning(PrimaryVer); Ver;
        Ver = Ver->Primary) {
+#if 0
     auto OldNodes = std::move(Ver->Nodes);
     llvm::append_range(Ver->Nodes, Nodes);
     RemoveFromNodes(OldNodes);
+#endif
+
+    DenseSet<DepNode> NewNodes = Nodes;
+    NewNodes.insert(Ver->Nodes.begin(), Ver->Nodes.end());
+    for (auto N : Versioned)
+      NewNodes.erase(N);
+
+    Ver->Nodes.clear();
+    llvm::append_range(Ver->Nodes, NewNodes);
+    Versioned.insert(NewNodes.begin(), NewNodes.end());
+    
     DenseSet<DepEdge> ImpliedCutEdges;
     for (auto [Edge, DepConds] : Ver->CutEdges) {
       setSubtraction(DepConds, ImpliedConds);
@@ -1120,8 +1138,10 @@ static void finalizeVersioning(Versioning *PrimaryVer) {
     for (auto &DepConds : llvm::make_second_range(Ver->CutEdges))
       ImpliedConds.insert(DepConds.begin(), DepConds.end());
     // Remove the implied cut edges
-    for (auto &Edge : ImpliedCutEdges)
+    for (auto &Edge : ImpliedCutEdges) {
       Ver->CutEdges.erase(Edge);
+      Ver->ImpliedCutEdges.insert(Edge);
+    }
   }
 }
 

@@ -345,6 +345,8 @@ struct Versioning {
   std::vector<DepNode> Nodes;
   // Edges that we speculate to be non-existent
   llvm::DenseMap<DepEdge, std::vector<DepCondition>> CutEdges;
+  // Edges that are implied to be cut (so we don't have to speculate)
+  llvm::DenseSet<DepEdge> ImpliedCutEdges;
   VLoop *ParentLoop;
   std::unique_ptr<Versioning> Secondary;
   Versioning *Primary = nullptr;

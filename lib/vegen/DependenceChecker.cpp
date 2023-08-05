@@ -655,7 +655,7 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
 
   EraseOnReturnGuard EraseOnReturn(Processing, It);
 
-  // errs() << "visiting " << Src << " -> " << It << '\n';
+  //errs() << "visiting " << Src << " -> " << It << '\n';
 
   // Don't consider things that comes before earliest
   if (It != Earliest && (!VL->contains(It) || !VL->comesBefore(Earliest, It)))

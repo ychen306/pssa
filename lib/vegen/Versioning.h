@@ -58,7 +58,8 @@ class Versioner {
   llvm::DenseMap<const ControlCondition *, const ControlCondition *> OrigConds;
   // Mapping a <strengthened condition> -> <the flag that it's strengthened
   // with>
-  llvm::DenseMap<const ControlCondition *, std::pair<llvm::Value *, bool>>
+  //llvm::DenseMap<const ControlCondition *, std::pair<llvm::Value *, bool>>
+  llvm::DenseMap<const ControlCondition *, llvm::SmallVector<std::pair<llvm::Value *, bool>, 2>>
       StrengthenedConds;
   // Mapping an instruction -> its versioning phis (we have multiple phis when
   // we have nested versioning)

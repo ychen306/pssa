@@ -305,6 +305,10 @@ static bool merge(PredicatedSSA &PSSA, ArrayRef<Item> Items,
 
   auto *VL = PSSA.getLoopForItem(Items.front());
   SmallVector<Item> Deps;
+  errs() << "Trying to merge: {\n";
+  for (auto it : Items)
+    errs() << '\t' << it << '\n';
+  errs() << "}\n";
   bool FoundCycle = findInBetweenDeps(Deps, Items, VL, PSSA, DepChecker, Packs);
   if (FoundCycle) {
     errs() << "Found cycle while trying to merge: {\n";

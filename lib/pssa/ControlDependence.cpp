@@ -214,6 +214,9 @@ const ControlCondition *ConditionTable::getAnd(const ControlCondition *CondA,
   if (auto *C = AndCache.lookup({CondA, CondB}))
     return C;
 
+  if (isImplied(CondB, CondA))
+    return AndCache[{CondA, CondB}] = CondA;
+
   if (auto *And = dyn_cast<ConditionAnd>(CondB))
     return AndCache[{CondA, CondB}] =
                getAnd(getAnd(CondA, And->Parent), And->Cond, And->IsTrue);
