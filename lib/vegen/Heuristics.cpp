@@ -281,7 +281,7 @@ TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
       return {};
 
   if (auto *P = LoadPack::tryPack(Insts, DL, SE, DT, LI, PSSA)) {
-    if (canSpeculativelyComputeAddr(Insts, PSSA))
+    if (canSpeculativelyComputeAddr(P->values(), PSSA))
       return {P};
   }
 
@@ -372,7 +372,7 @@ SmallVector<Pack *> Packer::getLoadPacks(ArrayRef<Value *> Values) {
     if (!llvm::isPowerOf2_32(Insts.size()))
       continue;
     if (auto *P = LoadPack::tryPack(Insts, DL, SE, DT, LI, PSSA)) {
-      if (canSpeculativelyComputeAddr(Insts, PSSA))
+      if (canSpeculativelyComputeAddr(P->values(), PSSA))
         LoadPacks.push_back(P);
     }
   }
