@@ -56,6 +56,10 @@ void ConditionUserTracker::getUsers(ConditionUserTracker::UserSet &Users,
                                     llvm::Instruction *I) {
   for (auto *C : InstToCondsMap[I]) {
     auto Items = CondToUsersMap[C];
-    Users.insert(Items.begin(), Items.end());
+    for (auto It : Items) {
+      if (auto *I = It.asInstruction(); I && Deleted.count(I))
+        continue;
+      Users.insert(It);
+    }
   }
 }

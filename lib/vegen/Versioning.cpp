@@ -249,6 +249,13 @@ static Value *emitOverlappingChecks(const DepCondition &DepCond, VLoop *VL,
 VLoop *Versioner::cloneLoop(VLoop *OrigVL, ValueToValueMapTy &VMap,
                             CallbackTy Callback) {
   ValueMapper Mapper(VMap, RF_IgnoreMissingLocals);
+  auto RemapInstruction = [&Mapper](Instruction *I) {
+    // Not calling Mapper.remapInstruction because it also tries to remap the
+    // incoming blocks of the phi (and mu) nodes, which can be empty in our IR
+    for (Use &Op : I->operands())
+      if (auto *V = Mapper.mapValue(*Op.get()))
+        Op.set(V);
+  };
   DenseMap<const ControlCondition *, const ControlCondition *> RemappedConds;
   std::function<const ControlCondition *(const ControlCondition *)>
       RemapCondition = [&](auto *C) {
@@ -301,7 +308,7 @@ VLoop *Versioner::cloneLoop(VLoop *OrigVL, ValueToValueMapTy &VMap,
     auto *I = Item.asInstruction();
     auto *C = RemapCondition(OrigVL->getInstCond(I));
     auto *ClonedI = Clone(I);
-    Mapper.remapInstruction(*ClonedI);
+    RemapInstruction(ClonedI);
     if (auto *PN = dyn_cast<PHINode>(ClonedI)) {
       SmallVector<const ControlCondition *> PhiConds;
       for (auto *IncomingC : OrigVL->getPhiConditions(cast<PHINode>(I)))
@@ -314,14 +321,7 @@ VLoop *Versioner::cloneLoop(VLoop *OrigVL, ValueToValueMapTy &VMap,
 
   // Remap the mus at last when we've cloned everything
   // (coulddn't remap when they were first cloned due to circular dep)
-  for (auto *Mu : VL->mus()) {
-    // Not calling Mapper.remapInstruction because it also tries to remap the
-    // incoming blocks of the phi (mu) nodes, which can be empty in our IR
-    for (Use &Op : Mu->operands()) {
-      if (auto *V = Mapper.mapValue(*Op.get()))
-        Op.set(V);
-    }
-  }
+  llvm::for_each(VL->mus(), RemapInstruction);
 
   // Remap the continue/back-edge cond. (couldn't do it before cloning)
   VL->setBackEdgeCond(RemapCondition(VL->getBackEdgeCond()));
@@ -422,7 +422,11 @@ class ConditionRewriter {
   Value *Old;
   Value *New;
   DenseMap<const ControlCondition *, const ControlCondition *> RewrittenConds;
-  Value *rewrite(Value *V) { return V == Old ? New : V; }
+  Value *rewrite(Value *V) {
+    auto *V2 = V == Old ? New : V; 
+    assert(V2);
+    return V2;
+  }
   const ControlCondition *rewrite(const ControlCondition *C) {
     if (!C)
       return C;
@@ -569,6 +573,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
       }
       for (auto *C : Conds)
         DepFinder.findDep(C);
+
       assert(!llvm::count(Deps, It) && "can't version due to circular dep.");
 
       // Move the dependences before Item
@@ -589,6 +594,8 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
                                                           Insert.getTrue()));
       }
       CondSets[DepConds] = NoDep;
+      //static int counter;
+      //NoDep->setName("flag." + std::to_string(counter++));
     }
     VersioningFlags[It] = CondSets[DepConds];
   }
@@ -745,12 +752,15 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
     ConditionUserTracker::UserSet CondUsers;
     CUT.getUsers(CondUsers, I);
 
+    if (CondUsers.empty())
+      return;
+
     ConditionRewriter RewriteWithPhi(PSSA, I, InstToVersioningPhiMap.lookup(I));
     ConditionRewriter RewriteWithClone(PSSA, I, Clone);
     bool UsedPhi = false;
     for (auto It : CondUsers) {
       if (auto *UserVL = It.asLoop()) {
-        if (VL->contains(UserVL->getParent()) &&
+        if (/*VL->contains(UserVL->getParent()) &&*/
             CondsAreImplied(DepConds, UserVL)) {
           assert(OrigToCloneMap.count(UserVL));
           assert(OrigToCloneMap.count(UserVL));
@@ -766,8 +776,11 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
 
       auto *UserI = It.asInstruction();
       assert(UserI);
+      if (VersioningPhis.count(UserI))
+        continue;
       auto *UserVL = PSSA.getLoopForInst(UserI);
-      if (VL->contains(UserVL) && CondsAreImplied(DepConds, UserI)) {
+
+      if (/*VL->contains(UserVL) &&*/ CondsAreImplied(DepConds, UserI)) {
         assert(OrigToCloneMap.count(UserI));
         RewriteWithClone(GetClonedInst(UserI));
       } else {
@@ -835,6 +848,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
       continue;
     }
     Phi->dropAllReferences();
+    CUT.markInstAsDeleted(Phi);
     VL->erase(Phi);
   }
 
@@ -1113,6 +1127,7 @@ static void finalizeVersioning(Versioning *PrimaryVer) {
   DenseSet<DepNode> Versioned;
   for (auto *Ver = getOutermostVersioning(PrimaryVer); Ver;
        Ver = Ver->Primary) {
+
 #if 0
     auto OldNodes = std::move(Ver->Nodes);
     llvm::append_range(Ver->Nodes, Nodes);
@@ -1124,9 +1139,9 @@ static void finalizeVersioning(Versioning *PrimaryVer) {
     for (auto N : Versioned)
       NewNodes.erase(N);
 
+    Versioned.insert(Ver->Nodes.begin(), Ver->Nodes.end());
     Ver->Nodes.clear();
     llvm::append_range(Ver->Nodes, NewNodes);
-    Versioned.insert(NewNodes.begin(), NewNodes.end());
     
     DenseSet<DepEdge> ImpliedCutEdges;
     for (auto [Edge, DepConds] : Ver->CutEdges) {

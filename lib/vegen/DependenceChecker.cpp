@@ -882,6 +882,8 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
     }
   }
   errs() << "digraph mygraph {\n";
+  DenseSet<int> DrawnNodes;
+  DenseSet<std::pair<int, int>> DrawnEdges;
   for (auto [N, i] : SrcNodeToIds) {
     if (SCutSet.count(i))
       errs() << "n" << i << " [label=\"" << N << "\" color=\"red\"]\n";
@@ -900,9 +902,21 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
     else
       errs() << "n" << DstNodeToIds.lookup(N) << " [label=\"" << N
         << "\" color=\"blue\"]\n";
+
+    DrawnNodes.insert(i);
+    DrawnNodes.insert(DstNodeToIds.lookup(N));
   }
+
   errs() << "n" << S << "[label =\"SOURCE\"]\n";
   errs() << "n" << T << "[label =\"SINK\"]\n";
+  DrawnNodes.insert(S);
+  DrawnNodes.insert(T);
+
+  for (int i = 0; i < MaxFlow.NumArcs(); i++) {
+    if (!DrawnNodes.count(i))
+      errs() << "n" << i << "[label = \"x\"]\n";
+  }
+
 
   for (auto [Edge, Kind] : DepFinder.getDepEdges()) {
     auto [Src, Dst] = Edge;
@@ -930,11 +944,23 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
       errs() << "n" << SrcNodeToIds.lookup(Src) << " -> n" << DstNodeToIds.lookup(Dst)
              << '\n';
     }
+    DrawnEdges.insert({SrcNodeToIds.lookup(Src), DstNodeToIds.lookup(Dst)});
   }
-  for (auto Node : Nodes)
+  for (auto Node : Nodes) {
+    DrawnEdges.insert({S, SrcNodeToIds.lookup(Node)});
     errs() << "n" << S << " -> n" << SrcNodeToIds.lookup(Node) << '\n';
-  for (auto N : Deps)
+  }
+  for (auto N : Deps) {
+    DrawnEdges.insert({DstNodeToIds.lookup(N), T});
     errs() << "n" << DstNodeToIds.lookup(N) << " -> n" << T << '\n';
+  }
+
+  for (int Arc = 0; Arc < MaxFlow.NumArcs(); Arc++) {
+    auto Tail = MaxFlow.Tail(Arc); 
+    auto Head = MaxFlow.Head(Arc);
+    if (!DrawnEdges.count({Tail, Head}))
+      errs() << "n" << Tail << " -> n" << Head << '\n';
+  }
   errs() << "}\n";
 #endif
   ///////////
@@ -1017,17 +1043,17 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
     if (!SecondaryVer)
       return nullptr;
 #if 0
+    errs() << "<<<<< dumping secondary versioning\n";
+    errs() << "Node:\n";
+    for (auto &N : SecondaryVer->Nodes)
+      errs() << N << '\n';
     for (auto [Edge, Conds] : SecondaryVer->CutEdges) {
       auto [Src, Dst] = Edge;
-      errs() << "<<<<< dumping secondary versioning\n";
-      errs() << "Node:\n";
-      for (auto &N : SecondaryVer->Nodes)
-        errs() << N << '\n';
       errs() << "Secondary cut edge: " << Src << " -> " << Dst << '\n';
       for (auto &Cond : Conds)
         errs() << "\t " << Cond << '\n';
-      errs() << ">>>>>>>\n";
     }
+    errs() << ">>>>>>>\n";
 #endif
     if (!SecondaryVer->CutEdges.empty()) {
       SecondaryVer->Primary = Ver.get();

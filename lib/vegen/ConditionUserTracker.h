@@ -8,6 +8,7 @@ class ConditionUserTracker {
   PredicatedSSA &PSSA;
   // Mapping <an instruction I> -> <conditions C that use I>
   llvm::DenseMap<llvm::Instruction *, std::vector<const ControlCondition *>> InstToCondsMap;
+  llvm::DenseSet<llvm::Instruction *> Deleted;
   // Mapping <a condition C> -> <items that uses C>
   llvm::DenseMap<const ControlCondition *, std::vector<Item>> CondToUsersMap;
   llvm::DenseSet<const ControlCondition *> VisitedConds;
@@ -15,6 +16,7 @@ class ConditionUserTracker {
 public:
   ConditionUserTracker(PredicatedSSA &PSSA) : PSSA(PSSA) { add(&PSSA.getTopLevel()); }
   void add(Item);
+  void markInstAsDeleted(llvm::Instruction *I) { Deleted.insert(I); }
   using UserSet = llvm::DenseSet<Item, ItemHashInfo>; 
   // Get users of any condition C such that C uses I
   void getUsers(UserSet &Users, llvm::Instruction *I);
