@@ -29,7 +29,7 @@ bool lower(llvm::ArrayRef<Pack *>, PredicatedSSA &, llvm::DependenceInfo &,
 const ControlCondition *
 findSpeculativeCond(llvm::Instruction *I,
                     llvm::ArrayRef<llvm::Instruction *> Users,
-                    PredicatedSSA &PSSA);
+                    PredicatedSSA &PSSA, Versioner *TheVersioner = nullptr);
 
 bool canSpeculateAt(llvm::Value *V, const ControlCondition *C,
                     PredicatedSSA &PSSA);

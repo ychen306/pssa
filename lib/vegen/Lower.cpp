@@ -1,3 +1,4 @@
+#include "vegen/Lower.h"
 #include "DependenceChecker.h"
 #include "ItemMover.h"
 #include "PackSet.h"
@@ -859,16 +860,28 @@ static Value *getLoadStorePointer(Pack *P) {
 // Users
 const ControlCondition *findSpeculativeCond(Instruction *I,
                                             ArrayRef<Instruction *> Users,
-                                            PredicatedSSA &PSSA) {
+                                            PredicatedSSA &PSSA,
+                                            Versioner *TheVersioner) {
+
+  auto GetInstCond = [&](auto *I) {
+    auto *C = PSSA.getInstCond(I);
+    if (TheVersioner) {
+      auto *C2 = TheVersioner->getOriginalCondition(C);
+      if (C2)
+        return C2;
+    }
+    return C;
+  };
+
   auto *VL = PSSA.getLoopForInst(I);
 
   // Collect the conditions for all the users instructions
-  SmallVector<const ControlCondition *, 8> Conds{VL->getInstCond(I)};
+  SmallVector<const ControlCondition *, 8> Conds{GetInstCond(I)};
   for (auto *UserI : Users) {
     // Easy case the defs and uses in the same loop
     auto *UserVL = PSSA.getLoopForInst(UserI);
     if (UserVL == VL || PSSA.getLoopDepth(UserVL) == PSSA.getLoopDepth(VL)) {
-      Conds.push_back(PSSA.getInstCond(UserI));
+      Conds.push_back(GetInstCond(UserI));
       continue;
     }
 
@@ -1230,7 +1243,7 @@ bool VectorGen::run() {
     auto *Ptr = dyn_cast_or_null<Instruction>(getLoadStorePointer(P));
     if (!Ptr || P->masks().empty())
       continue;
-    auto *C = findSpeculativeCond(Ptr, P->values(), PSSA);
+    auto *C = findSpeculativeCond(Ptr, P->values(), PSSA, TheVersioner);
     assert(canSpeculateAt(Ptr, C, PSSA));
     auto *VL = PSSA.getLoopForInst(Ptr);
     VL->setInstCond(Ptr, C);
