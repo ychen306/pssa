@@ -7,16 +7,23 @@ void ConditionUserTracker::processCondition(const ControlCondition *C) {
   if (!C || !VisitedConds.insert(C).second)
     return;
 
-  if (auto *Or = dyn_cast<ConditionOr>(C)) {
-    for (auto *C2 : Or->Conds)
-      processCondition(C2);
-    return;
-  }
+  SmallVector<const ControlCondition *> Worklist {C};
+  while (!Worklist.empty()) {
+    auto *C2 = Worklist.pop_back_val();
+    if (!C2)
+      continue;
 
-  auto *And = cast<ConditionAnd>(C);
-  processCondition(And->Parent);
-  if (auto *I = dyn_cast<Instruction>(And->Cond))
-    InstToCondsMap[I].push_back(C);
+    if (auto *Or = dyn_cast<ConditionOr>(C2)) {
+      append_range(Worklist, Or->Conds);
+      continue;
+    }
+
+    auto *And = cast<ConditionAnd>(C2);
+    if (auto *I = dyn_cast<Instruction>(And->Cond)) {
+      InstToCondsMap[I].push_back(C);
+    }
+    Worklist.push_back(And->Parent);
+  }
 }
 
 void ConditionUserTracker::add(Item It) {

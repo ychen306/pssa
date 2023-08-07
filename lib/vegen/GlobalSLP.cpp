@@ -97,6 +97,8 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   lowerReductions(RI, PSSA, LIT, DepChecker, false /*replace insts*/);
   LIT.destroy();
 
+  weakenAddressConditions(Packs, PSSA);
+
   Versioner TheVersioner(PSSA, DI, CAA, LI, SE);
   bool DoVersioning = !VerPlan.Versionings.empty();
   // Lower the versioning plan

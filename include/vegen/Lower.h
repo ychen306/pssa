@@ -26,10 +26,15 @@ bool lower(llvm::ArrayRef<Pack *>, PredicatedSSA &, llvm::DependenceInfo &,
            CachingAA &, llvm::LoopInfo &, llvm::ScalarEvolution &,
            Versioner *TheVersioner = nullptr);
 
+// When we pack consecutive loads or stores with different
+// conditions, we need to weaken the condition C of the address
+// calculation so that C is implied by all the conditions
+void weakenAddressConditions(llvm::ArrayRef<Pack *> Packs, PredicatedSSA &PSSA);
+
 const ControlCondition *
 findSpeculativeCond(llvm::Instruction *I,
                     llvm::ArrayRef<llvm::Instruction *> Users,
-                    PredicatedSSA &PSSA, Versioner *TheVersioner = nullptr);
+                    PredicatedSSA &PSSA);
 
 bool canSpeculateAt(llvm::Value *V, const ControlCondition *C,
                     PredicatedSSA &PSSA);

@@ -17,16 +17,16 @@ define void @s278() local_unnamed_addr #0 {
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    br label [[HEADER:%.*]]
 ; CHECK:       header:
-; CHECK-NEXT:    [[NITER:%.*]] = phi i64 [ 0, [[ENTRY:%.*]] ], [ [[NITER_NEXT_7:%.*]], [[HEADER]] ]
-; CHECK-NEXT:    [[INDVARS_IV:%.*]] = phi i64 [ 0, [[ENTRY]] ], [ [[INDVARS_IV_NEXT_7:%.*]], [[HEADER]] ]
-; CHECK-NEXT:    [[ARRAYIDX:%.*]] = getelementptr inbounds [32000 x float], ptr @c, i64 0, i64 [[INDVARS_IV]]
-; CHECK-NEXT:    [[INDVARS_IV_NEXT:%.*]] = add nuw nsw i64 [[INDVARS_IV]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_1:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_2:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_1]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_3:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_2]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_4:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_3]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_5:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_4]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_6:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_5]], 1
+; CHECK-DAG:    [[NITER:%.*]] = phi i64 [ 0, [[ENTRY:%.*]] ], [ [[NITER_NEXT_7:%.*]], [[HEADER]] ]
+; CHECK-DAG:    [[INDVARS_IV:%.*]] = phi i64 [ 0, [[ENTRY]] ], [ [[INDVARS_IV_NEXT_7:%.*]], [[HEADER]] ]
+; CHECK-DAG:    [[ARRAYIDX:%.*]] = getelementptr inbounds [32000 x float], ptr @c, i64 0, i64 [[INDVARS_IV]]
+; CHECK-DAG:    [[INDVARS_IV_NEXT:%.*]] = add nuw nsw i64 [[INDVARS_IV]], 1
+; CHECK-DAG:    [[INDVARS_IV_NEXT_1:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT]], 1
+; CHECK-DAG:    [[INDVARS_IV_NEXT_2:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_1]], 1
+; CHECK-DAG:    [[INDVARS_IV_NEXT_3:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_2]], 1
+; CHECK-DAG:    [[INDVARS_IV_NEXT_4:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_3]], 1
+; CHECK-DAG:    [[INDVARS_IV_NEXT_5:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_4]], 1
+; CHECK-DAG:    [[INDVARS_IV_NEXT_6:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_5]], 1
 ; CHECK-NEXT:    [[DOTVEC:%.*]] = load <8 x float>, ptr [[ARRAYIDX]], align 4
 ; CHECK-NEXT:    [[ARRAYIDX2:%.*]] = getelementptr inbounds [32000 x float], ptr @e, i64 0, i64 [[INDVARS_IV]]
 ; CHECK-NEXT:    [[DOTVEC1:%.*]] = load <8 x float>, ptr [[ARRAYIDX2]], align 4

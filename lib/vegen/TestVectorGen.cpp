@@ -495,6 +495,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
 
   LIT.destroy();
 
+  weakenAddressConditions(Packs, PSSA);
   Ok = lower(Packs, PSSA, DI, CAA, LI, SE);
   assert(Ok && "can't lower due to circular dep");
   lowerPSSAToLLVM(&F, PSSA);
