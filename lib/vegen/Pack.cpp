@@ -173,6 +173,7 @@ static bool isVectorizableIntrinsic(Intrinsic::ID ID) {
   case Intrinsic::smax:
   case Intrinsic::umin:
   case Intrinsic::umax:
+  case Intrinsic::fabs:
     return true;
   default:
     return false;
