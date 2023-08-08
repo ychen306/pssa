@@ -38,6 +38,7 @@ public:
     PK_Mu,
     PK_Blend,
     PK_GEP,
+    PK_Splat, // load a single element and then broadcast
     // *Horizontal* reduction
     PK_Reduction,
     // Arbitrary, potentially non-SIMD instructions
@@ -156,6 +157,23 @@ public:
   Pack *clone() const override {
     return new LoadPack(Insts, PSSA, IsDereferenceable);
   }
+};
+
+class SplatPack : public Pack {
+  SplatPack(llvm::ArrayRef<llvm::Instruction *> Insts)
+      : Pack(Insts, PK_Splat) {}
+
+public:
+  // Only create a splat pack if you can prove all the instructions in `Insts`
+  // are load and return the same values.
+  // Note: loads return the same values if they are independent
+  static SplatPack *tryPack(llvm::ArrayRef<llvm::Instruction *> Insts,
+                            llvm::ScalarEvolution &SE, llvm::LoopInfo &,
+                            const llvm::DataLayout &);
+  llvm::SmallVector<OperandPack, 2> getOperands() const override { return {}; }
+  llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
+  static bool classof(const Pack *P) { return P->getKind() == PK_Splat; }
+  Pack *clone() const override { return new SplatPack(Insts); }
 };
 
 class StorePack : public Pack {

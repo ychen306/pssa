@@ -280,6 +280,11 @@ TinyPtrVector<Pack *> Packer::getProducers(ArrayRef<Value *> Values) {
     if (getLoopDepth(PSSA, I, LIT) != Depth)
       return {};
 
+  if (auto *P = SplatPack::tryPack(Insts, SE, LI, DL)) {
+    if (canSpeculativelyComputeAddr(Insts, PSSA))
+      return {P};
+  }
+
   if (auto *P = LoadPack::tryPack(Insts, DL, SE, DT, LI, PSSA)) {
     if (canSpeculativelyComputeAddr(P->values(), PSSA))
       return {P};

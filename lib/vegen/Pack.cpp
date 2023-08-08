@@ -377,6 +377,39 @@ Value *LoadPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
                                  Operands.front());
 }
 
+SplatPack *SplatPack::tryPack(ArrayRef<Instruction *> Insts,
+                              ScalarEvolution &SE, LoopInfo &LI,
+                              const DataLayout &DL) {
+  auto *Ty = Insts.front()->getType();
+  SmallVector<Value *> Ptrs;
+  for (auto *I : Insts) {
+    auto *Load = dyn_cast<LoadInst>(I);
+    if (!Load || Load->getType() != Ty)
+      return nullptr;
+    Ptrs.push_back(Load->getPointerOperand());
+  }
+  auto *Ptr0 = Ptrs.front();
+  for (auto *Ptr : drop_begin(Ptrs)) {
+    auto Diff =
+        diffPointers(Ty, Ptr0, Ty, Ptr, DL, SE, LI, true /*strict check*/);
+    if (!Diff || *Diff != 0)
+      return nullptr;
+  }
+  return new SplatPack(Insts);
+}
+
+Value *SplatPack::emit(ArrayRef<Value *>, Inserter &Insert) const {
+  auto *Load = Insts.front()->clone();
+  Insert(Load);
+  unsigned N = Insts.size();
+  Value *Poison = PoisonValue::get(FixedVectorType::get(Load->getType(), N));
+  auto *Int64Ty = Type::getInt64Ty(Insert.getContext());
+  Value *V = Insert.create<InsertElementInst>(Poison, Load,
+                                              ConstantInt::get(Int64Ty, 0));
+  SmallVector<int, 8> Zeros(N);
+  return Insert.make<ShuffleVectorInst>(V, Zeros);
+}
+
 StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
                               const DataLayout &DL, ScalarEvolution &SE,
                               LoopInfo &LI, PredicatedSSA &PSSA) {
