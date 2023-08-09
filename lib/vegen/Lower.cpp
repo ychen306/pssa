@@ -44,6 +44,9 @@ private:
 
 public:
   void insert(Value *VecVal, const PackType *P) {
+    auto *Ty = VecVal->getType();
+    (void)Ty;
+    assert(!Ty->isVectorTy() || !Ty->isVoidTy() || P->values().size() == 1);
     for (auto X : enumerate(P->values()))
       if (X.value())
         Lanes.try_emplace(X.value(), (unsigned)X.index(), VecVal);
@@ -718,8 +721,14 @@ Value *VectorGen::gatherValues(ArrayRef<ValueType> Values,
     if (std::is_same<Value *, ValueType>::value && !V)
       continue;
     if (auto L = ValueIdx.getLane(V)) {
-      // Remember we need to gather from this vector to the `i`th element
-      SrcPacks[L->Vec].push_back({L->Idx, i});
+      if (!L->Vec->getType()->isVectorTy()) {
+        // Special case: reduction pack creates a scalar
+        assert(L->Idx == 0);
+        SrcScalars.emplace_back(L->Vec, i);
+      } else {
+        // Remember we need to gather from this vector to the `i`th element
+        SrcPacks[L->Vec].push_back({L->Idx, i});
+      }
     } else {
       // Remember that we need to insert `V` as the `i`th element
       SrcScalars.emplace_back(materializeValue(V, Insert), i);
