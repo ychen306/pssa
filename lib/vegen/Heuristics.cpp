@@ -191,6 +191,8 @@ public:
     if (!VectorType::isValidElementType(Ty))
       return;
     Value *Obj = getUnderlyingObject(SI->getPointerOperand());
+    LLVM_DEBUG(dbgs() << "found store " << *SI << "\n\tobject = " << *Obj
+                      << '\n');
     ObjToStoreMap[Obj].push_back(SI);
   }
 };
@@ -976,12 +978,6 @@ static void partitionStoresByStructure(ArrayRef<Instruction *> Stores,
     PtrToStoresMap[{Ptr, Ty}].push_back(Store);
   }
 
-  LLVM_DEBUG({
-    dbgs() << "Trying to assign stores:\n";
-    for (auto *s : Stores)
-      dbgs() << '\t' << *s << '\n';
-  });
-
   // Set of stores assigned to a group
   DenseSet<Instruction *> AssignedStores;
   StructureNumbering SN(PSSA);
@@ -1042,6 +1038,12 @@ static void partitionStores(ArrayRef<Instruction *> Stores,
                             StoreGroupType &Groups, const DataLayout &DL,
                             ScalarEvolution &SE, LoopInfo &LI,
                             PredicatedSSA &PSSA) {
+  LLVM_DEBUG({
+    dbgs() << "Trying to assign stores:\n";
+    for (auto *s : Stores)
+      dbgs() << '\t' << *s << '\n';
+  });
+
   auto IsComparableWith = [&](Instruction *I, Instruction *I2) -> bool {
     auto *Ptr = getLoadStorePointerOperand(I);
     auto *Ptr2 = getLoadStorePointerOperand(I2);
@@ -1065,6 +1067,16 @@ static void partitionStores(ArrayRef<Instruction *> Stores,
     if (!Found)
       GroupByAddress[I].push_back(I);
   }
+
+  LLVM_DEBUG({
+    dbgs() << "Stores partitioned by compatibility:\n";
+    for (auto &CompatibleStores : make_second_range(GroupByAddress)) {
+      dbgs() << "{\n";
+      for (auto *S : CompatibleStores)
+        dbgs() << '\t' << *S << '\n';
+      dbgs() << "}\n";
+    }
+  });
 
   for (auto &ComparableStores : make_second_range(GroupByAddress))
     partitionStoresByStructure(ComparableStores, Groups, DL, SE, LI, PSSA);
@@ -1231,9 +1243,9 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
     for (auto *I : drop_begin(Stores))
       if (getLoopDepth(PSSA, I, LIT) != Depth) {
         LLVM_DEBUG({
-            dbgs() << "bailing on stores because of loop depth mismatch:\n";
-            for (auto *I : Stores)
-              dbgs() << '\t' << *I << '\n';
+          dbgs() << "bailing on stores because of loop depth mismatch:\n";
+          for (auto *I : Stores)
+            dbgs() << '\t' << *I << '\n';
         });
         return;
       }
