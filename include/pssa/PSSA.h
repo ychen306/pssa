@@ -54,6 +54,7 @@ struct ItemHashInfo {
 class PredicatedSSA;
 class VLoop {
   friend class PredicatedSSA;
+  std::string Name;
   PredicatedSSA *PSSA;
   bool IsTopLevel; // True if this VLoop doesn't represent any actual loop but
                    // the whole function
@@ -89,6 +90,9 @@ public:
 
   using ItemIterator = decltype(Items)::iterator;
   using ConstItemIterator = decltype(Items)::const_iterator;
+
+  void setName(llvm::Twine NewName) { Name = NewName.str(); }
+  llvm::StringRef getName() const { return Name; }
 
   // Insert a generic, non-phi instruction
   ItemIterator insert(llvm::Instruction *, const ControlCondition *,

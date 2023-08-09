@@ -326,6 +326,7 @@ VLoop *Versioner::cloneLoop(VLoop *OrigVL, ValueToValueMapTy &VMap,
   // Remap the continue/back-edge cond. (couldn't do it before cloning)
   VL->setBackEdgeCond(RemapCondition(VL->getBackEdgeCond()));
   Callback(OrigVL, VL);
+  VL->setName(OrigVL->getName() + ".clone");
   return VL;
 }
 
@@ -1088,20 +1089,23 @@ bool IndependenceTracker::isIndependent(const DepNode &Src,
   // Check the white list first, which doesn't take cloning into account.
   if (Whitelist.count({Src, Dst}))
     return true;
-  auto *SrcI = Src.asInstruction();
-  auto *DstI = Dst.asInstruction();
-  // FIXME: also support inst-to-loop dep
-  if (SrcI && DstI) {
-    //errs() << "checking independence: " << Src << ", " << Dst
-    //       << " CONDS = " << *PSSA.getInstCond(SrcI) << ", "
-    //       << *PSSA.getInstCond(DstI) << "\n\t exclusive? "
-    //       << TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
-    //                                   PSSA.getInstCond(DstI))
-    //       << '\n';
-    if (TheVersioner.isExclusive(PSSA.getInstCond(SrcI),
-                                 PSSA.getInstCond(DstI)))
-      return true;
-  }
+  auto GetCond = [&](DepNode N) {
+    if (auto *I = N.asInstruction())
+      return PSSA.getInstCond(I);
+    auto *VL = N.asLoop();
+    assert(VL);
+    return VL->getLoopCond();
+  };
+#if 0
+  errs() << "checking independence: " << Src << ", " << Dst
+    << " CONDS = " << *GetCond(Src) << ", "
+    << *GetCond(Dst) << "\n\t exclusive? "
+    << TheVersioner.isExclusive(GetCond(Src),
+        GetCond(Dst))
+    << '\n';
+#endif
+  if (TheVersioner.isExclusive(GetCond(Src), GetCond(Dst)))
+    return true;
   return checkIndependence(Src, Dst) || checkIndependence(Dst, Src);
 }
 

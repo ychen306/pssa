@@ -249,7 +249,7 @@ raw_ostream &operator<<(raw_ostream &OS, const DepNode &N) {
   else if (auto *I = N.asInstruction())
     OS << *I;
   else if (auto *VL = N.asLoop())
-    OS << "loop";
+    OS << "loop<" << VL->getName() << ">";
   else
     OS << *N.asCond();
   return OS;
@@ -508,7 +508,8 @@ bool DependenceChecker::depends(
     SmallVector<DepCondition> DepConds;
     for (auto *I1 : Summaries[VL1].MemoryInsts) {
       for (auto *I2 : Summaries[VL2].MemoryInsts) {
-        // TODO: deal with inter-loop conditional dependences
+        if (TheVersioner && TheVersioner->isIndependent(I2, I1))
+          continue;
         auto Kind = getDepKind(I1, I2);
         if (Kind) {
           if (DepEdges) {
@@ -648,7 +649,7 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
   DepEdges.try_emplace({Src, It /*dst*/}, DepCondition::always());
 
   if (!Processing.insert(It).second) {
-    // errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
+    //errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
     FoundCycle = true;
     return;
   }

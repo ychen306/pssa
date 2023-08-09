@@ -191,6 +191,7 @@ PredicatedSSA::PredicatedSSA(Function *F, LoopInfo &LI, DominatorTree &DT,
 
   while (!Worklist.empty()) {
     auto [VL, L] = Worklist.pop_back_val();
+    VL->setName(L->getHeader()->getName());
     VLoopToLoopMap[VL] = L;
     LoopToVLoopMap[L] = VL;
 
