@@ -49,7 +49,7 @@ define void @foo(ptr noundef %b, ptr noundef %c) #0 {
 ; CHECK-NEXT:    [[I_1_VEC:%.*]] = load <4 x i32>, ptr @a, align 16
 ; CHECK-NEXT:    [[CMP1_1_VEC:%.*]] = icmp sgt <4 x i32> [[I_1_VEC]], zeroinitializer
 ; CHECK-NEXT:    [[TMP7:%.*]] = xor <4 x i1> [[CMP1_1_VEC]], <i1 poison, i1 true, i1 true, i1 true>
-; CHECK-NEXT:    [[TMP8:%.*]] = shufflevector <4 x i1> [[TMP7]], <4 x i1> undef, <3 x i32> <i32 1, i32 2, i32 3>
+; CHECK-NEXT:    [[TMP8:%.*]] = shufflevector <4 x i1> [[TMP7]], <4 x i1> undef, <3 x i32>
 ; CHECK-NEXT:    [[TMP9:%.*]] = bitcast <3 x i1> [[TMP8]] to i3
 ; CHECK-NEXT:    [[DOTNOT:%.*]] = icmp eq i3 [[TMP9]], 0
 ; CHECK-NEXT:    br i1 [[DOTNOT]], label [[TMP23:%.*]], label [[TMP10:%.*]]

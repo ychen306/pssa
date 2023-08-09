@@ -21,6 +21,8 @@
 #include "llvm/Analysis/ValueTracking.h" // getUnderlyingObject
 #include "llvm/IR/Instructions.h"
 
+#define DEBUG_TYPE "vegen-heuristic"
+
 using namespace llvm;
 namespace {
 
@@ -251,11 +253,12 @@ Pack *decomposeAndPack(PredicatedSSA &PSSA, ReductionInfo &RI,
   return SIMDPack::tryPack(Reducers);
 }
 
-
 // Make sure when we pack divergent loads we can speculate the address
-static bool canSpeculativelyComputeAddr(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA) {
+static bool canSpeculativelyComputeAddr(ArrayRef<Instruction *> Insts,
+                                        PredicatedSSA &PSSA) {
   auto *Ptr = dyn_cast<Instruction>(getLoadStorePointerOperand(Insts.front()));
-  // Can speculate if the pointer is not an instruction (e.g., global or function arg)
+  // Can speculate if the pointer is not an instruction (e.g., global or
+  // function arg)
   if (!Ptr)
     return true;
   auto *C = findSpeculativeCond(Ptr, Insts, PSSA);
@@ -907,6 +910,7 @@ struct Structure : FoldingSetNode {
 
 // Expressions with the same computation graph should have the same structure
 class StructureNumbering {
+  PredicatedSSA &PSSA;
   BumpPtrAllocator Allocator;
   FoldingSet<Structure> UniqueStructures;
   Structure *getUniqueStructure(unsigned Opcode, Type *Ty,
@@ -916,16 +920,25 @@ class StructureNumbering {
   }
   DenseMap<Instruction *, Structure *> InstToStructMap;
 
+  bool isMu(Instruction *I) {
+    auto *PN = dyn_cast<PHINode>(I);
+    if (!PN)
+      return false;
+    auto *VL = PSSA.getLoopForInst(I);
+    return VL->isMu(PN);
+  }
+
 public:
+  StructureNumbering(PredicatedSSA &PSSA) : PSSA(PSSA) {}
   Structure *getStructure(Instruction *I) {
     if (auto It = InstToStructMap.find(I); It != InstToStructMap.end())
       return It->second;
 
     // Instructions with side effects are terminal (e.g., loads, actual function
-    // calls). Same for phi nodes
-    if (I->mayReadOrWriteMemory() || isa<PHINode>(I))
+    // calls). Same for mu nodes
+    if (I->mayReadOrWriteMemory() || isMu(I))
       return InstToStructMap[I] =
-                 getUniqueStructure(I->getOpcode(), I->getType());
+                 getUniqueStructure(Instruction::Store, I->getType());
     SmallVector<Structure *> Operands;
     for (auto *O : I->operand_values())
       Operands.push_back(getStructure(O));
@@ -942,12 +955,19 @@ public:
 } // namespace
 
 using StoreGroupType = std::map<Instruction *, SmallVector<Instruction *, 8>>;
-// Partition the stores by whether two stores are comparable.
-// E.g., a[i] and a[j] (assuming we know nothing more about i and j) are not
-// comparable, while a[i] and a[i+2] are comparable.
-static void partitionStores(ArrayRef<Instruction *> Stores,
-                            StoreGroupType &Groups, const DataLayout &DL,
-                            ScalarEvolution &SE, LoopInfo &LI) {
+static void partitionStoresByStructure(ArrayRef<Instruction *> Stores,
+                                       StoreGroupType &Groups,
+                                       const DataLayout &DL,
+                                       ScalarEvolution &SE, LoopInfo &LI,
+                                       PredicatedSSA &PSSA) {
+  // Don't bother with partitioning if we can sort all of the stores and there
+  // are no duplicates (by addresses)
+  SmallVector<Instruction *, 8> SortedStores;
+  if (sortByPointers(Stores, SortedStores, DL, SE, LI)) {
+    Groups[SortedStores.front()] = SortedStores;
+    return;
+  }
+
   std::map<std::pair<Value *, Type *>, SmallVector<Instruction *>>
       PtrToStoresMap;
   for (auto *Store : Stores) {
@@ -956,9 +976,15 @@ static void partitionStores(ArrayRef<Instruction *> Stores,
     PtrToStoresMap[{Ptr, Ty}].push_back(Store);
   }
 
+  LLVM_DEBUG({
+    dbgs() << "Trying to assign stores:\n";
+    for (auto *s : Stores)
+      dbgs() << '\t' << *s << '\n';
+  });
+
   // Set of stores assigned to a group
   DenseSet<Instruction *> AssignedStores;
-  StructureNumbering SN;
+  StructureNumbering SN(PSSA);
   while (AssignedStores.size() < Stores.size()) {
     for (auto [Key, Stores] : PtrToStoresMap) {
       auto *Ptr = Key.first;
@@ -971,7 +997,7 @@ static void partitionStores(ArrayRef<Instruction *> Stores,
       if (UnassignedStores.empty())
         continue;
 
-      auto HasSamePointer = [Ptr](Instruction *I) {
+      auto HasSamePointer = [&](Instruction *I) {
         return getLoadStorePointerOperand(I) == Ptr;
       };
       bool Found = false;
@@ -979,20 +1005,25 @@ static void partitionStores(ArrayRef<Instruction *> Stores,
         auto *Store2 = KV.first;
         auto *Ty2 = getLoadStoreType(Store2);
         auto *Ptr2 = getLoadStorePointerOperand(Store2);
-
         if (diffPointers(Ty, Ptr, Ty2, Ptr2, DL, SE, LI) &&
             !llvm::count_if(KV.second, HasSamePointer)) {
-          Found = true;
           Instruction *BestStore = UnassignedStores.front();
           // Now that we find a store group with comparable pointers,
           // pick from `UnassignedStores` with the same structure, if possible
           auto *S = SN.getStructure(cast<StoreInst>(Store2)->getValueOperand());
           for (auto *Store : UnassignedStores)
-            if (S == SN.getStructure(cast<StoreInst>(Store)->getValueOperand()))
+            if (S ==
+                SN.getStructure(cast<StoreInst>(Store)->getValueOperand())) {
               BestStore = Store;
-          KV.second.push_back(BestStore);
-          AssignedStores.insert(BestStore);
-          break;
+              Found = true;
+              break;
+            }
+
+          if (Found) {
+            KV.second.push_back(BestStore);
+            AssignedStores.insert(BestStore);
+            break;
+          }
         }
       }
       if (!Found) {
@@ -1002,6 +1033,41 @@ static void partitionStores(ArrayRef<Instruction *> Stores,
       }
     }
   }
+}
+
+// Partition the stores by whether two stores are comparable.
+// E.g., a[i] and a[j] (assuming we know nothing more about i and j) are not
+// comparable, while a[i] and a[i+2] are comparable.
+static void partitionStores(ArrayRef<Instruction *> Stores,
+                            StoreGroupType &Groups, const DataLayout &DL,
+                            ScalarEvolution &SE, LoopInfo &LI,
+                            PredicatedSSA &PSSA) {
+  auto IsComparableWith = [&](Instruction *I, Instruction *I2) -> bool {
+    auto *Ptr = getLoadStorePointerOperand(I);
+    auto *Ptr2 = getLoadStorePointerOperand(I2);
+    auto *Ty = getLoadStoreType(I);
+    if (Ty != getLoadStoreType(I2))
+      return false;
+    return diffPointers(Ty, Ptr, Ty, Ptr2, DL, SE, LI).hasValue();
+  };
+
+  // First cut: group the stores by address compatibility
+  StoreGroupType GroupByAddress;
+  for (auto *I : llvm::reverse(Stores)) {
+    bool Found = false;
+    for (auto *Leader : make_first_range(GroupByAddress)) {
+      if (IsComparableWith(Leader, I)) {
+        GroupByAddress[Leader].push_back(I);
+        Found = true;
+        break;
+      }
+    }
+    if (!Found)
+      GroupByAddress[I].push_back(I);
+  }
+
+  for (auto &ComparableStores : make_second_range(GroupByAddress))
+    partitionStoresByStructure(ComparableStores, Groups, DL, SE, LI, PSSA);
 }
 
 // Estimate the cost saving from horizontally vectorizing a list of values
@@ -1163,13 +1229,31 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
 
     unsigned Depth = getLoopDepth(PSSA, Stores.front(), LIT);
     for (auto *I : drop_begin(Stores))
-      if (getLoopDepth(PSSA, I, LIT) != Depth)
+      if (getLoopDepth(PSSA, I, LIT) != Depth) {
+        LLVM_DEBUG({
+            dbgs() << "bailing on stores because of loop depth mismatch:\n";
+            for (auto *I : Stores)
+              dbgs() << '\t' << *I << '\n';
+        });
         return;
+      }
 
     SmallVector<Instruction *> SortedStores;
     // FIXME: deal with cases when there are gaps between the stores
-    if (!sortByPointers(Stores, SortedStores, DL, SE, LI))
+    if (!sortByPointers(Stores, SortedStores, DL, SE, LI)) {
+      LLVM_DEBUG({
+        dbgs() << "bailing on stores because can't sort:\n";
+        for (auto *I : Stores)
+          dbgs() << '\t' << *I << '\n';
+      });
       return;
+    }
+
+    LLVM_DEBUG({
+      dbgs() << "sorted stores:\n";
+      for (auto *I : SortedStores)
+        dbgs() << '\t' << *I << '\n';
+    });
 
     // Determine the maximum vector length for this type of stores
     unsigned BitWidth = cast<StoreInst>(SortedStores.front())
@@ -1189,7 +1273,7 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
 
   for (ArrayRef<Instruction *> Stores : make_second_range(ObjToStoreMap)) {
     StoreGroupType StoreGroups;
-    partitionStores(Stores, StoreGroups, DL, SE, LI);
+    partitionStores(Stores, StoreGroups, DL, SE, LI, PSSA);
     for_each(make_second_range(StoreGroups), VectorizeStoreGroup);
   }
 

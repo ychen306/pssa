@@ -9,17 +9,17 @@ define i8 @_Z1obPA1_A1_A1_i(ptr %p2, ptr %arrayidx6, i64 %idxprom7) #0 {
 ; CHECK-LABEL: @_Z1obPA1_A1_A1_i(
 ; CHECK-NEXT:  header:
 ; CHECK-NEXT:    [[ARRAYIDX8:%.*]] = getelementptr inbounds [1 x i32], ptr [[ARRAYIDX6:%.*]], i64 0, i64 [[IDXPROM7:%.*]]
-; CHECK:    br i1 [[TMP6:%.*]], label [[TMP25:%.*]], label [[TMP42:%.*]]
+; CHECK:    br i1 [[TMP6:%.*]], label [[TMP25:%.*]], label [[TMP36:%.*]]
 ; CHECK:       exit:
-; CHECK-NEXT:    [[I14216:%.*]] = phi i8 [ 0, [[TMP25]] ], [ [[I14:%.*]], [[TMP42]] ]
-; CHECK-NEXT:    [[CONV10_6_VER_DEMOTED_0214:%.*]] = phi i8 [ [[TMP40:%.*]], [[TMP25]] ], [ [[CONV10_6_CLONE:%.*]], [[TMP42]] ]
-; CHECK-NEXT:    [[CONV10_4_VER_DEMOTED_0158173212:%.*]] = phi i8 [ [[TMP38:%.*]], [[TMP25]] ], [ [[CONV10_4_CLONE:%.*]], [[TMP42]] ]
-; CHECK-NEXT:    [[CONV10_2_VER_DEMOTED_0102117156175210:%.*]] = phi i8 [ [[TMP36:%.*]], [[TMP25]] ], [ [[CONV10_2_CLONE:%.*]], [[TMP42]] ]
-; CHECK-NEXT:    [[CONV10_VER_DEMOTED_0425999119154177208:%.*]] = phi i8 [ [[TMP34:%.*]], [[TMP25]] ], [ [[CONV10_CLONE:%.*]], [[TMP42]] ]
-; CHECK-NEXT:    [[CONV10_1_VER_DEMOTED_07288128147182205:%.*]] = phi i8 [ [[TMP35:%.*]], [[TMP25]] ], [ [[CONV10_1_CLONE:%.*]], [[TMP42]] ]
-; CHECK-NEXT:    [[CONV10_3_VER_DEMOTED_0130145184203:%.*]] = phi i8 [ [[TMP37:%.*]], [[TMP25]] ], [ [[CONV10_3_CLONE:%.*]], [[TMP42]] ]
-; CHECK-NEXT:    [[CONV10_5_VER_DEMOTED_0186201:%.*]] = phi i8 [ [[TMP39:%.*]], [[TMP25]] ], [ [[CONV10_5_CLONE:%.*]], [[TMP42]] ]
-; CHECK-NEXT:    [[CONV10_7_VER_DEMOTED_0:%.*]] = phi i8 [ [[TMP41:%.*]], [[TMP25]] ], [ [[CONV10_7_CLONE:%.*]], [[TMP42]] ]
+; CHECK-NEXT:    [[I14216:%.*]] = phi i8 [ 0, [[TMP25]] ], [ [[I14:%.*]], [[TMP36]] ]
+; CHECK-NEXT:    [[CONV10_6_VER_DEMOTED_0214:%.*]] = phi i8 [ [[TMP34:%.*]], [[TMP25]] ], [ [[CONV10_6_CLONE:%.*]], [[TMP36]] ]
+; CHECK-NEXT:    [[CONV10_4_VER_DEMOTED_0158173212:%.*]] = phi i8 [ [[TMP32:%.*]], [[TMP25]] ], [ [[CONV10_4_CLONE:%.*]], [[TMP36]] ]
+; CHECK-NEXT:    [[CONV10_2_VER_DEMOTED_0102117156175210:%.*]] = phi i8 [ [[TMP30:%.*]], [[TMP25]] ], [ [[CONV10_2_CLONE:%.*]], [[TMP36]] ]
+; CHECK-NEXT:    [[CONV10_VER_DEMOTED_0425999119154177208:%.*]] = phi i8 [ [[TMP28:%.*]], [[TMP25]] ], [ [[CONV10_CLONE:%.*]], [[TMP36]] ]
+; CHECK-NEXT:    [[CONV10_1_VER_DEMOTED_07288128147182205:%.*]] = phi i8 [ [[TMP29:%.*]], [[TMP25]] ], [ [[CONV10_1_CLONE:%.*]], [[TMP36]] ]
+; CHECK-NEXT:    [[CONV10_3_VER_DEMOTED_0130145184203:%.*]] = phi i8 [ [[TMP31:%.*]], [[TMP25]] ], [ [[CONV10_3_CLONE:%.*]], [[TMP36]] ]
+; CHECK-NEXT:    [[CONV10_5_VER_DEMOTED_0186201:%.*]] = phi i8 [ [[TMP33:%.*]], [[TMP25]] ], [ [[CONV10_5_CLONE:%.*]], [[TMP36]] ]
+; CHECK-NEXT:    [[CONV10_7_VER_DEMOTED_0:%.*]] = phi i8 [ [[TMP35:%.*]], [[TMP25]] ], [ [[CONV10_7_CLONE:%.*]], [[TMP36]] ]
 ; CHECK-NEXT:    [[I16:%.*]] = tail call i8 @llvm.umin.i8(i8 [[CONV10_7_VER_DEMOTED_0]], i8 [[I14216]])
 ; CHECK-NEXT:    [[TMP7:%.*]] = insertelement <8 x i8> undef, i8 [[CONV10_VER_DEMOTED_0425999119154177208]], i64 0
 ; CHECK-NEXT:    [[TMP8:%.*]] = insertelement <8 x i8> [[TMP7]], i8 [[CONV10_1_VER_DEMOTED_07288128147182205]], i64 1
@@ -44,29 +44,23 @@ define i8 @_Z1obPA1_A1_A1_i(ptr %p2, ptr %arrayidx6, i64 %idxprom7) #0 {
 ; CHECK-NEXT:    ret i8 [[TMP24]]
 ; CHECK:       25:
 ; CHECK-NEXT:    store i8 0, ptr [[ARRAYIDX6]], align 1
-; CHECK-NEXT:    [[TMP26:%.*]] = insertelement <8 x ptr> undef, ptr [[ARRAYIDX8]], i64 0
-; CHECK-NEXT:    [[TMP27:%.*]] = insertelement <8 x ptr> [[TMP26]], ptr [[ARRAYIDX8]], i64 1
-; CHECK-NEXT:    [[TMP28:%.*]] = insertelement <8 x ptr> [[TMP27]], ptr [[ARRAYIDX8]], i64 2
-; CHECK-NEXT:    [[TMP29:%.*]] = insertelement <8 x ptr> [[TMP28]], ptr [[ARRAYIDX8]], i64 3
-; CHECK-NEXT:    [[TMP30:%.*]] = insertelement <8 x ptr> [[TMP29]], ptr [[ARRAYIDX8]], i64 4
-; CHECK-NEXT:    [[TMP31:%.*]] = insertelement <8 x ptr> [[TMP30]], ptr [[ARRAYIDX8]], i64 5
-; CHECK-NEXT:    [[TMP32:%.*]] = insertelement <8 x ptr> [[TMP31]], ptr [[ARRAYIDX8]], i64 6
-; CHECK-NEXT:    [[TMP33:%.*]] = insertelement <8 x ptr> [[TMP32]], ptr [[ARRAYIDX8]], i64 7
-; CHECK-NEXT:    [[I3_VEC:%.*]] = call <8 x i32> @llvm.masked.gather.v8i32.v8p0(<8 x ptr> [[TMP33]], i32 4, <8 x i1> <i1 true, i1 true, i1 true, i1 true, i1 true, i1 true, i1 true, i1 true>, <8 x i32> undef)
+; CHECK-NEXT:    [[TMP26:%.*]] = load i32, ptr [[ARRAYIDX8]], align 4
+; CHECK-NEXT:    [[TMP27:%.*]] = insertelement <8 x i32> poison, i32 [[TMP26]], i64 0
+; CHECK-NEXT:    [[I3_VEC:%.*]] = shufflevector <8 x i32> [[TMP27]], <8 x i32> poison, <8 x i32> zeroinitializer
 ; CHECK-NEXT:    [[NEG_1_VEC:%.*]] = xor <8 x i32> [[I3_VEC]], zeroinitializer
 ; CHECK-NEXT:    [[CMP_I_I_I_1_VEC:%.*]] = icmp slt <8 x i32> [[NEG_1_VEC]], zeroinitializer
 ; CHECK-NEXT:    [[CONV10_1_VEC:%.*]] = zext <8 x i1> [[CMP_I_I_I_1_VEC]] to <8 x i8>
-; CHECK-NEXT:    [[TMP34]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 0
-; CHECK-NEXT:    [[TMP35]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 1
-; CHECK-NEXT:    [[TMP36]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 2
-; CHECK-NEXT:    [[TMP37]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 3
-; CHECK-NEXT:    [[TMP38]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 4
-; CHECK-NEXT:    [[TMP39]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 5
-; CHECK-NEXT:    [[TMP40]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 6
-; CHECK-NEXT:    [[TMP41]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 7
+; CHECK-NEXT:    [[TMP28]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 0
+; CHECK-NEXT:    [[TMP29]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 1
+; CHECK-NEXT:    [[TMP30]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 2
+; CHECK-NEXT:    [[TMP31]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 3
+; CHECK-NEXT:    [[TMP32]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 4
+; CHECK-NEXT:    [[TMP33]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 5
+; CHECK-NEXT:    [[TMP34]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 6
+; CHECK-NEXT:    [[TMP35]] = extractelement <8 x i8> [[CONV10_1_VEC]], i64 7
 ; CHECK-NEXT:    store i8 0, ptr [[P2:%.*]], align 1
 ; CHECK-NEXT:    br label [[EXIT:%.*]]
-; CHECK:       42:
+; CHECK:       36:
 ; CHECK-NEXT:    [[I1_CLONE:%.*]] = load i32, ptr [[ARRAYIDX8]], align 4
 ; CHECK-NEXT:    [[NEG_CLONE:%.*]] = xor i32 [[I1_CLONE]], 0
 ; CHECK-NEXT:    [[CMP_I_I_I_CLONE:%.*]] = icmp slt i32 [[NEG_CLONE]], 0

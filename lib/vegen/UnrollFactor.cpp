@@ -340,6 +340,12 @@ void computeUnrollFactor(ArrayRef<InstructionDescriptor> InstPool,
     if (UFs[L] > 1) {
       UnrolledLoops.insert(L);
     }
+
+    errs() << "========= temp unroll plan ========\n";
+    for (auto *L : const_cast<LoopInfo &>(LI).getLoopsInPreorder()) {
+      errs() << "Unroll factor for loop " << L << "(depth=" << L->getLoopDepth()
+        << ')' << " " << UFs.lookup(L) << '\n';
+    }
   }
   for (auto &KV : UFs) {
     if (!UnrolledLoops.count(KV.first))
