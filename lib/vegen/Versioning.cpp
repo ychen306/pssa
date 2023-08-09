@@ -366,7 +366,6 @@ Versioner::strengthenCondition(const ControlCondition *C, Value *Flag,
   auto *FlagC = PSSA.getInstCond(cast<Instruction>(Flag));
   auto *C2 = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, IsTrue), C);
   registerNewCondition(C, C2);
-  //StrengthenedConds[C2] = {Flag, IsTrue};
   StrengthenedConds[C2].emplace_back(Flag, IsTrue);
   return C2;
 }
@@ -828,8 +827,8 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
     assert(VersioningMap.count(PN));
     ArrayRef<DepCondition> DepConds = VersioningMap.find(PN)->second;
     for (auto X : llvm::enumerate(VL->getPhiConditions(PN))) {
+      assert(OrigConds.count(X.value()));
       auto *C = getOriginalCondition(X.value());
-      assert(C);
       unsigned i = X.index();
       // If the incoming condition is implied by the versioning condition,
       // replace the incoming value with undef (because, by versioning, we
