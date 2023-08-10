@@ -424,6 +424,16 @@ DepKind::DepKind(llvm::ArrayRef<DepCondition> TheConds) {
     Conds = {DepCondition::always()};
 }
 
+static bool mayOverlap(ScalarEvolution &SE, MemRange R1, MemRange R2) {
+  if (R1.ParentLoop != R2.ParentLoop)
+    return true;
+  auto *End1 = SE.getAddExpr(R1.Base, R1.Size);
+  auto *End2 = SE.getAddExpr(R2.Base, R2.Size);
+  if (isLessThan(SE, End1, R2.Base) || isLessThan(SE, End2, R1.Base))
+    return false;
+  return true;
+}
+
 Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
                                                      Instruction *I2) {
   if (I1 == I2)
@@ -467,8 +477,13 @@ Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
     auto *VL = nearestCommonParent(R1.ParentLoop, R2.ParentLoop);
     auto PromotedR1 = promoteTo(R1, VL, SE, PSSA);
     auto PromotedR2 = promoteTo(R2, VL, SE, PSSA);
-    if (PromotedR1 && PromotedR2 && *PromotedR1 != *PromotedR2)
+    if (PromotedR1 && PromotedR2) {
+      if (!mayOverlap(SE, *PromotedR1, *PromotedR2))
+        return None;
+      if (PromotedR1->Base == PromotedR2->Base)
+        return DepCondition::always();
       return DepCondition::ifOverlapping(*PromotedR1, *PromotedR2, SE, PSSA);
+    }
     return DepCondition::always();
   }
   return None;
