@@ -553,9 +553,11 @@ bool DependenceChecker::depends(
   // Collapse the two cases.
   // We just want to find out if there's any ordered (non-input)
   // dependences between the instruction and loop.
+  bool Swapped = false;
   if (VL1 && I2) {
     I1 = I2;
     VL2 = VL1;
+    Swapped = true;
   }
   assert(I1 && VL2);
   if (isExclusive(PSSA.getInstCond(I1), VL2->getLoopCond()))
@@ -568,14 +570,33 @@ bool DependenceChecker::depends(
   // Figure out the memory instructions in VL2
   processLoop(VL2);
 
-  // FIXME: record conditional, inst-to-loop deps
-  for (auto *I : Summaries[VL2].MemoryInsts)
-    if (getDepKind(I1, I)) {
-      if (DepEdges)
-        DepEdges->try_emplace({It2, It1}, DepCondition::always());
-      return true;
+  bool FoundDep = false;
+  SmallVector<DepCondition> DepConds;
+  for (auto *I : Summaries[VL2].MemoryInsts) {
+    auto Kind = getDepKind(I1, I);
+    if (!Kind)
+      continue;
+    FoundDep = true;
+    if (Kind->isUnconditional()) {
+      DepConds = {*Kind};
+      break;
     }
-  return false;
+    if (Kind) {
+      if (!DepEdges)
+        return true;
+      if (DepEdges) {
+        //DepEdges->try_emplace({It2, It1}, DepCondition::always());
+        DepConds.push_back(*Kind);
+      }
+    }
+  }
+  if (DepEdges && !DepConds.empty()) {
+    if (!Swapped)
+      DepEdges->try_emplace({Item(VL2), Item(I1)}, DepConds);
+    else
+      DepEdges->try_emplace({Item(I1), Item(VL2)}, DepConds);
+  }
+  return FoundDep;
 }
 
 ArrayRef<Instruction *> DependenceChecker::getLiveIns(VLoop *VL) {
