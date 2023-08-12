@@ -178,6 +178,7 @@ DepCondition DepCondition::ifOverlapping(const MemRange &R1, const MemRange &R2,
   //   base2+i*step+size2)
   // iff
   //   (base1, base1+size1) overlaps with (base2, base2+size2)
+  assert(R1.Base != R2.Base);
   auto *Base1 = dyn_cast<SCEVAddRecExpr>(R1.Base);
   auto *Size1 = R1.Size;
   auto *Base2 = dyn_cast<SCEVAddRecExpr>(R2.Base);
@@ -429,7 +430,8 @@ static bool mayOverlap(ScalarEvolution &SE, MemRange R1, MemRange R2) {
     return true;
   auto *End1 = SE.getAddExpr(R1.Base, R1.Size);
   auto *End2 = SE.getAddExpr(R2.Base, R2.Size);
-  if (isLessThan(SE, End1, R2.Base) || isLessThan(SE, End2, R1.Base))
+  if (End1 == R2.Base || End2 == R1.Base || isLessThan(SE, End1, R2.Base) ||
+      isLessThan(SE, End2, R1.Base))
     return false;
   return true;
 }
@@ -600,7 +602,7 @@ bool DependenceChecker::depends(
       if (!DepEdges)
         return true;
       if (DepEdges) {
-        //DepEdges->try_emplace({It2, It1}, DepCondition::always());
+        // DepEdges->try_emplace({It2, It1}, DepCondition::always());
         DepConds.push_back(*Kind);
       }
     }
@@ -685,14 +687,14 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
   DepEdges.try_emplace({Src, It /*dst*/}, DepCondition::always());
 
   if (!Processing.insert(It).second) {
-    //errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
+    // errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
     FoundCycle = true;
     return;
   }
 
   EraseOnReturnGuard EraseOnReturn(Processing, It);
 
-  //errs() << "visiting " << Src << " -> " << It << '\n';
+  // errs() << "visiting " << Src << " -> " << It << '\n';
 
   // Don't consider things that comes before earliest
   if (It != Earliest && (!VL->contains(It) || !VL->comesBefore(Earliest, It)))
@@ -1122,7 +1124,7 @@ raw_ostream &operator<<(raw_ostream &OS, const DepCondition &DepCond) {
   return OS;
 }
 
-void ConditionSetTracker::add(const DepCondition &DepCond) {
+void ConditionSetTracker::addImpl(const DepCondition &DepCond) {
   ConditionSet *Set = nullptr;
   for (auto &CS : CondSets) {
     if (Optional<DepCondition> Coalesced =
@@ -1140,9 +1142,84 @@ void ConditionSetTracker::add(const DepCondition &DepCond) {
   CondToSetMap[DepCond] = Set;
 }
 
+static const SCEV *diffRanges(ScalarEvolution &SE, const MemRange &R1,
+                              const MemRange &R2) {
+  if (R1.ParentLoop != R2.ParentLoop)
+    return nullptr;
+  // TODO: technically the one with bigger size *subsumes* the one with a
+  // smaller size
+  if (R1.Size != R2.Size)
+    return nullptr;
+  auto *Diff = SE.getMinusSCEV(R1.Base, R2.Base);
+  if (isa<SCEVCouldNotCompute>(Diff))
+    return nullptr;
+  return Diff;
+}
+
+static bool checksAreEquivalent(ScalarEvolution &SE,
+                                const std::pair<MemRange, MemRange> &Check1,
+                                const std::pair<MemRange, MemRange> &Check2) {
+  const SCEV *Diff1;
+  const SCEV *Diff2;
+  Diff1 = diffRanges(SE, Check1.first, Check2.first);
+  if (!Diff1)
+    goto retry;
+  Diff2 = diffRanges(SE, Check1.second, Check2.second);
+  if (!Diff2)
+    goto retry;
+  if (Diff1 == Diff2)
+    return true;
+retry:
+  Diff1 = diffRanges(SE, Check1.first, Check2.second);
+  if (!Diff1)
+    return false;
+  Diff2 = diffRanges(SE, Check1.second, Check2.first);
+  if (!Diff2)
+    return false;
+  return Diff1 == Diff2;
+}
+
+static std::vector<DepCondition>
+dedupConditions(ScalarEvolution &SE, ArrayRef<DepCondition> DepConds, DenseMap<DepCondition, DepCondition> &RedundantConds) {
+  std::vector<DepCondition> NewConds;
+  std::vector<DepCondition> Checks;
+  DenseSet<DepCondition> Visited;
+  for (auto &DepCond : DepConds) {
+    if (!Visited.insert(DepCond).second)
+      continue;
+    if (!DepCond.isOverlapping()) {
+      NewConds.push_back(DepCond);
+      continue;
+    }
+    bool IsRedundant = false;
+    auto Check = DepCond.getRanges();
+    for (auto &Check2 : Checks) {
+      if (checksAreEquivalent(SE, Check, Check2.getRanges())) {
+        RedundantConds.try_emplace(DepCond, Check2);
+        IsRedundant = true;
+        break;
+      }
+    }
+    if (!IsRedundant) {
+      NewConds.push_back(DepCond);
+      Checks.push_back(DepCond);
+    }
+  }
+  return NewConds;
+}
+
 const DepCondition &
-ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) const {
-  auto It = CondToSetMap.find(DepCond);
+ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) {
+  if (!Worklist.empty()) {
+    Worklist = dedupConditions(SE, Worklist, RedundantConds);
+    for (auto &DepCond2 : Worklist)
+      addImpl(DepCond2);
+    Worklist.clear();
+  }
+
+  auto It = RedundantConds.count(DepCond)
+                ? CondToSetMap.find(RedundantConds.find(DepCond)->second)
+                : CondToSetMap.find(DepCond);
   if (It != CondToSetMap.end())
     return It->second->DepCond;
   return DepCond;

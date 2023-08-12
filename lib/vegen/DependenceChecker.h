@@ -188,18 +188,22 @@ class ConditionSetTracker {
   llvm::ScalarEvolution &SE;
   PredicatedSSA &PSSA;
   std::list<ConditionSet> CondSets;
+  std::vector<DepCondition> Worklist;
   llvm::DenseMap<DepCondition, ConditionSet *> CondToSetMap;
+  // Mapping a redundant check to a leader
+  llvm::DenseMap<DepCondition, DepCondition> RedundantConds;
   ConditionSet *newSet(const DepCondition &DepCond) {
     return &*CondSets.emplace(CondSets.end(), DepCond);
   }
 
+  void addImpl(const DepCondition &);
 public:
   ConditionSetTracker(llvm::ScalarEvolution &SE, PredicatedSSA &PSSA)
       : SE(SE), PSSA(PSSA) {}
-  void add(const DepCondition &);
+  void add(const DepCondition &DepCond) { Worklist.push_back(DepCond); }
   // If `DepCond` is coalesced with some other condition(s), return the
   // coalesced condition
-  const DepCondition &getCoalescedCondition(const DepCondition &DepCond) const;
+  const DepCondition &getCoalescedCondition(const DepCondition &DepCond);
 };
 
 class CachingAA {

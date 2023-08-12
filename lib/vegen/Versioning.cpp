@@ -226,10 +226,20 @@ static Value *emitOverlappingChecks(const DepCondition &DepCond, VLoop *VL,
   for (auto *L : Loops)
     addIndvar(L, PSSA);
 
+  errs() << "Emiting checks for " << DepCond << '\n';
+
   // Rewrite add rec narrower than the canonical indvar as trunc
   // SCEVExpander actually does this, but it inserts the trunc instruction
   // implicitly (and sometimes not in the specified block)
   AddRecNarrower Narrower(VL, C, InsertBefore, DepChecker, SE, DL);
+#if 0
+  End1 = Narrower.visit(End1);
+  End2 = Narrower.visit(End2);
+  auto *Base1 = Narrower.visit(R1.Base);
+  auto *Base2 = Narrower.visit(R2.Base);
+  if (End1 == Base2 || End2 == Base1)
+    return Insert.
+#endif
 
   // Case 1: R1 is left of R2; i.e., End1 < Begin2. Note that we are using the
   // inverse predicate here because SCEVExpander flips the evaluation...
