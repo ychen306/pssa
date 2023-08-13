@@ -1179,8 +1179,22 @@ retry:
   return Diff1 == Diff2;
 }
 
+// Given a list of redundant conditions, select a canonical one
+// Only works on range checks currently.
+static DepCondition getCanonicalCondition(ScalarEvolution &SE,
+                                          ArrayRef<DepCondition> DepConds) {
+  auto It = std::min_element(
+      DepConds.begin(), DepConds.end(), [&](auto &DepCond1, auto &DepCond2) {
+        return isLessThan(SE, DepCond1.getRanges().first.Base,
+                          DepCond2.getRanges().first.Base);
+      });
+  assert(It != DepConds.end());
+  return *It;
+}
+
 static std::vector<DepCondition>
-dedupConditions(ScalarEvolution &SE, ArrayRef<DepCondition> DepConds, DenseMap<DepCondition, DepCondition> &RedundantConds) {
+dedupConditions(ScalarEvolution &SE, ArrayRef<DepCondition> DepConds,
+                DenseMap<DepCondition, DepCondition> &RedundantConds) {
   std::vector<DepCondition> NewConds;
   std::vector<DepCondition> Checks;
   DenseSet<DepCondition> Visited;
@@ -1212,9 +1226,35 @@ const DepCondition &
 ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) {
   if (!Worklist.empty()) {
     Worklist = dedupConditions(SE, Worklist, RedundantConds);
-    for (auto &DepCond2 : Worklist)
-      addImpl(DepCond2);
+#if 1
+    // At this point, redundant conds maps a condition to an arbitrary leader.
+    // We want to elect a new leader by choosing the check with the leftmost first range.
+    // Mapping a leader condition -> list of conditions equivalent to the leader
+    DenseMap<DepCondition, std::vector<DepCondition>> EquivalentConds;
+    for (auto [DepCond, LeaderCond] : RedundantConds) {
+      if (EquivalentConds[LeaderCond].empty())
+        EquivalentConds[LeaderCond].push_back(LeaderCond);
+      EquivalentConds[LeaderCond].push_back(DepCond);
+    }
+
+    for (auto [OldLeader, Conds] : EquivalentConds) {
+      auto NewLeader = getCanonicalCondition(SE, Conds);
+      for (auto &DepCond : Conds) {
+        auto [It, Inserted] = RedundantConds.try_emplace(DepCond, NewLeader);
+        if (!Inserted)
+          It->second = NewLeader;
+      }
+    }
+#endif
+    for (auto &DepCond2 : Worklist) {
+      auto It = RedundantConds.find(DepCond2);
+      if (It != RedundantConds.end())
+        addImpl(It->second);
+      else
+        addImpl(DepCond2);
+    }
     Worklist.clear();
+
   }
 
   auto It = RedundantConds.count(DepCond)
