@@ -1,4 +1,5 @@
 #include "vegen/Lower.h"
+#include "TripCount.h"
 #include "DependenceChecker.h"
 #include "ItemMover.h"
 #include "PackSet.h"
@@ -860,7 +861,7 @@ Value *VectorGen::gatherMask(ArrayRef<const ControlCondition *> Conds,
 }
 
 static Value *getLoadStorePointer(Pack *P) {
-  if (isa<StorePack>(P) || isa<LoadPack>(P))
+  if (isa<StorePack>(P) || isa<LoadPack>(P) || isa<SplatPack>(P))
     return getLoadStorePointerOperand(P->values().front());
   return nullptr;
 }
@@ -1240,7 +1241,7 @@ packConditions(ArrayRef<VectorMask> Masks,
 void weakenAddressConditions(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA) {
   for (auto *P : Packs) {
     auto *Ptr = dyn_cast_or_null<Instruction>(getLoadStorePointer(P));
-    if (!Ptr || P->masks().empty())
+    if (!Ptr || (!isa<SplatPack>(P) && P->masks().empty()))
       continue;
     auto *C = findSpeculativeCond(Ptr, P->values(), PSSA);
     assert(canSpeculateAt(Ptr, C, PSSA));

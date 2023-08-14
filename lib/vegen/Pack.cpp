@@ -1,4 +1,5 @@
 #include "vegen/Pack.h"
+#include "TripCount.h"
 #include "AddrUtil.h"
 #include "InstructionDescriptor.h"
 #include "LooseInstructionTable.h"
@@ -382,11 +383,13 @@ SplatPack *SplatPack::tryPack(ArrayRef<Instruction *> Insts,
                               const DataLayout &DL) {
   auto *Ty = Insts.front()->getType();
   SmallVector<Value *> Ptrs;
+  SmallVector<Loop *> Loops;
   for (auto *I : Insts) {
     auto *Load = dyn_cast<LoadInst>(I);
     if (!Load || Load->getType() != Ty)
       return nullptr;
     Ptrs.push_back(Load->getPointerOperand());
+    Loops.push_back(LI.getLoopFor(I->getParent()));
   }
   auto *Ptr0 = Ptrs.front();
   for (auto *Ptr : drop_begin(Ptrs)) {
@@ -394,6 +397,16 @@ SplatPack *SplatPack::tryPack(ArrayRef<Instruction *> Insts,
         diffPointers(Ty, Ptr0, Ty, Ptr, DL, SE, LI, true /*strict check*/);
     if (!Diff || *Diff != 0)
       return nullptr;
+  }
+  // Make sure the loops are fusible (doens't make sense if we have to coiterate)
+  while (!is_splat(Loops)) {
+    auto *L0 = Loops.front();
+    for (auto *L : drop_begin(Loops)) {
+      if (!haveIdenticalTripCounts(L0, L, SE))
+        return nullptr;
+    }
+    for (auto &L : Loops)
+      L = L->getParentLoop();
   }
   return new SplatPack(Insts);
 }
