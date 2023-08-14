@@ -591,6 +591,8 @@ bool DependenceChecker::depends(
   bool FoundDep = false;
   SmallVector<DepCondition> DepConds;
   for (auto *I : Summaries[VL2].MemoryInsts) {
+    if (TheVersioner && TheVersioner->isIndependent(I1, I))
+      continue;
     auto Kind = getDepKind(I1, I);
     if (!Kind)
       continue;
@@ -602,6 +604,16 @@ bool DependenceChecker::depends(
     if (Kind) {
       if (!DepEdges)
         return true;
+      if (InterLoopDeps) {
+        DepEdge Edge;
+        if (!Swapped)
+          Edge = {Item(VL2), Item(I1)};
+        else
+          Edge = {Item(I1), Item(VL2)};
+        auto &EdgeSet = (*InterLoopDeps)[Edge];
+        EdgeSet.insert({I1, I});
+        EdgeSet.insert({I, I1});
+      }
       DepConds.push_back(*Kind);
     }
   }
@@ -685,14 +697,14 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
   DepEdges.try_emplace({Src, It /*dst*/}, DepCondition::always());
 
   if (!Processing.insert(It).second) {
-    // errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
+    //errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
     FoundCycle = true;
     return;
   }
 
   EraseOnReturnGuard EraseOnReturn(Processing, It);
 
-  // errs() << "visiting " << Src << " -> " << It << '\n';
+  //errs() << "visiting " << Src << " -> " << It << '\n';
 
   // Don't consider things that comes before earliest
   if (It != Earliest && (!VL->contains(It) || !VL->comesBefore(Earliest, It)))
