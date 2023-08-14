@@ -66,6 +66,13 @@ class Versioner {
   llvm::DenseMap<llvm::Instruction *, std::vector<llvm::Instruction *>>
       VersioningPhisMap;
 
+  ////////////
+  llvm::DenseMap<Item, Item, ItemHashInfo> OrigToCloneMap;
+  ////////
+  void reset() {
+    OrigToCloneMap.clear();
+  }
+
   ConditionUserTracker CUT;
 
   llvm::SmallVector<llvm::Reducer *> ClonedReducers;

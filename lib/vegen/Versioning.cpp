@@ -226,8 +226,6 @@ static Value *emitOverlappingChecks(const DepCondition &DepCond, VLoop *VL,
   for (auto *L : Loops)
     addIndvar(L, PSSA);
 
-  errs() << "Emiting checks for " << DepCond << '\n';
-
   // Rewrite add rec narrower than the canonical indvar as trunc
   // SCEVExpander actually does this, but it inserts the trunc instruction
   // implicitly (and sometimes not in the specified block)
@@ -612,8 +610,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
   }
 
   // Mapping <original item/inst> -> <cloned item/inst>
-  DenseMap<Item, Item, ItemHashInfo> OrigToCloneMap;
-  auto GetClonedInst = [&OrigToCloneMap](Instruction *I) -> Instruction * {
+  auto GetClonedInst = [&](Instruction *I) -> Instruction * {
     auto It = OrigToCloneMap.find(I);
     if (It != OrigToCloneMap.end())
       return It->second.asInstruction();
@@ -622,11 +619,11 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
 
   // Join the clone and original instructions with phis to deal with external
   // uses
-  DenseSet<Instruction *> VersioningPhis;
-  DenseMap<Instruction *, Instruction *> InstToVersioningPhiMap;
+  llvm::DenseSet<llvm::Instruction *> VersioningPhis;
+  llvm::DenseMap<llvm::Instruction *, llvm::Instruction *> InstToVersioningPhiMap;
   // Mapping an item to the ancestor loop that we just versioned
-  DenseMap<Item, VLoop *, ItemHashInfo> ItemToLoopMap;
-  SmallVector<PHINode *> VersionedPhis;
+  llvm::DenseMap<Item, VLoop *, ItemHashInfo> ItemToLoopMap;
+  llvm::SmallVector<llvm::PHINode *> VersionedPhis;
   // Clone the instructions/loops
   for (auto Item : ItemsToVersion) {
     auto It = VL->toIterator(Item);
@@ -924,6 +921,7 @@ static void removeRedundantConditions(PredicatedSSA &PSSA,
 void Versioner::run(ArrayRef<Versioning *> Versionings,
                     const EquivalenceClasses<Item> &EC,
                     const DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps) {
+  reset();
   VersioningMapTy VersioningMap;
   auto MarkForVersioning = [&](const DepNode &N, ArrayRef<DepCondition> Conds) {
     if (auto *I = N.asInstruction())
@@ -1261,7 +1259,6 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
     }
     Frontier = std::move(TempFrontier);
 
-#if 1
     // Union the conditions for nodes in the same versioning
     auto OldEC = EC;
     for (auto *Ver : Frontier) {
@@ -1278,7 +1275,6 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
       for (auto I : Items)
         EC.unionSets(I, I0);
     }
-#endif
 
     TheVersioner.run(Frontier, EC, VerPlan.InterLoopDeps);
     SmallVector<Versioning *> NewFrontier;
