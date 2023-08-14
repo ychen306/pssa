@@ -32,23 +32,27 @@ bool mayReadOrWriteMemory(const Item &It) {
 }
 
 MemRange MemRange::get(llvm::Instruction *I, ScalarEvolution &SE,
-                       PredicatedSSA &PSSA) {
+                       PredicatedSSA &PSSA, LoopInfo &LI) {
   auto &DL = I->getModule()->getDataLayout();
   auto *VL = PSSA.getLoopForInst(I);
-  if (auto *LI = dyn_cast<LoadInst>(I))
-    return MemRange::get(DL, LI->getPointerOperand(), LI->getType(), VL, SE);
-  if (auto *SI = dyn_cast<StoreInst>(I))
-    return MemRange::get(DL, SI->getPointerOperand(),
-                         SI->getValueOperand()->getType(), VL, SE);
+  assert(I->getParent());
+  auto *L = LI.getLoopFor(I->getParent());
+  assert(!VL->isLoop() || L);
+  if (auto *Load = dyn_cast<LoadInst>(I))
+    return MemRange::get(DL, Load->getPointerOperand(), Load->getType(), VL, L,
+                         SE);
+  if (auto *Store = dyn_cast<StoreInst>(I))
+    return MemRange::get(DL, Store->getPointerOperand(),
+                         Store->getValueOperand()->getType(), VL, L, SE);
   llvm_unreachable("MemRange::get only supports loads and stores");
 }
 
 MemRange MemRange::get(const DataLayout &DL, Value *Ptr, Type *Ty, VLoop *VL,
-                       ScalarEvolution &SE) {
+                       Loop *L, ScalarEvolution &SE) {
   auto *PtrTy = cast<PointerType>(Ptr->getType());
   unsigned IndexWidth = DL.getIndexSizeInBits(PtrTy->getAddressSpace());
   APInt Size(IndexWidth, DL.getTypeStoreSize(Ty));
-  return MemRange{SE.getSCEV(Ptr), SE.getConstant(Size), VL};
+  return MemRange{SE.getSCEV(Ptr), SE.getConstant(Size), VL, L};
 }
 
 static bool isLessThan(ScalarEvolution &SE, const SCEV *A, const SCEV *B) {
@@ -111,7 +115,7 @@ Optional<MemRange> MemRange::merge(const MemRange &OrigR1,
     else
       return None;
   }
-  return MemRange{Base, Size, R1.ParentLoop};
+  return MemRange{Base, Size, R1.ParentLoop, R1.OrigParentLoop};
 }
 
 static const SCEV *getAdd(const SCEV *A, const SCEV *B, ScalarEvolution &SE) {
@@ -137,17 +141,14 @@ static const SCEV *getMul(const SCEV *A, const SCEV *B, ScalarEvolution &SE) {
 Optional<MemRange> MemRange::promote(ScalarEvolution &SE, PredicatedSSA &PSSA) {
   if (!ParentLoop->isLoop())
     return None;
-  auto *L = PSSA.getOrigLoop(ParentLoop);
-  if (!L)
-    return None;
-
+  auto *L = OrigParentLoop;
   // Don't bother promoting if the access size is not loop-invariant
   if (!SE.isLoopInvariant(Size, L))
     return None;
 
   // Best case: the access pattern is loop-invariant
   if (SE.isLoopInvariant(Base, L))
-    return MemRange{Base, Size, ParentLoop->getParent()};
+    return MemRange{Base, Size, ParentLoop->getParent(), L->getParentLoop()};
 
   // Otherwise we insist the base pointer is an AddRec expr (and therefore
   // predictable)
@@ -167,7 +168,7 @@ Optional<MemRange> MemRange::promote(ScalarEvolution &SE, PredicatedSSA &PSSA) {
       getAdd(SE.getOne(BackedgeTakenCount->getType()), BackedgeTakenCount, SE);
   return MemRange{BaseAR->getStart(),
                   getAdd(getMul(TripCount, Step, SE), Size, SE),
-                  ParentLoop->getParent()};
+                  ParentLoop->getParent(), L->getParentLoop()};
 }
 
 DepCondition DepCondition::ifOverlapping(const MemRange &R1, const MemRange &R2,
@@ -474,8 +475,8 @@ Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
 
   auto Dep = DI.depends(I1, I2, true);
   if (Dep && Dep->isOrdered()) {
-    auto R1 = MemRange::get(I1, SE, PSSA);
-    auto R2 = MemRange::get(I2, SE, PSSA);
+    auto R1 = MemRange::get(I1, SE, PSSA, LI);
+    auto R2 = MemRange::get(I2, SE, PSSA, LI);
     auto *VL = nearestCommonParent(R1.ParentLoop, R2.ParentLoop);
     auto PromotedR1 = promoteTo(R1, VL, SE, PSSA);
     auto PromotedR2 = promoteTo(R2, VL, SE, PSSA);
@@ -601,10 +602,7 @@ bool DependenceChecker::depends(
     if (Kind) {
       if (!DepEdges)
         return true;
-      if (DepEdges) {
-        // DepEdges->try_emplace({It2, It1}, DepCondition::always());
-        DepConds.push_back(*Kind);
-      }
+      DepConds.push_back(*Kind);
     }
   }
   if (DepEdges && !DepConds.empty()) {
@@ -717,7 +715,7 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
         for (auto [C, V] :
              llvm::zip(VL->getPhiConditions(PN), I->operand_values())) {
           if (auto *OperandI = dyn_cast<Instruction>(V);
-              OperandI && !DisablePhiSpeculation)
+              OperandI && !DisablePhiSpeculation && PN->getNumOperands() > 1)
             DepEdges.try_emplace({I, OperandI}, DepCondition::ifTrue(C));
 
           visitCond(C, I);
@@ -1228,8 +1226,9 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) {
     Worklist = dedupConditions(SE, Worklist, RedundantConds);
 #if 1
     // At this point, redundant conds maps a condition to an arbitrary leader.
-    // We want to elect a new leader by choosing the check with the leftmost first range.
-    // Mapping a leader condition -> list of conditions equivalent to the leader
+    // We want to elect a new leader by choosing the check with the leftmost
+    // first range. Mapping a leader condition -> list of conditions equivalent
+    // to the leader
     DenseMap<DepCondition, std::vector<DepCondition>> EquivalentConds;
     for (auto [DepCond, LeaderCond] : RedundantConds) {
       if (EquivalentConds[LeaderCond].empty())
@@ -1254,7 +1253,6 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) {
         addImpl(DepCond2);
     }
     Worklist.clear();
-
   }
 
   auto It = RedundantConds.count(DepCond)

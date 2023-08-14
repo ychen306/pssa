@@ -1023,7 +1023,11 @@ void VectorGen::runOnLoop(VLoop *VL) {
       ValueIdx.insert(V, P);
       Extracter.remember(P, V, VL, C, Iterator);
       auto OrigName = I->getName();
-      I = cast<Instruction>(V);
+      I = dyn_cast<Instruction>(V);
+      if (!I) {
+        assert(isa<Constant>(V));
+        continue;
+      }
       if (!OrigName.empty())
         I->setName(OrigName + ".vec");
 

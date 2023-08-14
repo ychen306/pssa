@@ -69,11 +69,12 @@ struct MemRange {
   const llvm::SCEV *Base;
   const llvm::SCEV *Size;
   VLoop *ParentLoop;
+  llvm::Loop *OrigParentLoop;
 
   static MemRange get(llvm::Instruction *I, llvm::ScalarEvolution &,
-                      PredicatedSSA &PSSA);
+                      PredicatedSSA &PSSA, llvm::LoopInfo &);
   static MemRange get(const llvm::DataLayout &, llvm::Value *Ptr,
-                      llvm::Type *Ty, VLoop *ParentLoop,
+                      llvm::Type *Ty, VLoop *ParentLoop, llvm::Loop *L,
                       llvm::ScalarEvolution &);
   static llvm::Optional<MemRange> merge(const MemRange &, const MemRange &,
                                         llvm::ScalarEvolution &,
@@ -197,6 +198,7 @@ class ConditionSetTracker {
   }
 
   void addImpl(const DepCondition &);
+
 public:
   ConditionSetTracker(llvm::ScalarEvolution &SE, PredicatedSSA &PSSA)
       : SE(SE), PSSA(PSSA) {}

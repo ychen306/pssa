@@ -1,4 +1,5 @@
 #include "vegen/GlobalSLP.h"
+#include "PackSet.h"
 #include "DependenceChecker.h"
 #include "Heuristics.h"
 #include "LoopUnrolling.h"
@@ -113,6 +114,7 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
     // decisions. If a pack of instructions come from the same loop, then they
     // should be in the same class. If a pack of instructions come from
     // different loops, then those loops should be in the same class.
+    PackSet ThePackSet(Packs);
     EquivalenceClasses<Item> EC;
     for (auto *P : Packs) {
       SmallVector<Instruction *> Insts;
@@ -120,6 +122,24 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
       auto *I0 = Insts.front();
       for (auto *I : drop_begin(Insts))
         EC.unionSets(I0, I);
+#if 0
+      for (auto &O : P->getOperands())
+        for (auto *I2 : O) {
+          if (ThePackSet.isPacked(I2))
+            EC.unionSets(I0, cast<Instruction>(I2));
+        }
+      // If the instructions come from different loops, we also want those loops to have the same versioning conditions
+      SmallVector<VLoop *, 8> Loops;
+      for (auto *I : P->values())
+        Loops.push_back(PSSA.getLoopForInst(I));
+      while (!is_splat(Loops)) {
+        auto VL0 = Loops.front();
+        for (auto *VL : Loops)
+          EC.unionSets(VL0, VL);
+        for (auto &VL : Loops)
+          VL = VL->getParent();
+      }
+#endif
     }
 
     lowerVersioningPlan(VerPlan, TheVersioner, EC, PSSA, SE);

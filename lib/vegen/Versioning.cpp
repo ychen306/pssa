@@ -603,6 +603,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
                                                           Insert.getFalse(),
                                                           Insert.getTrue()));
       }
+      //NoDep = Insert.create<BinaryOperator>(Instruction::Or, Insert.getTrue(), Insert.getTrue());
       CondSets[DepConds] = NoDep;
       //static int counter;
       //NoDep->setName("flag." + std::to_string(counter++));
