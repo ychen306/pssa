@@ -52,7 +52,7 @@ MemRange MemRange::get(const DataLayout &DL, Value *Ptr, Type *Ty, VLoop *VL,
   auto *PtrTy = cast<PointerType>(Ptr->getType());
   unsigned IndexWidth = DL.getIndexSizeInBits(PtrTy->getAddressSpace());
   APInt Size(IndexWidth, DL.getTypeStoreSize(Ty));
-  return MemRange{SE.getSCEV(Ptr), SE.getConstant(Size), VL, L};
+  return MemRange{SE.getSCEV(Ptr), SE.getConstant(Size), VL, L, Ptr};
 }
 
 static bool isLessThan(ScalarEvolution &SE, const SCEV *A, const SCEV *B) {
@@ -115,7 +115,7 @@ Optional<MemRange> MemRange::merge(const MemRange &OrigR1,
     else
       return None;
   }
-  return MemRange{Base, Size, R1.ParentLoop, R1.OrigParentLoop};
+  return MemRange{Base, Size, R1.ParentLoop, R1.OrigParentLoop, R1.Ptr};
 }
 
 static const SCEV *getAdd(const SCEV *A, const SCEV *B, ScalarEvolution &SE) {
@@ -148,7 +148,8 @@ Optional<MemRange> MemRange::promote(ScalarEvolution &SE, PredicatedSSA &PSSA) {
 
   // Best case: the access pattern is loop-invariant
   if (SE.isLoopInvariant(Base, L))
-    return MemRange{Base, Size, ParentLoop->getParent(), L->getParentLoop()};
+    return MemRange{Base, Size, ParentLoop->getParent(), L->getParentLoop(),
+                    Ptr};
 
   // Otherwise we insist the base pointer is an AddRec expr (and therefore
   // predictable)
@@ -168,7 +169,7 @@ Optional<MemRange> MemRange::promote(ScalarEvolution &SE, PredicatedSSA &PSSA) {
       getAdd(SE.getOne(BackedgeTakenCount->getType()), BackedgeTakenCount, SE);
   return MemRange{BaseAR->getStart(),
                   getAdd(getMul(TripCount, Step, SE), Size, SE),
-                  ParentLoop->getParent(), L->getParentLoop()};
+                  ParentLoop->getParent(), L->getParentLoop(), Ptr};
 }
 
 DepCondition DepCondition::ifOverlapping(const MemRange &R1, const MemRange &R2,
@@ -210,7 +211,8 @@ bool DepCondition::isLoopInvariant(VLoop *VL) const {
 Optional<DepCondition> DepCondition::coalesce(const DepCondition &Cond1,
                                               const DepCondition &Cond2,
                                               ScalarEvolution &SE,
-                                              PredicatedSSA &PSSA) {
+                                              PredicatedSSA &PSSA,
+                                              bool &Swapped) {
   if (Cond1 == Cond2)
     return Cond1;
 
@@ -230,10 +232,12 @@ Optional<DepCondition> DepCondition::coalesce(const DepCondition &Cond1,
     R2 = MemRange::merge(Chk1.second, Chk2.first, SE, PSSA);
     if (!R2)
       return None;
+    Swapped = true;
   } else {
     R2 = MemRange::merge(Chk1.second, Chk2.second, SE, PSSA);
     if (!R2)
       return None;
+    Swapped = false;
   }
   return DepCondition::ifOverlapping(*R1, *R2, SE, PSSA);
 }
@@ -697,14 +701,14 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
   DepEdges.try_emplace({Src, It /*dst*/}, DepCondition::always());
 
   if (!Processing.insert(It).second) {
-    //errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
+    // errs() << "!!! found cycle: " << Src << " -> " << It << '\n';
     FoundCycle = true;
     return;
   }
 
   EraseOnReturnGuard EraseOnReturn(Processing, It);
 
-  //errs() << "visiting " << Src << " -> " << It << '\n';
+  // errs() << "visiting " << Src << " -> " << It << '\n';
 
   // Don't consider things that comes before earliest
   if (It != Earliest && (!VL->contains(It) || !VL->comesBefore(Earliest, It)))
@@ -1134,13 +1138,45 @@ raw_ostream &operator<<(raw_ostream &OS, const DepCondition &DepCond) {
   return OS;
 }
 
+void ConditionSetTracker::mergeObjectsFromConditions(
+    const DepCondition &LeaderCond, const DepCondition &MergedCond,
+    bool Swapped) {
+  assert(MergedObjects.count(LeaderCond));
+  auto &[Set1, Set2] = MergedObjects[LeaderCond];
+  // errs() << "Merging " << LeaderCond << "\n\twith " << MergedCond
+  //   << "\n\t orig pointers = " << *LeaderCond.getRanges().first.Ptr << ", "
+  //   << *LeaderCond.getRanges().second.Ptr
+  //   << "\n\t incoming pointers = " << *MergedCond.getRanges().first.Ptr << ",
+  //   " << *MergedCond.getRanges().second.Ptr
+  //   << '\n';
+  assert(MergedObjects.count(MergedCond));
+  auto &[SetA, SetB] = MergedObjects[MergedCond];
+
+  if (Swapped) {
+    Set1.insert(SetB.begin(), SetB.end());
+    Set2.insert(SetA.begin(), SetA.end());
+  } else {
+    Set1.insert(SetA.begin(), SetA.end());
+    Set2.insert(SetB.begin(), SetB.end());
+  }
+
+  MergedObjects.erase(MergedCond);
+}
+
 void ConditionSetTracker::addImpl(const DepCondition &DepCond) {
   ConditionSet *Set = nullptr;
   for (auto &CS : CondSets) {
+    bool Swapped;
     if (Optional<DepCondition> Coalesced =
-            DepCondition::coalesce(CS.DepCond, DepCond, SE, PSSA)) {
+            DepCondition::coalesce(CS.DepCond, DepCond, SE, PSSA, Swapped)) {
+      auto It = MergedObjects.find(CS.DepCond);
+      assert(It != MergedObjects.end());
+      auto Tmp = std::move(It->second);
+      MergedObjects.erase(It);
+      MergedObjects[*Coalesced] = std::move(Tmp);
       CS.DepCond = *Coalesced;
       Set = &CS;
+      mergeObjectsFromConditions(CS.DepCond, DepCond, Swapped);
       break;
     }
   }
@@ -1168,7 +1204,9 @@ static const SCEV *diffRanges(ScalarEvolution &SE, const MemRange &R1,
 
 static bool checksAreEquivalent(ScalarEvolution &SE,
                                 const std::pair<MemRange, MemRange> &Check1,
-                                const std::pair<MemRange, MemRange> &Check2) {
+                                const std::pair<MemRange, MemRange> &Check2,
+                                bool &Swapped) {
+  Swapped = false;
   const SCEV *Diff1;
   const SCEV *Diff2;
   Diff1 = diffRanges(SE, Check1.first, Check2.first);
@@ -1180,6 +1218,7 @@ static bool checksAreEquivalent(ScalarEvolution &SE,
   if (Diff1 == Diff2)
     return true;
 retry:
+  Swapped = true;
   Diff1 = diffRanges(SE, Check1.first, Check2.second);
   if (!Diff1)
     return false;
@@ -1202,9 +1241,8 @@ static DepCondition getCanonicalCondition(ScalarEvolution &SE,
   return *It;
 }
 
-static std::vector<DepCondition>
-dedupConditions(ScalarEvolution &SE, ArrayRef<DepCondition> DepConds,
-                DenseMap<DepCondition, DepCondition> &RedundantConds) {
+std::vector<DepCondition>
+ConditionSetTracker::dedupConditions(ArrayRef<DepCondition> DepConds) {
   std::vector<DepCondition> NewConds;
   std::vector<DepCondition> Checks;
   DenseSet<DepCondition> Visited;
@@ -1218,9 +1256,11 @@ dedupConditions(ScalarEvolution &SE, ArrayRef<DepCondition> DepConds,
     bool IsRedundant = false;
     auto Check = DepCond.getRanges();
     for (auto &Check2 : Checks) {
-      if (checksAreEquivalent(SE, Check, Check2.getRanges())) {
+      bool Swapped;
+      if (checksAreEquivalent(SE, Check, Check2.getRanges(), Swapped)) {
         RedundantConds.try_emplace(DepCond, Check2);
         IsRedundant = true;
+        mergeObjectsFromConditions(Check2 /*=LeaderCond*/, DepCond, Swapped);
         break;
       }
     }
@@ -1235,8 +1275,17 @@ dedupConditions(ScalarEvolution &SE, ArrayRef<DepCondition> DepConds,
 const DepCondition &
 ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) {
   if (!Worklist.empty()) {
-    Worklist = dedupConditions(SE, Worklist, RedundantConds);
-#if 1
+    // Record the objects that we are tracking with the overlapping checks
+    for (auto &DepCond : Worklist) {
+      if (!DepCond.isOverlapping())
+        continue;
+      auto [R1, R2] = DepCond.getRanges();
+      MergedObjects[DepCond].first.insert(R1.Ptr);
+      MergedObjects[DepCond].second.insert(R2.Ptr);
+    }
+
+    Worklist = dedupConditions(Worklist);
+
     // At this point, redundant conds maps a condition to an arbitrary leader.
     // We want to elect a new leader by choosing the check with the leftmost
     // first range. Mapping a leader condition -> list of conditions equivalent
@@ -1255,8 +1304,16 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) {
         if (!Inserted)
           It->second = NewLeader;
       }
+      bool Swapped;
+      checksAreEquivalent(SE, OldLeader.getRanges(), NewLeader.getRanges(),
+                          Swapped);
+      if (NewLeader != OldLeader) {
+        auto Tmp = std::move(MergedObjects[OldLeader]);
+        MergedObjects.erase(OldLeader);
+        MergedObjects[NewLeader] = std::move(Tmp);
+      }
     }
-#endif
+
     for (auto &DepCond2 : Worklist) {
       auto It = RedundantConds.find(DepCond2);
       if (It != RedundantConds.end())
@@ -1273,6 +1330,28 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) {
   if (It != CondToSetMap.end())
     return It->second->DepCond;
   return DepCond;
+}
+
+std::pair<ConditionSetTracker::ValueSet *, ConditionSetTracker::ValueSet *>
+ConditionSetTracker::getMergedObjects(Value *A, Value *B) {
+  errs() << "Getting sets for " << *A << ", " << *B << '\n';
+  for (auto &KV : MergedObjects) {
+    auto DepCond = KV.first;
+    if (!(DepCond == getCoalescedCondition(DepCond)))
+      continue;
+    auto &SetA = KV.second.first;
+    auto &SetB = KV.second.second;
+    // auto &[SetA, SetB] = kv.second;
+    if (SetA.contains(A) && SetB.contains(B)) {
+      errs() << "\tUsing merged cond " << DepCond << '\n';
+      return {&SetA, &SetB};
+    }
+    if (SetB.contains(A) && SetA.contains(B)) {
+      errs() << "\tUsing merged cond " << DepCond << '\n';
+      return {&SetB, &SetA};
+    }
+  }
+  llvm_unreachable("A and B not merged");
 }
 
 bool findNecessaryDeps(VersioningPlan &VerPlan, ArrayRef<Instruction *> Insts,

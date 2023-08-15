@@ -1,16 +1,17 @@
 #include "vegen/Pack.h"
-#include "TripCount.h"
 #include "AddrUtil.h"
 #include "InstructionDescriptor.h"
 #include "LooseInstructionTable.h"
 #include "Matcher.h"
 #include "Reducer.h"
+#include "TripCount.h"
 #include "pssa/Inserter.h"
 #include "pssa/PSSA.h"
 #include "llvm/Analysis/Loads.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
+#include "llvm/Analysis/VectorUtils.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
@@ -359,6 +360,11 @@ SmallVector<VectorMask, 2> LoadPack::masks() const {
   return {Conds};
 }
 
+static Instruction *propagateMetadata(Value *V, ArrayRef<Instruction *> Insts) {
+  SmallVector<Value *> Vals(Insts.begin(), Insts.end());
+  return propagateMetadata(cast<Instruction>(V), Vals);
+}
+
 Value *LoadPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   bool Masking = Operands.size() == 1;
   assert(Masking || Operands.size() == 0);
@@ -371,11 +377,15 @@ Value *LoadPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
     Ptr = Insert.make<BitCastInst>(
         Ptr, PointerType::get(VecTy, Load->getPointerAddressSpace()));
   }
-  if (!Masking || IsDereferenceable)
-    return Insert.make<LoadInst>(VecTy, Ptr, Load->getName() + ".vec",
-                                 false /*is volatile*/, Load->getAlign());
-  return Insert.createMaskedLoad(VecTy, Ptr, Load->getAlign(),
-                                 Operands.front());
+  Value *VLoad;
+  if (!Masking || IsDereferenceable) {
+    VLoad = Insert.make<LoadInst>(VecTy, Ptr, Load->getName() + ".vec",
+                                  false /*is volatile*/, Load->getAlign());
+  } else {
+    VLoad =
+        Insert.createMaskedLoad(VecTy, Ptr, Load->getAlign(), Operands.front());
+  }
+  return propagateMetadata(VLoad, Insts);
 }
 
 SplatPack *SplatPack::tryPack(ArrayRef<Instruction *> Insts,
@@ -398,7 +408,8 @@ SplatPack *SplatPack::tryPack(ArrayRef<Instruction *> Insts,
     if (!Diff || *Diff != 0)
       return nullptr;
   }
-  // Make sure the loops are fusible (doens't make sense if we have to coiterate)
+  // Make sure the loops are fusible (doens't make sense if we have to
+  // coiterate)
   while (!is_splat(Loops)) {
     auto *L0 = Loops.front();
     for (auto *L : drop_begin(Loops)) {
@@ -470,11 +481,15 @@ Value *StorePack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
         Ptr, PointerType::get(Operands.front()->getType(),
                               Store->getPointerAddressSpace()));
   }
-  if (!Masking)
-    return Insert.make<StoreInst>(Operands.front(), Ptr, false /*is volatile*/,
-                                  Store->getAlign());
-  return Insert.createMaskedStore(Operands.front(), Ptr, Store->getAlign(),
-                                  Operands.back());
+  Value *VStore;
+  if (!Masking) {
+    VStore = Insert.make<StoreInst>(Operands.front(), Ptr,
+                                    false /*is volatile*/, Store->getAlign());
+  } else {
+    VStore = Insert.createMaskedStore(Operands.front(), Ptr, Store->getAlign(),
+                                      Operands.back());
+  }
+  return propagateMetadata(VStore, Insts);
 }
 
 GatherPack *GatherPack::tryPack(ArrayRef<Instruction *> Insts,

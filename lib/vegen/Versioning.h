@@ -58,8 +58,9 @@ class Versioner {
   llvm::DenseMap<const ControlCondition *, const ControlCondition *> OrigConds;
   // Mapping a <strengthened condition> -> <the flag that it's strengthened
   // with>
-  //llvm::DenseMap<const ControlCondition *, std::pair<llvm::Value *, bool>>
-  llvm::DenseMap<const ControlCondition *, llvm::SmallVector<std::pair<llvm::Value *, bool>, 2>>
+  // llvm::DenseMap<const ControlCondition *, std::pair<llvm::Value *, bool>>
+  llvm::DenseMap<const ControlCondition *,
+                 llvm::SmallVector<std::pair<llvm::Value *, bool>, 2>>
       StrengthenedConds;
   // Mapping an instruction -> its versioning phis (we have multiple phis when
   // we have nested versioning)
@@ -69,9 +70,7 @@ class Versioner {
   ////////////
   llvm::DenseMap<Item, Item, ItemHashInfo> OrigToCloneMap;
   ////////
-  void reset() {
-    OrigToCloneMap.clear();
-  }
+  void reset() { OrigToCloneMap.clear(); }
 
   ConditionUserTracker CUT;
 
@@ -96,7 +95,8 @@ public:
   // (by merging their original versioning conditions)
   void
   run(llvm::ArrayRef<Versioning *>, const llvm::EquivalenceClasses<Item> &EC,
-      const llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps);
+      const llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
+      ConditionSetTracker &);
 
   bool isIndependent(const Item &Src, const Item &Dst) const {
     return IndepTracker.isIndependent(Src, Dst);

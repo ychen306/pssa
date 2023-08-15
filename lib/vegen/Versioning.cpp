@@ -6,6 +6,8 @@
 #include "pssa/VectorHashInfo.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 
 using namespace llvm;
@@ -413,9 +415,9 @@ bool Versioner::isExclusive(const ControlCondition *C1,
   auto It2 = StrengthenedConds.find(C2);
   if (It2 == StrengthenedConds.end())
     return false;
-  //auto [Flag1, IsTrue1] = It1->second;
-  //auto [Flag2, IsTrue2] = It2->second;
-  //return Flag1 == Flag2 && (IsTrue1 ^ IsTrue2);
+  // auto [Flag1, IsTrue1] = It1->second;
+  // auto [Flag2, IsTrue2] = It2->second;
+  // return Flag1 == Flag2 && (IsTrue1 ^ IsTrue2);
   for (auto [Flag1, IsTrue1] : It1->second)
     for (auto [Flag2, IsTrue2] : It2->second)
       if (Flag1 == Flag2 && (IsTrue1 ^ IsTrue2))
@@ -431,7 +433,7 @@ class ConditionRewriter {
   Value *New;
   DenseMap<const ControlCondition *, const ControlCondition *> RewrittenConds;
   Value *rewrite(Value *V) {
-    auto *V2 = V == Old ? New : V; 
+    auto *V2 = V == Old ? New : V;
     assert(V2);
     return V2;
   }
@@ -601,10 +603,11 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
                                                           Insert.getFalse(),
                                                           Insert.getTrue()));
       }
-      //NoDep = Insert.create<BinaryOperator>(Instruction::Or, Insert.getTrue(), Insert.getTrue());
+      // NoDep = Insert.create<BinaryOperator>(Instruction::Or,
+      // Insert.getTrue(), Insert.getTrue());
       CondSets[DepConds] = NoDep;
-      //static int counter;
-      //NoDep->setName("flag." + std::to_string(counter++));
+      // static int counter;
+      // NoDep->setName("flag." + std::to_string(counter++));
     }
     VersioningFlags[It] = CondSets[DepConds];
   }
@@ -620,7 +623,8 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
   // Join the clone and original instructions with phis to deal with external
   // uses
   llvm::DenseSet<llvm::Instruction *> VersioningPhis;
-  llvm::DenseMap<llvm::Instruction *, llvm::Instruction *> InstToVersioningPhiMap;
+  llvm::DenseMap<llvm::Instruction *, llvm::Instruction *>
+      InstToVersioningPhiMap;
   // Mapping an item to the ancestor loop that we just versioned
   llvm::DenseMap<Item, VLoop *, ItemHashInfo> ItemToLoopMap;
   llvm::SmallVector<llvm::PHINode *> VersionedPhis;
@@ -918,9 +922,80 @@ static void removeRedundantConditions(PredicatedSSA &PSSA,
     VersioningMap.erase(Item);
 }
 
+template<typename T>
+std::pair<T, T> reorder(std::pair<T, T> Pair) {
+  auto [A, B] = Pair;
+  return {B, A};
+}
+
+static void addScopeForInst(Instruction *I, Metadata *Scope) {
+  I->setMetadata(
+      LLVMContext::MD_alias_scope,
+      MDNode::concatenate(I->getMetadata(LLVMContext::MD_alias_scope),
+        MDNode::get(I->getContext(), Scope)));
+}
+
+static void addNoAliasForInst(Instruction *I, Metadata *Scope) {
+  I->setMetadata(LLVMContext::MD_noalias,
+      MDNode::concatenate(I->getMetadata(LLVMContext::MD_noalias),
+        MDNode::get(I->getContext(), Scope)));
+}
+
+static void annotateWithNoAlias(LLVMContext &Ctx,
+                                const DenseSet<DepEdge> &AliasedEdgesToIgnore,
+                                ConditionSetTracker &CST) {
+  MDBuilder MDB(Ctx);
+
+  using ValueSet = ConditionSetTracker::ValueSet;
+  DenseMap<std::pair<ValueSet *, ValueSet *>, std::pair<MDNode *, MDNode *>> SetsToScopesMap;
+  auto GetScopesForSets = [&](ValueSet *SetA, ValueSet *SetB) {
+    auto Key = std::make_pair(SetA, SetB);
+    if (SetA > SetB)
+      Key = reorder(Key);
+    auto [It, Inserted] = SetsToScopesMap.try_emplace(Key, nullptr, nullptr);
+    if (!Inserted) {
+      return (SetA > SetB) ? reorder(It->second) : It->second;
+    }
+
+#if 0
+    errs() << "Set a { \n";
+    for (auto *x : *SetA)
+      errs() << '\t' << *x << '\n';
+    errs() << "}\n";
+    errs() << "Set b { \n";
+    for (auto *x : *SetB)
+      errs() << '\t' << *x << '\n';
+    errs() << "}\n";
+#endif
+
+    MDNode *Domain = MDB.createAnonymousAliasScopeDomain();
+    auto *ScopeA = MDB.createAnonymousAliasScope(Domain);
+    auto *ScopeB = MDB.createAnonymousAliasScope(Domain);
+    auto Result = std::make_pair(ScopeA, ScopeB);
+    It->second = (SetA > SetB) ? reorder(Result) : Result;
+    return Result;
+  };
+
+  for (auto [Src, Dst] : AliasedEdgesToIgnore) {
+    auto *SrcI = Src.asInstruction();
+    auto *DstI = Dst.asInstruction();
+    auto *SrcPtr = getLoadStorePointerOperand(SrcI);
+    auto *DstPtr = getLoadStorePointerOperand(DstI);
+    auto [SrcSet, DstSet] = CST.getMergedObjects(SrcPtr, DstPtr);
+    auto [SrcScope, DstScope] = GetScopesForSets(SrcSet, DstSet);
+    assert(SrcSet->contains(SrcPtr));
+    assert(DstSet->contains(DstPtr));
+    addNoAliasForInst(SrcI, DstScope);
+    addScopeForInst(DstI, DstScope);
+    addNoAliasForInst(DstI, SrcScope);
+    addScopeForInst(SrcI, SrcScope);
+  }
+}
+
 void Versioner::run(ArrayRef<Versioning *> Versionings,
                     const EquivalenceClasses<Item> &EC,
-                    const DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps) {
+                    const DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps,
+                    ConditionSetTracker &CST) {
   reset();
   VersioningMapTy VersioningMap;
   auto MarkForVersioning = [&](const DepNode &N, ArrayRef<DepCondition> Conds) {
@@ -1016,6 +1091,7 @@ void Versioner::run(ArrayRef<Versioning *> Versionings,
   removeRedundantConditions(PSSA, VersioningMap);
 
   runOnLoop(&PSSA.getTopLevel(), VersioningMap);
+  annotateWithNoAlias(PSSA.getContext(), AliasedEdgesToIgnore, CST);
 }
 
 IndependenceTracker::IndependenceTracker(Versioner &TheVersioner,
@@ -1135,7 +1211,6 @@ static void finalizeVersioning(Versioning *PrimaryVer) {
       Nodes.erase(Node);
   };
 
-
   DenseSet<DepNode> Versioned;
   for (auto *Ver = getOutermostVersioning(PrimaryVer); Ver;
        Ver = Ver->Primary) {
@@ -1154,7 +1229,7 @@ static void finalizeVersioning(Versioning *PrimaryVer) {
     Versioned.insert(Ver->Nodes.begin(), Ver->Nodes.end());
     Ver->Nodes.clear();
     llvm::append_range(Ver->Nodes, NewNodes);
-    
+
     DenseSet<DepEdge> ImpliedCutEdges;
     for (auto [Edge, DepConds] : Ver->CutEdges) {
       setSubtraction(DepConds, ImpliedConds);
@@ -1276,7 +1351,7 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
         EC.unionSets(I, I0);
     }
 
-    TheVersioner.run(Frontier, EC, VerPlan.InterLoopDeps);
+    TheVersioner.run(Frontier, EC, VerPlan.InterLoopDeps, CST);
     SmallVector<Versioning *> NewFrontier;
     for (auto *Ver : Frontier) {
       if (Ver->Primary)

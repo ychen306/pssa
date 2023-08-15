@@ -70,6 +70,7 @@ struct MemRange {
   const llvm::SCEV *Size;
   VLoop *ParentLoop;
   llvm::Loop *OrigParentLoop;
+  llvm::Value *Ptr; // a pointer that fall into the range
 
   static MemRange get(llvm::Instruction *I, llvm::ScalarEvolution &,
                       PredicatedSSA &PSSA, llvm::LoopInfo &);
@@ -112,13 +113,15 @@ public:
     return DepCondition(C);
   }
   // Try to create a condition that implies both Cond1 and Cond2
+  // `Swapped` is set to true of Cond2's ranges are swapped to enable coalescing
   static llvm::Optional<DepCondition> coalesce(const DepCondition &Cond1,
                                                const DepCondition &Cond2,
                                                llvm::ScalarEvolution &,
-                                               PredicatedSSA &);
+                                               PredicatedSSA &, bool &Swapped);
   bool operator==(const DepCondition &Other) const {
     return Overlap == Other.Overlap && C == Other.C;
   }
+  bool operator!=(const DepCondition &Other) const { return !(*this == Other); }
   bool operator<(const DepCondition &Other) const {
     // Order conflict checks before control conditions
     if (isOverlapping() && !Other.isOverlapping())
@@ -186,6 +189,10 @@ struct ConditionSet {
 };
 
 class ConditionSetTracker {
+public:
+  using ValueSet = llvm::DenseSet<llvm::Value *>;
+
+private:
   llvm::ScalarEvolution &SE;
   PredicatedSSA &PSSA;
   std::list<ConditionSet> CondSets;
@@ -193,11 +200,21 @@ class ConditionSetTracker {
   llvm::DenseMap<DepCondition, ConditionSet *> CondToSetMap;
   // Mapping a redundant check to a leader
   llvm::DenseMap<DepCondition, DepCondition> RedundantConds;
+  // Mapping <a coalesced condition> -> sets of object the condition is
+  // responsible for disambiguating
+  llvm::DenseMap<DepCondition, std::pair<ValueSet, ValueSet>> MergedObjects;
   ConditionSet *newSet(const DepCondition &DepCond) {
     return &*CondSets.emplace(CondSets.end(), DepCond);
   }
 
   void addImpl(const DepCondition &);
+
+  std::vector<DepCondition>
+  dedupConditions(llvm::ArrayRef<DepCondition> DepConds);
+  // Assuming we've coalesced two overlapping checks,
+  // merge their corresponding objects
+  void mergeObjectsFromConditions(const DepCondition &LeaderCond,
+                                  const DepCondition &MergedCond, bool Swapped);
 
 public:
   ConditionSetTracker(llvm::ScalarEvolution &SE, PredicatedSSA &PSSA)
@@ -206,6 +223,11 @@ public:
   // If `DepCond` is coalesced with some other condition(s), return the
   // coalesced condition
   const DepCondition &getCoalescedCondition(const DepCondition &DepCond);
+  // Pointers A and B are involved in a condition that's coalesced with some
+  // other condition(s), return the set of objects now merged with A and those
+  // merged with B.
+  std::pair<ValueSet *, ValueSet *> getMergedObjects(llvm::Value *A,
+                                                     llvm::Value *B);
 };
 
 class CachingAA {
@@ -218,7 +240,8 @@ public:
   llvm::AliasResult alias(const llvm::MemoryLocation &LocA,
                           const llvm::MemoryLocation &LocB) {
     auto [It, Inserted] =
-        Cache.try_emplace({LocA, LocB}, llvm::AliasResult::NoAlias);
+        Cache.try_emplace({LocA.getWithoutAATags(), LocB.getWithoutAATags()},
+                          llvm::AliasResult::NoAlias);
     if (!Inserted)
       return It->second;
     return It->second = AA.alias(LocA, LocB);
