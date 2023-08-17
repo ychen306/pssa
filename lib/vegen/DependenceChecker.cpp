@@ -121,11 +121,12 @@ Optional<MemRange> MemRange::merge(const MemRange &OrigR1,
 static const SCEV *getAdd(const SCEV *A, const SCEV *B, ScalarEvolution &SE) {
   if (A->getType() == B->getType())
     return SE.getAddExpr(A, B);
-  auto *Ty = A->getType();
-  if (Ty->getIntegerBitWidth() < B->getType()->getIntegerBitWidth())
-    Ty = B->getType();
-  return SE.getAddExpr(SE.getNoopOrZeroExtend(A, Ty),
-                       SE.getNoopOrZeroExtend(B, Ty));
+  auto *ATy = SE.getEffectiveSCEVType(A->getType());
+  auto *BTy = SE.getEffectiveSCEVType(B->getType());
+  if (ATy->getIntegerBitWidth() < BTy->getIntegerBitWidth())
+    ATy = B->getType();
+  return SE.getAddExpr(SE.getNoopOrZeroExtend(A, ATy),
+                       SE.getNoopOrZeroExtend(B, ATy));
 }
 
 static const SCEV *getMul(const SCEV *A, const SCEV *B, ScalarEvolution &SE) {
@@ -157,18 +158,26 @@ Optional<MemRange> MemRange::promote(ScalarEvolution &SE, PredicatedSSA &PSSA) {
   if (!BaseAR)
     return None;
 
-  auto *Step = BaseAR->getStepRecurrence(SE);
-  // TODO: deal with negative step
-  if (!SE.isKnownNonNegative(Step))
-    return None;
-
   auto *BackedgeTakenCount = SE.getBackedgeTakenCount(L);
   if (isa<SCEVCouldNotCompute>(BackedgeTakenCount))
     return None;
   auto *TripCount =
       getAdd(SE.getOne(BackedgeTakenCount->getType()), BackedgeTakenCount, SE);
-  return MemRange{BaseAR->getStart(),
-                  getAdd(getMul(TripCount, Step, SE), Size, SE),
+
+  auto *Step = BaseAR->getStepRecurrence(SE);
+  auto *Start = BaseAR->getStart();
+  auto *Diff = getAdd(getMul(TripCount, Step, SE), Size, SE);
+  // TODO: deal with negative step
+  if (SE.isKnownNonNegative(Step)) {
+    return MemRange{Start, Diff, ParentLoop->getParent(), L->getParentLoop(),
+                    Ptr};
+  }
+
+  // Bail if the step size is not a constant
+  if (!SE.isKnownNegative(Step))
+    return None;
+
+  return MemRange{getAdd(Start, Diff, SE), getAdd(Diff, Size, SE),
                   ParentLoop->getParent(), L->getParentLoop(), Ptr};
 }
 
