@@ -1152,14 +1152,18 @@ void ConditionSetTracker::mergeObjectsFromConditions(
     bool Swapped) {
   assert(MergedObjects.count(LeaderCond));
   auto &[Set1, Set2] = MergedObjects[LeaderCond];
-  // errs() << "Merging " << LeaderCond << "\n\twith " << MergedCond
-  //   << "\n\t orig pointers = " << *LeaderCond.getRanges().first.Ptr << ", "
-  //   << *LeaderCond.getRanges().second.Ptr
-  //   << "\n\t incoming pointers = " << *MergedCond.getRanges().first.Ptr << ",
-  //   " << *MergedCond.getRanges().second.Ptr
-  //   << '\n';
+#if 1
+  errs() << "Merging " << LeaderCond << "\n\twith " << MergedCond
+    << "\n\t orig pointers = " << *LeaderCond.getRanges().first.Ptr << ", "
+    << *LeaderCond.getRanges().second.Ptr
+    << "\n\t incoming pointers = " << *MergedCond.getRanges().first.Ptr << ", " 
+    << *MergedCond.getRanges().second.Ptr
+    << '\n';
+#endif
   assert(MergedObjects.count(MergedCond));
   auto &[SetA, SetB] = MergedObjects[MergedCond];
+  assert(SetA.count(MergedCond.getRanges().first.Ptr));
+  assert(SetB.count(MergedCond.getRanges().second.Ptr));
 
   if (Swapped) {
     Set1.insert(SetB.begin(), SetB.end());
@@ -1169,7 +1173,10 @@ void ConditionSetTracker::mergeObjectsFromConditions(
     Set2.insert(SetB.begin(), SetB.end());
   }
 
-  MergedObjects.erase(MergedCond);
+  if (MergedCond != LeaderCond) {
+    errs() << "Erasing " << MergedCond << '\n';
+    MergedObjects.erase(MergedCond);
+  }
 }
 
 void ConditionSetTracker::addImpl(const DepCondition &DepCond) {
@@ -1178,14 +1185,17 @@ void ConditionSetTracker::addImpl(const DepCondition &DepCond) {
     bool Swapped;
     if (Optional<DepCondition> Coalesced =
             DepCondition::coalesce(CS.DepCond, DepCond, SE, PSSA, Swapped)) {
+      mergeObjectsFromConditions(CS.DepCond, DepCond, Swapped);
+      // Transfer the entry of CS.DepCond to *Coalesced 
+      // (which in general can be different from CS.DepCond after coalescing)
       auto It = MergedObjects.find(CS.DepCond);
       assert(It != MergedObjects.end());
       auto Tmp = std::move(It->second);
       MergedObjects.erase(It);
       MergedObjects[*Coalesced] = std::move(Tmp);
       CS.DepCond = *Coalesced;
+      assert(MergedObjects.count(CS.DepCond));
       Set = &CS;
-      mergeObjectsFromConditions(CS.DepCond, DepCond, Swapped);
       break;
     }
   }
@@ -1348,9 +1358,7 @@ ConditionSetTracker::getMergedObjects(Value *A, Value *B) {
     auto DepCond = KV.first;
     if (!(DepCond == getCoalescedCondition(DepCond)))
       continue;
-    auto &SetA = KV.second.first;
-    auto &SetB = KV.second.second;
-    // auto &[SetA, SetB] = kv.second;
+    auto &[SetA, SetB] = KV.second;
     if (SetA.contains(A) && SetB.contains(B)) {
       errs() << "\tUsing merged cond " << DepCond << '\n';
       return {&SetA, &SetB};
