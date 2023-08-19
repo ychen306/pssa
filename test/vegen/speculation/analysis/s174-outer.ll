@@ -1,18 +1,18 @@
 ; RUN: %opt -passes=test-vector-codegen %s -p storeOf:add,storeOf:add.1,storeOf:add.2,storeOf:add.3 -find-conditional-deps -o /dev/null 2>&1 | FileCheck %s
 
-; CHECK-DAG: IF (@a)[:409600000004] OVERLAPS WITH ((12 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409600000004]
-; CHECK-DAG: IF (((4 * (sext i32 %M to i64))<nsw> + @a))[:409600000004] OVERLAPS WITH ((12 + @a)<nuw><nsw>)[:409600000004]
-; CHECK-DAG: IF ((4 + @a)<nuw><nsw>)[:409600000004] OVERLAPS WITH ((12 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409600000004]
-; CHECK-DAG: IF ((4 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409600000004] OVERLAPS WITH ((12 + @a)<nuw><nsw>)[:409600000004]
-; CHECK-DAG: IF ((4 + @a)<nuw><nsw>)[:409600000004] OVERLAPS WITH ((8 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409600000004]
-; CHECK-DAG: IF ((4 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409600000004] OVERLAPS WITH ((8 + @a)<nuw><nsw>)[:409600000004]
-; CHECK-DAG: IF (@a)[:409600000004] OVERLAPS WITH ((4 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409600000004]
-; CHECK-DAG: IF (((4 * (sext i32 %M to i64))<nsw> + @a))[:409600000004] OVERLAPS WITH ((4 + @a)<nuw><nsw>)[:409600000004]
-; CHECK-DAG: IF ((8 + @a)<nuw><nsw>)[:409600000004] OVERLAPS WITH ((12 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409600000004]
-; CHECK-DAG: IF ((8 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409600000004] OVERLAPS WITH ((12 + @a)<nuw><nsw>)[:409600000004]
-; CHECK-DAG: IF (@a)[:409600000004] OVERLAPS WITH ((8 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409600000004]
-; CHECK-DAG: IF (((4 * (sext i32 %M to i64))<nsw> + @a))[:409600000004] OVERLAPS WITH ((8 + @a)<nuw><nsw>)[:409600000004]
-; CHECK: coalesced condition: (@a)[:409600000016] OVERLAPS WITH (((4 * (sext i32 %M to i64))<nsw> + @a))[:409600000016]
+; CHECK-DAG: IF (@a)[:409598720008] OVERLAPS WITH ((12 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409598720008]
+; CHECK-DAG: IF (((4 * (sext i32 %M to i64))<nsw> + @a))[:409598720008] OVERLAPS WITH ((12 + @a)<nuw><nsw>)[:409598720008]
+; CHECK-DAG: IF ((4 + @a)<nuw><nsw>)[:409598720008] OVERLAPS WITH ((12 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409598720008]
+; CHECK-DAG: IF ((4 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409598720008] OVERLAPS WITH ((12 + @a)<nuw><nsw>)[:409598720008]
+; CHECK-DAG: IF ((4 + @a)<nuw><nsw>)[:409598720008] OVERLAPS WITH ((8 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409598720008]
+; CHECK-DAG: IF ((4 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409598720008] OVERLAPS WITH ((8 + @a)<nuw><nsw>)[:409598720008]
+; CHECK-DAG: IF (@a)[:409598720008] OVERLAPS WITH ((4 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409598720008]
+; CHECK-DAG: IF (((4 * (sext i32 %M to i64))<nsw> + @a))[:409598720008] OVERLAPS WITH ((4 + @a)<nuw><nsw>)[:409598720008]
+; CHECK-DAG: IF ((8 + @a)<nuw><nsw>)[:409598720008] OVERLAPS WITH ((12 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409598720008]
+; CHECK-DAG: IF ((8 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409598720008] OVERLAPS WITH ((12 + @a)<nuw><nsw>)[:409598720008]
+; CHECK-DAG: IF (@a)[:409598720008] OVERLAPS WITH ((8 + (4 * (sext i32 %M to i64))<nsw> + @a))[:409598720008]
+; CHECK-DAG: IF (((4 * (sext i32 %M to i64))<nsw> + @a))[:409598720008] OVERLAPS WITH ((8 + @a)<nuw><nsw>)[:409598720008]
+; CHECK: coalesced condition: (@a)[:409598720020] OVERLAPS WITH (((4 * (sext i32 %M to i64))<nsw> + @a))[:409598720020]
 
 target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"

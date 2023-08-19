@@ -15,9 +15,9 @@ define void @s174(i32 noundef %M) local_unnamed_addr #0 {
 ; CHECK-NEXT:    [[I:%.*]] = sext i32 [[M:%.*]] to i64
 ; CHECK-NEXT:    [[TMP0:%.*]] = shl nsw i64 [[I]], 2
 ; CHECK-NEXT:    [[UGLYGEP:%.*]] = getelementptr i8, ptr @a, i64 [[TMP0]]
-; CHECK-NEXT:    [[IDENT_CHECK:%.*]] = icmp ult ptr getelementptr (i8, ptr @a, i64 409600000016), [[UGLYGEP]]
+; CHECK-NEXT:    [[IDENT_CHECK:%.*]] = icmp ult ptr getelementptr (i8, ptr @a, i64 409598720020), [[UGLYGEP]]
 ; CHECK-NEXT:    [[TMP1:%.*]] = shl nsw i64 [[I]], 2
-; CHECK-NEXT:    [[TMP2:%.*]] = add nsw i64 [[TMP1]], 409600000016
+; CHECK-NEXT:    [[TMP2:%.*]] = add nsw i64 [[TMP1]], 409598720020
 ; CHECK-NEXT:    [[UGLYGEP1:%.*]] = getelementptr i8, ptr @a, i64 [[TMP2]]
 ; CHECK-NEXT:    [[IDENT_CHECK2:%.*]] = icmp ult ptr [[UGLYGEP1]], @a
 ; CHECK-NEXT:    [[TMP3:%.*]] = or i1 [[IDENT_CHECK]], [[IDENT_CHECK2]]
