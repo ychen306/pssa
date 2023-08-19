@@ -63,23 +63,36 @@ static bool isLessThan(ScalarEvolution &SE, const SCEV *A, const SCEV *B) {
 }
 
 // Promote R until its ParentLoop is VL
-static Optional<MemRange> promoteTo(const MemRange &R, VLoop *VL,
+static Optional<MemRange> promoteTo(const MemRange &R, Loop *L,
                                     ScalarEvolution &SE, PredicatedSSA &PSSA) {
-  assert(VL->contains(R.ParentLoop));
+  if (R.OrigParentLoop == L)
+    return R;
+
+  assert(!L || L->contains(R.OrigParentLoop));
   Optional<MemRange> MaybeR = R;
-  while (MaybeR && MaybeR->ParentLoop != VL)
+  while (MaybeR && MaybeR->OrigParentLoop != L)
     MaybeR = MaybeR->promote(SE, PSSA);
   return MaybeR;
+}
+
+static Loop *nearestCommonParent(Loop *L1, Loop *L2) {
+  auto Contains = [](auto *L1, auto *L2) {
+    return L1 == L2 || L1->contains(L2);
+  };
+
+  while (L1 && !Contains(L1, L2))
+    L1 = L1->getParentLoop();
+  return L1;
 }
 
 Optional<MemRange> MemRange::merge(const MemRange &OrigR1,
                                    const MemRange &OrigR2, ScalarEvolution &SE,
                                    PredicatedSSA &PSSA) {
-  auto *VL = nearestCommonParent(OrigR1.ParentLoop, OrigR2.ParentLoop);
-  auto MaybeR1 = promoteTo(OrigR1, VL, SE, PSSA);
+  auto *L = nearestCommonParent(OrigR1.OrigParentLoop, OrigR2.OrigParentLoop);
+  auto MaybeR1 = promoteTo(OrigR1, L, SE, PSSA);
   if (!MaybeR1)
     return None;
-  auto MaybeR2 = promoteTo(OrigR2, VL, SE, PSSA);
+  auto MaybeR2 = promoteTo(OrigR2, L, SE, PSSA);
   if (!MaybeR2)
     return None;
   auto &R1 = *MaybeR1;
@@ -161,23 +174,21 @@ Optional<MemRange> MemRange::promote(ScalarEvolution &SE, PredicatedSSA &PSSA) {
   auto *BackedgeTakenCount = SE.getBackedgeTakenCount(L);
   if (isa<SCEVCouldNotCompute>(BackedgeTakenCount))
     return None;
-  auto *TripCount =
-      getAdd(SE.getOne(BackedgeTakenCount->getType()), BackedgeTakenCount, SE);
 
   auto *Step = BaseAR->getStepRecurrence(SE);
   auto *Start = BaseAR->getStart();
-  auto *Diff = getAdd(getMul(TripCount, Step, SE), Size, SE);
+  auto *Diff = getAdd(getMul(BackedgeTakenCount, Step, SE), Size, SE);
   // TODO: deal with negative step
   if (SE.isKnownNonNegative(Step)) {
-    return MemRange{Start, Diff, ParentLoop->getParent(), L->getParentLoop(),
-                    Ptr};
+    return MemRange{Start, getAdd(Diff, Size, SE), ParentLoop->getParent(),
+                    L->getParentLoop(), Ptr};
   }
 
   // Bail if the step size is not a constant
   if (!SE.isKnownNegative(Step))
     return None;
-
-  return MemRange{getAdd(Start, Diff, SE), getAdd(Diff, Size, SE),
+  return MemRange{getAdd(Start, Diff, SE),
+                  getAdd(SE.getNegativeSCEV(Diff), Size, SE),
                   ParentLoop->getParent(), L->getParentLoop(), Ptr};
 }
 
@@ -490,9 +501,9 @@ Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
   if (Dep && Dep->isOrdered()) {
     auto R1 = MemRange::get(I1, SE, PSSA, LI);
     auto R2 = MemRange::get(I2, SE, PSSA, LI);
-    auto *VL = nearestCommonParent(R1.ParentLoop, R2.ParentLoop);
-    auto PromotedR1 = promoteTo(R1, VL, SE, PSSA);
-    auto PromotedR2 = promoteTo(R2, VL, SE, PSSA);
+    auto *L = nearestCommonParent(R1.OrigParentLoop, R2.OrigParentLoop);
+    auto PromotedR1 = promoteTo(R1, L, SE, PSSA);
+    auto PromotedR2 = promoteTo(R2, L, SE, PSSA);
     if (PromotedR1 && PromotedR2) {
       if (!mayOverlap(SE, *PromotedR1, *PromotedR2))
         return None;
@@ -1152,13 +1163,12 @@ void ConditionSetTracker::mergeObjectsFromConditions(
     bool Swapped) {
   assert(MergedObjects.count(LeaderCond));
   auto &[Set1, Set2] = MergedObjects[LeaderCond];
-#if 1
+#if 0
   errs() << "Merging " << LeaderCond << "\n\twith " << MergedCond
-    << "\n\t orig pointers = " << *LeaderCond.getRanges().first.Ptr << ", "
-    << *LeaderCond.getRanges().second.Ptr
-    << "\n\t incoming pointers = " << *MergedCond.getRanges().first.Ptr << ", " 
-    << *MergedCond.getRanges().second.Ptr
-    << '\n';
+         << "\n\t orig pointers = " << *LeaderCond.getRanges().first.Ptr << ", "
+         << *LeaderCond.getRanges().second.Ptr
+         << "\n\t incoming pointers = " << *MergedCond.getRanges().first.Ptr
+         << ", " << *MergedCond.getRanges().second.Ptr << '\n';
 #endif
   assert(MergedObjects.count(MergedCond));
   auto &[SetA, SetB] = MergedObjects[MergedCond];
@@ -1186,7 +1196,7 @@ void ConditionSetTracker::addImpl(const DepCondition &DepCond) {
     if (Optional<DepCondition> Coalesced =
             DepCondition::coalesce(CS.DepCond, DepCond, SE, PSSA, Swapped)) {
       mergeObjectsFromConditions(CS.DepCond, DepCond, Swapped);
-      // Transfer the entry of CS.DepCond to *Coalesced 
+      // Transfer the entry of CS.DepCond to *Coalesced
       // (which in general can be different from CS.DepCond after coalescing)
       auto It = MergedObjects.find(CS.DepCond);
       assert(It != MergedObjects.end());
@@ -1353,20 +1363,15 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) {
 
 std::pair<ConditionSetTracker::ValueSet *, ConditionSetTracker::ValueSet *>
 ConditionSetTracker::getMergedObjects(Value *A, Value *B) {
-  errs() << "Getting sets for " << *A << ", " << *B << '\n';
   for (auto &KV : MergedObjects) {
     auto DepCond = KV.first;
     if (!(DepCond == getCoalescedCondition(DepCond)))
       continue;
     auto &[SetA, SetB] = KV.second;
-    if (SetA.contains(A) && SetB.contains(B)) {
-      errs() << "\tUsing merged cond " << DepCond << '\n';
+    if (SetA.contains(A) && SetB.contains(B))
       return {&SetA, &SetB};
-    }
-    if (SetB.contains(A) && SetA.contains(B)) {
-      errs() << "\tUsing merged cond " << DepCond << '\n';
+    if (SetB.contains(A) && SetA.contains(B))
       return {&SetB, &SetA};
-    }
   }
   llvm_unreachable("A and B not merged");
 }
