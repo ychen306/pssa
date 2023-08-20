@@ -838,6 +838,9 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
   // Nuke the dead incoming operands of versioned phis
   for (auto *PN : VersionedPhis) {
     assert(VersioningMap.count(PN));
+    // Ignore tirvial phis
+    if (PN->getNumOperands() == 1)
+      continue;
     ArrayRef<DepCondition> DepConds = VersioningMap.find(PN)->second;
     for (auto X : llvm::enumerate(VL->getPhiConditions(PN))) {
       assert(OrigConds.count(X.value()));
