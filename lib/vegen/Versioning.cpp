@@ -398,6 +398,12 @@ static bool isExclusiveAux(const ControlCondition *C1,
   return false;
 }
 
+void Versioner::recordCloning(Item It, Item ClonedIt) {
+  auto [Iterator, Inserted] = OrigToCloneMap.try_emplace(It, ClonedIt);
+  if (!Inserted)
+    Iterator->second = ClonedIt;
+}
+
 bool Versioner::isExclusive(const ControlCondition *C1,
                             const ControlCondition *C2) {
   auto GetOriginalCond = [&](auto *C) {
@@ -663,7 +669,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
       else
         CloneToOrigMap[I2] = I;
       IndepTracker.markInstAsVersioned(I, I2);
-      OrigToCloneMap.try_emplace(I, I2);
+      recordCloning(I, I2);
 
       if (auto *PN = dyn_cast<PHINode>(I)) {
         VersionedPhis.push_back(PN);
@@ -685,7 +691,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
       auto *SubVL = Item.asLoop();
       auto *SubVL2 = cloneLoop(SubVL, VMap, [&](auto It, auto ClonedIt) {
         ItemToLoopMap[It] = SubVL;
-        OrigToCloneMap.try_emplace(It, ClonedIt);
+        recordCloning(It, ClonedIt);
         if (auto *I = It.asInstruction()) {
           auto *ClonedI = ClonedIt.asInstruction();
           assert(ClonedI);

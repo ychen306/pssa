@@ -83,6 +83,7 @@ class Versioner {
   void runOnLoop(VLoop *, const VersioningMapTy &);
   void registerNewCondition(const ControlCondition *, const ControlCondition *);
   llvm::Instruction *cloneInst(llvm::Instruction *);
+  void recordCloning(Item It, Item ClonedIt);
 
 public:
   Versioner(PredicatedSSA &PSSA, llvm::DependenceInfo &DI, CachingAA &AA,
