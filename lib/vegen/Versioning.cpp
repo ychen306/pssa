@@ -988,12 +988,10 @@ static void annotateWithNoAlias(LLVMContext &Ctx,
   for (auto [Src, Dst] : AliasedEdgesToIgnore) {
     auto *SrcI = Src.asInstruction();
     auto *DstI = Dst.asInstruction();
-    auto *SrcPtr = getLoadStorePointerOperand(SrcI);
-    auto *DstPtr = getLoadStorePointerOperand(DstI);
-    auto [SrcSet, DstSet] = CST.getMergedObjects(SrcPtr, DstPtr);
+    auto [SrcSet, DstSet] = CST.getMergedObjects(SrcI, DstI);
     auto [SrcScope, DstScope] = GetScopesForSets(SrcSet, DstSet);
-    assert(SrcSet->contains(SrcPtr));
-    assert(DstSet->contains(DstPtr));
+    assert(SrcSet->contains(SrcI));
+    assert(DstSet->contains(DstI));
     addNoAliasForInst(SrcI, DstScope);
     addScopeForInst(DstI, DstScope);
     addNoAliasForInst(DstI, SrcScope);

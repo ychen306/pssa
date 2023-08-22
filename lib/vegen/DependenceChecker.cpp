@@ -38,21 +38,21 @@ MemRange MemRange::get(llvm::Instruction *I, ScalarEvolution &SE,
   assert(I->getParent());
   auto *L = LI.getLoopFor(I->getParent());
   assert(!VL->isLoop() || L);
-  if (auto *Load = dyn_cast<LoadInst>(I))
-    return MemRange::get(DL, Load->getPointerOperand(), Load->getType(), VL, L,
-                         SE);
+  if (isa<LoadInst>(I))
+    return MemRange::get(DL, I, I->getType(), VL, L, SE);
   if (auto *Store = dyn_cast<StoreInst>(I))
-    return MemRange::get(DL, Store->getPointerOperand(),
-                         Store->getValueOperand()->getType(), VL, L, SE);
+    return MemRange::get(DL, Store, Store->getValueOperand()->getType(), VL, L,
+                         SE);
   llvm_unreachable("MemRange::get only supports loads and stores");
 }
 
-MemRange MemRange::get(const DataLayout &DL, Value *Ptr, Type *Ty, VLoop *VL,
-                       Loop *L, ScalarEvolution &SE) {
+MemRange MemRange::get(const DataLayout &DL, Instruction *I, Type *Ty,
+                       VLoop *VL, Loop *L, ScalarEvolution &SE) {
+  auto *Ptr = getLoadStorePointerOperand(I);
   auto *PtrTy = cast<PointerType>(Ptr->getType());
   unsigned IndexWidth = DL.getIndexSizeInBits(PtrTy->getAddressSpace());
   APInt Size(IndexWidth, DL.getTypeStoreSize(Ty));
-  return MemRange{SE.getSCEV(Ptr), SE.getConstant(Size), VL, L, Ptr};
+  return MemRange{SE.getSCEV(Ptr), SE.getConstant(Size), VL, L, I};
 }
 
 static bool isLessThan(ScalarEvolution &SE, const SCEV *A, const SCEV *B) {
@@ -128,7 +128,7 @@ Optional<MemRange> MemRange::merge(const MemRange &OrigR1,
     else
       return None;
   }
-  return MemRange{Base, Size, R1.ParentLoop, R1.OrigParentLoop, R1.Ptr};
+  return MemRange{Base, Size, R1.ParentLoop, R1.OrigParentLoop, R1.Access};
 }
 
 static const SCEV *getAdd(const SCEV *A, const SCEV *B, ScalarEvolution &SE) {
@@ -163,7 +163,7 @@ Optional<MemRange> MemRange::promote(ScalarEvolution &SE, PredicatedSSA &PSSA) {
   // Best case: the access pattern is loop-invariant
   if (SE.isLoopInvariant(Base, L))
     return MemRange{Base, Size, ParentLoop->getParent(), L->getParentLoop(),
-                    Ptr};
+                    Access};
 
   // Otherwise we insist the base pointer is an AddRec expr (and therefore
   // predictable)
@@ -181,7 +181,7 @@ Optional<MemRange> MemRange::promote(ScalarEvolution &SE, PredicatedSSA &PSSA) {
   // TODO: deal with negative step
   if (SE.isKnownNonNegative(Step)) {
     return MemRange{Start, getAdd(Diff, Size, SE), ParentLoop->getParent(),
-                    L->getParentLoop(), Ptr};
+                    L->getParentLoop(), Access};
   }
 
   // Bail if the step size is not a constant
@@ -189,7 +189,7 @@ Optional<MemRange> MemRange::promote(ScalarEvolution &SE, PredicatedSSA &PSSA) {
     return None;
   return MemRange{getAdd(Start, Diff, SE),
                   getAdd(SE.getNegativeSCEV(Diff), Size, SE),
-                  ParentLoop->getParent(), L->getParentLoop(), Ptr};
+                  ParentLoop->getParent(), L->getParentLoop(), Access};
 }
 
 DepCondition DepCondition::ifOverlapping(const MemRange &R1, const MemRange &R2,
@@ -1165,15 +1165,15 @@ void ConditionSetTracker::mergeObjectsFromConditions(
   auto &[Set1, Set2] = MergedObjects[LeaderCond];
 #if 0
   errs() << "Merging " << LeaderCond << "\n\twith " << MergedCond
-         << "\n\t orig pointers = " << *LeaderCond.getRanges().first.Ptr << ", "
-         << *LeaderCond.getRanges().second.Ptr
-         << "\n\t incoming pointers = " << *MergedCond.getRanges().first.Ptr
-         << ", " << *MergedCond.getRanges().second.Ptr << '\n';
+         << "\n\t orig pointers = " << *LeaderCond.getRanges().first.Access << ", "
+         << *LeaderCond.getRanges().second.Access
+         << "\n\t incoming pointers = " << *MergedCond.getRanges().first.Access
+         << ", " << *MergedCond.getRanges().second.Access << '\n';
 #endif
   assert(MergedObjects.count(MergedCond));
   auto &[SetA, SetB] = MergedObjects[MergedCond];
-  assert(SetA.count(MergedCond.getRanges().first.Ptr));
-  assert(SetB.count(MergedCond.getRanges().second.Ptr));
+  assert(SetA.count(MergedCond.getRanges().first.Access));
+  assert(SetB.count(MergedCond.getRanges().second.Access));
 
   if (Swapped) {
     Set1.insert(SetB.begin(), SetB.end());
@@ -1309,8 +1309,8 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) {
       if (!DepCond.isOverlapping())
         continue;
       auto [R1, R2] = DepCond.getRanges();
-      MergedObjects[DepCond].first.insert(R1.Ptr);
-      MergedObjects[DepCond].second.insert(R2.Ptr);
+      MergedObjects[DepCond].first.insert(R1.Access);
+      MergedObjects[DepCond].second.insert(R2.Access);
     }
 
     Worklist = dedupConditions(Worklist);
@@ -1363,6 +1363,7 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) {
 
 std::pair<ConditionSetTracker::ValueSet *, ConditionSetTracker::ValueSet *>
 ConditionSetTracker::getMergedObjects(Value *A, Value *B) {
+  //errs() << "Getting merged objects for " << *A << ", " << *B << '\n';
   for (auto &KV : MergedObjects) {
     auto DepCond = KV.first;
     if (!(DepCond == getCoalescedCondition(DepCond)))

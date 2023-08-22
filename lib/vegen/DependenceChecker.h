@@ -70,11 +70,11 @@ struct MemRange {
   const llvm::SCEV *Size;
   VLoop *ParentLoop;
   llvm::Loop *OrigParentLoop;
-  llvm::Value *Ptr; // a pointer that fall into the range
+  llvm::Instruction *Access; // an memory access within this range
 
   static MemRange get(llvm::Instruction *I, llvm::ScalarEvolution &,
                       PredicatedSSA &PSSA, llvm::LoopInfo &);
-  static MemRange get(const llvm::DataLayout &, llvm::Value *Ptr,
+  static MemRange get(const llvm::DataLayout &, llvm::Instruction *I,
                       llvm::Type *Ty, VLoop *ParentLoop, llvm::Loop *L,
                       llvm::ScalarEvolution &);
   static llvm::Optional<MemRange> merge(const MemRange &, const MemRange &,
