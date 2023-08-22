@@ -1221,12 +1221,12 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
     if (!StoreP)
       return;
 
-    errs() << "Found seed store pack: " << *StoreP << '\n';
+    LLVM_DEBUG(dbgs() << "Found seed store pack: " << *StoreP << '\n');
     PackSet Scratch = Packs;
     runBottomUp(StoreP, Heuristic, PSSA, LIT, SE, DepChecker, Scratch, VerPlan);
     auto NewCost = getTotalCost(PSSA, Scratch, RI, LIT, TTI);
-    // FIXME: need to check for dep cycle
-    errs() << "Prev cost: " << PrevCost << ", new cost: " << NewCost << '\n';
+    LLVM_DEBUG(dbgs() << "Prev cost: " << PrevCost << ", new cost: " << NewCost
+                      << '\n');
     if (NewCost < PrevCost) {
       PrevCost = NewCost;
       Packs = std::move(Scratch);
@@ -1297,8 +1297,8 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
     runBottomUp(Seed, Heuristic, PSSA, LIT, SE, DepChecker, Scratch, VerPlan);
 
     auto NewCost = getTotalCost(PSSA, Scratch, RI, LIT, TTI);
-    // FIXME: need to check for dep cycle
-    errs() << "Prev cost: " << PrevCost << ", new cost: " << NewCost << '\n';
+    LLVM_DEBUG(dbgs() << "Prev cost: " << PrevCost << ", new cost: " << NewCost
+                      << '\n');
     if (NewCost < PrevCost) {
       PrevCost = NewCost;
       Packs = std::move(Scratch);
@@ -1338,8 +1338,10 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
     }
   }
 
-  for (auto *P : Packs)
-    errs() << "pack " << *P << '\n';
+  LLVM_DEBUG({
+    for (auto *P : Packs)
+      dbgs() << "pack " << *P << '\n';
+  });
 
   std::vector<Pack *> ThePacks;
   ThePacks.reserve(Packs.size());
@@ -1369,10 +1371,8 @@ std::vector<Pack *> packVersioningPhis(ArrayRef<Pack *> Packs,
         Phis.push_back(TheVersioner.getVersioningPhis(I)[i]);
       if (!isIndependent(Phis, PSSA, DepChecker))
         continue;
-      if (auto *PhiP = PHIPack::tryPack(Phis, PSSA)) {
-        errs() << "!!! packing " << *PhiP << '\n';
+      if (auto *PhiP = PHIPack::tryPack(Phis, PSSA))
         NewPacks.push_back(PhiP);
-      }
     }
   }
   return NewPacks;
