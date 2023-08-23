@@ -1,5 +1,4 @@
 #include "vegen/Lower.h"
-#include "TripCount.h"
 #include "DependenceChecker.h"
 #include "ItemMover.h"
 #include "PackSet.h"
@@ -36,7 +35,10 @@ public:
   struct Lane {
     unsigned Idx;
     Value *Vec;
-    Lane(unsigned Idx, Value *Vec) : Idx(Idx), Vec(Vec) {}
+    // When is `Vec` available
+    const ControlCondition *C;
+    Lane(unsigned Idx, Value *Vec, const ControlCondition *C)
+        : Idx(Idx), Vec(Vec), C(C) {}
   };
 
 private:
@@ -44,13 +46,14 @@ private:
   DenseMap<ValueType, Lane> Lanes;
 
 public:
-  void insert(Value *VecVal, const PackType *P) {
+  void insert(Value *VecVal, const PackType *P,
+              const ControlCondition *C = nullptr) {
     auto *Ty = VecVal->getType();
     (void)Ty;
     assert(!Ty->isVectorTy() || !Ty->isVoidTy() || P->values().size() == 1);
     for (auto X : enumerate(P->values()))
       if (X.value())
-        Lanes.try_emplace(X.value(), (unsigned)X.index(), VecVal);
+        Lanes.try_emplace(X.value(), (unsigned)X.index(), VecVal, C);
   }
   Optional<Lane> getLane(ValueType V) const {
     auto It = Lanes.find(V);
@@ -380,10 +383,15 @@ static EquivalenceClasses<VLoop *> partitionLoops(ArrayRef<Pack *> Packs,
         Fused = true;
       }
       // Also collect the parent loops so we fuse them if need to
+#if 0
       auto *Parent = VL->getParent();
       if (Parent && Parent != TopVL)
         ParentLoops.push_back(VL->getParent());
+#else
+      if (VL->isLoop())
+        ParentLoops.push_back(VL);
       PrevVL = VL;
+#endif
     }
     if (Fused)
       Worklist.push_back(ParentLoops);
@@ -693,8 +701,11 @@ Value *VectorGen::materializeValue(const ControlCondition *C,
 }
 
 static bool isPermutationMask(ArrayRef<Constant *> Consts) {
-  SmallVector<int, 8> Idxs(map_range(
-      Consts, [](auto *C) { return cast<ConstantInt>(C)->getZExtValue(); }));
+  SmallVector<int, 8> Idxs(map_range(Consts, [](auto *C) -> int {
+    if (isa<UndefValue>(C))
+      return -1;
+    return cast<ConstantInt>(C)->getZExtValue();
+  }));
   sort(Idxs);
   return ShuffleVectorInst::isIdentityMask(Idxs);
 }
@@ -727,8 +738,16 @@ Value *VectorGen::gatherValues(ArrayRef<ValueType> Values,
         assert(L->Idx == 0);
         SrcScalars.emplace_back(L->Vec, i);
       } else {
+        auto *Vec = L->Vec;
+        // Sometimes the conditions are reified at a stronger condition
+        // E.g., if we reify ([c /\ x, c /\ y]), we will reify them at the
+        // condition c. In this case, we need to reify again with
+        if (std::is_same<ValueType, const ControlCondition *>::value) {
+          Vec = Insert.createOneHotPhi(L->C, Vec,
+                                       Constant::getNullValue(Vec->getType()));
+        }
         // Remember we need to gather from this vector to the `i`th element
-        SrcPacks[L->Vec].push_back({L->Idx, i});
+        SrcPacks[Vec].push_back({L->Idx, i});
       }
     } else {
       // Remember that we need to insert `V` as the `i`th element
@@ -841,7 +860,7 @@ void VectorGen::emitConditionPack(const ConditionPack *CP, Inserter &Insert) {
   for (auto O : CP->getOperands())
     Operands.push_back(gatherOperand(O, Insert));
   auto *MaskValue = CP->emit(OperandMasks, Operands, Insert);
-  MaskIdx.insert(MaskValue, CP);
+  MaskIdx.insert(MaskValue, CP, Insert.getCondition());
 }
 
 Value *VectorGen::gatherMask(ArrayRef<const ControlCondition *> Conds,
@@ -1116,6 +1135,18 @@ void VectorGen::runOnLoop(VLoop *VL) {
     remapInstruction(Mu);
 };
 
+namespace {
+template <typename ContainerT> ContainerT dedup(const ContainerT &Xs) {
+  ContainerT Ys;
+  SmallDenseSet<typename ContainerT::value_type, 8> Visited;
+  for (auto X : Xs) {
+    if (Visited.insert(X).second)
+      Ys.push_back(X);
+  }
+  return Ys;
+}
+} // namespace
+
 // If any of the values are guarded, pack the exit guards
 static std::pair<BlendPack *, MuPack *>
 packExitGuard(ArrayRef<Value *> Values,
@@ -1135,8 +1166,8 @@ packExitGuard(ArrayRef<Value *> Values,
   }
   if (Guards.size() != Values.size())
     return {nullptr, nullptr};
-  auto *BlendP = BlendPack::tryPack(Guards, PSSA);
-  auto *MuP = MuPack::tryPack(Mus, PSSA);
+  auto *BlendP = BlendPack::tryPack(dedup(Guards), PSSA);
+  auto *MuP = MuPack::tryPack(dedup(Mus), PSSA);
   if (BlendP)
     Packs.add(BlendP);
   if (MuP)
@@ -1171,7 +1202,7 @@ static BlendPack *packAsBlends(ArrayRef<Value *> Values, PackSet &Packs,
       return nullptr;
     Insts.push_back(I);
   }
-  auto *P = BlendPack::tryPack(Insts, PSSA);
+  auto *P = BlendPack::tryPack(dedup(Insts), PSSA);
   if (P)
     Packs.add(P);
   return P;
@@ -1195,6 +1226,8 @@ packConditions(ArrayRef<VectorMask> Masks,
     // Don't bother packing identical conditions
     if (is_splat(Mask))
       continue;
+
+    Mask = dedup(Mask);
 
     ConditionPack *CP = AndPack::tryPack(Mask);
     if (!CP)
@@ -1226,7 +1259,7 @@ packConditions(ArrayRef<VectorMask> Masks,
       if (ActiveMus.size() != O.size())
         continue;
 
-      auto *P = MuPack::tryPack(ActiveMus, PSSA);
+      auto *P = MuPack::tryPack(dedup(ActiveMus), PSSA);
       if (!P)
         continue;
       Packs.add(P);
