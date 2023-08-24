@@ -323,11 +323,22 @@ void computeUnrollFactorImpl(ArrayRef<InstructionDescriptor> InstPool,
   F->eraseFromParent();
 }
 
+static bool isCountable(Loop *L, ScalarEvolution &SE) {
+  return !isa<SCEVCouldNotCompute>(SE.getBackedgeTakenCount(L));
+}
+
 void computeUnrollFactor(ArrayRef<InstructionDescriptor> InstPool,
                          TargetTransformInfo *TTI, Function *F,
                          const LoopInfo &LI, DenseMap<Loop *, unsigned> &UFs) {
+  DominatorTree DT(*F);
+  AssumptionCache AC(*F);
+  TargetLibraryInfoWrapperPass TLIWrapper(Triple(F->getParent()->getTargetTriple()));
+  ScalarEvolution SE(*F, TLIWrapper.getTLI(*F), AC, DT, const_cast<LoopInfo &>(LI));
+
   DenseSet<Loop *> UnrolledLoops;
   for (auto *L : const_cast<LoopInfo &>(LI).getLoopsInPreorder()) {
+    if (!isCountable(L, SE))
+      continue;
     if (any_of(UnrolledLoops,
                [L](Loop *UnrolledL) { return UnrolledL->contains(L); })) {
       UFs[L] = 0;
