@@ -1183,10 +1183,8 @@ void ConditionSetTracker::mergeObjectsFromConditions(
     Set2.insert(SetB.begin(), SetB.end());
   }
 
-  if (MergedCond != LeaderCond) {
-    errs() << "Erasing " << MergedCond << '\n';
+  if (MergedCond != LeaderCond)
     MergedObjects.erase(MergedCond);
-  }
 }
 
 void ConditionSetTracker::addImpl(const DepCondition &DepCond) {
