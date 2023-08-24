@@ -568,7 +568,8 @@ coIterate(VLoop *ParentVL, ArrayRef<VLoop *> Loops,
       if (auto *I = It.asInstruction()) {
         auto *C = CoVL->getInstCond(I);
         OrigInstConds[I] = C;
-        CoVL->setInstCond(I, PSSA.getAnd(C, Active, true));
+        if (I->mayHaveSideEffects() || I->mayReadOrWriteMemory())
+          CoVL->setInstCond(I, PSSA.getAnd(C, Active, true));
         ItemToActiveMap[I] = Active;
       } else {
         auto *SubVL = It.asLoop();
@@ -1294,13 +1295,6 @@ bool VectorGen::run() {
   DenseSet<PHINode *> ActiveFlags;
   if (!mergeLoops(LoopsToFuse, PSSA, DepChecker, ExitGuards, ActiveFlags))
     return false;
-  // Move the packed instructions together
-  for (auto *P : llvm::reverse(Packs)) {
-    if (isa<MuPack>(P))
-      continue;
-    if (!merge(PSSA, toItems(P->values()), DepChecker, &Packs))
-      return false;
-  }
   //==== End scheduling ====//
 
   //==== Begin secondary packing ====//
@@ -1337,6 +1331,14 @@ bool VectorGen::run() {
         CondToPackMap.try_emplace(C, CP.get());
   }
   //==== End secondary packing ====//
+
+  // Move the packed instructions together
+  for (auto *P : llvm::reverse(Packs)) {
+    if (isa<MuPack>(P))
+      continue;
+    if (!merge(PSSA, toItems(P->values()), DepChecker, &Packs))
+      return false;
+  }
 
   //==== Finalize the operands of the packs ====//
   for (auto *P : Packs)
