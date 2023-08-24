@@ -753,6 +753,7 @@ static bool haveSameParent(ArrayRef<VLoop *> Loops) {
 // Return whether the Insts are independent
 static bool isIndependent(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
                           DependenceChecker &DepChecker,
+                          IndependentItemsTracker &IndependentItems,
                           const PackSet *Packs = nullptr) {
   SmallVector<Item> Items;
 
@@ -771,7 +772,8 @@ static bool isIndependent(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
     // For instructions that come from the same loops,
     // make sure that they are independent
     for (auto &Insts2 : make_second_range(LoopToInstsMap))
-      if (Insts2.size() > 1 && !isIndependent(Insts2, PSSA, DepChecker))
+      if (Insts2.size() > 1 &&
+          !isIndependent(Insts2, PSSA, DepChecker, IndependentItems))
         return false;
 
     // Make sure the disjoint parent loops are independent
@@ -790,6 +792,9 @@ static bool isIndependent(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
     ParentVL = Loops.front()->getParent();
   }
 
+  if (IndependentItems.contains(Items))
+    return true;
+
   SmallVector<Item> Deps;
   bool FoundCycle =
       findInBetweenDeps(Deps, Items, ParentVL, PSSA, DepChecker, Packs);
@@ -799,6 +804,8 @@ static bool isIndependent(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
   for (auto &Dep : Deps)
     if (ItemSet.count(Dep))
       return false;
+
+  IndependentItems.add(Items);
   return true;
 }
 
@@ -813,6 +820,8 @@ static void runBottomUp(Pack *P, BottomUpHeuristic &Heuristic,
   SmallVector<OperandPack> Worklist;
 
   using LoopBundle = SmallVector<VLoop *, 8>;
+
+  IndependentItemsTracker IndependentItems;
 
   DenseSet<VectorMask, VectorHashInfo<VectorMask>> VisitedMasks;
   // Add mask operands to Worklist
@@ -864,10 +873,12 @@ static void runBottomUp(Pack *P, BottomUpHeuristic &Heuristic,
       if (!LIT.isLoose(I))
         Insts.push_back(I);
     // Check if the instructions are independent
-    if (!Insts.empty() && !isIndependent(Insts, PSSA, DepChecker)) {
+    if (!Insts.empty() &&
+        !isIndependent(Insts, PSSA, DepChecker, IndependentItems)) {
       // Try again and see if we can do versioning to get independence
       if (!DoVersioning ||
-          !findNecessaryDeps(VerPlan, P->values(), PSSA, DepChecker))
+          !findNecessaryDeps(VerPlan, P->values(), PSSA, DepChecker,
+                             nullptr /*packs*/, &IndependentItems))
         return;
     }
 
@@ -1320,6 +1331,7 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
   // Do a final cut on the speculation to make sure we dont have inter-pack
   // circular deps
   if (DoVersioning) {
+    IndependentItemsTracker IndependentItems;
     VerPlan.Versionings.clear();
     VerPlan.InterLoopDeps.clear();
     for (auto *P : Packs) {
@@ -1329,10 +1341,12 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
         if (!LIT.isLoose(I))
           Insts.push_back(I);
       // Check if the instructions are independent
-      if (!Insts.empty() && !isIndependent(Insts, PSSA, DepChecker, &Packs)) {
+      if (!Insts.empty() &&
+          !isIndependent(Insts, PSSA, DepChecker, IndependentItems, &Packs)) {
         // Try again and see if we can do versioning to get independence
         if (!DoVersioning ||
-            !findNecessaryDeps(VerPlan, P->values(), PSSA, DepChecker, &Packs))
+            !findNecessaryDeps(VerPlan, P->values(), PSSA, DepChecker, &Packs,
+                               &IndependentItems))
           return {};
       }
     }
@@ -1355,6 +1369,7 @@ std::vector<Pack *> packVersioningPhis(ArrayRef<Pack *> Packs,
                                        const Versioner &TheVersioner,
                                        PredicatedSSA &PSSA) {
   std::vector<Pack *> NewPacks;
+  IndependentItemsTracker IndependentItems;
   for (auto *P : Packs) {
     auto Values = P->values();
     ArrayRef VersioningPhis = TheVersioner.getVersioningPhis(Values.front());
@@ -1369,7 +1384,7 @@ std::vector<Pack *> packVersioningPhis(ArrayRef<Pack *> Packs,
       SmallVector<Instruction *> Phis;
       for (auto *I : Values)
         Phis.push_back(TheVersioner.getVersioningPhis(I)[i]);
-      if (!isIndependent(Phis, PSSA, DepChecker))
+      if (!isIndependent(Phis, PSSA, DepChecker, IndependentItems))
         continue;
       if (auto *PhiP = PHIPack::tryPack(Phis, PSSA))
         NewPacks.push_back(PhiP);

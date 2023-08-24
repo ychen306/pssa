@@ -2,6 +2,7 @@
 #define VEGEN_DEPENDENCECHECKER_H
 
 #include "pssa/PSSA.h"
+#include "pssa/VectorHashInfo.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -273,6 +274,12 @@ class DependenceChecker {
   void processLoop(VLoop *VL);
   llvm::ArrayRef<llvm::Instruction *> getMemoryInsts(VLoop *);
 
+  llvm::DenseMap<std::pair<llvm::Instruction *, llvm::Instruction *>,
+                 llvm::Optional<DepCondition>>
+      DepKinds;
+
+  llvm::Optional<DepCondition> getDepKindImpl(llvm::Instruction *,
+                                              llvm::Instruction *);
   llvm::Optional<DepCondition> getDepKind(llvm::Instruction *,
                                           llvm::Instruction *);
 
@@ -393,11 +400,40 @@ inferVersioning(llvm::ArrayRef<DepNode> Nodes, llvm::ArrayRef<Item> Deps,
                 llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
                 VLoop *VL, DependenceChecker &DepChecker, const PackSet *Packs);
 
+struct ItemVectorHashInfo {
+  static std::vector<Item> getEmptyKey() {
+    return {ItemHashInfo::getEmptyKey()};
+  }
+  static std::vector<Item> getTombstoneKey() {
+    return {ItemHashInfo::getTombstoneKey()};
+  }
+  static unsigned getHashValue(llvm::ArrayRef<Item> V) {
+    auto H = ItemHashInfo::getHashValue(V.front());
+    for (auto &X : V)
+      H = llvm::hash_combine(H, ItemHashInfo::getHashValue(X));
+    return H;
+  }
+  static bool isEqual(llvm::ArrayRef<Item> LHS, llvm::ArrayRef<Item> RHS) {
+    return LHS.equals(RHS);
+  }
+};
+
+// utility to keep track of list of items that we've ensured are independent
+class IndependentItemsTracker {
+  using ItemVector = std::vector<Item>;
+  llvm::DenseSet<ItemVector, ItemVectorHashInfo> Checked;
+
+public:
+  void add(llvm::ArrayRef<Item> Items);
+  bool contains(llvm::ArrayRef<Item> Items);
+};
+
 // Find conditional dependences that, once removed, will `Insts` independent
 // from one another. (and false if no such set of deps exists).
 bool findNecessaryDeps(VersioningPlan &VerPlan,
                        llvm::ArrayRef<llvm::Instruction *> Insts,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker,
-                       const PackSet *Packs = nullptr);
+                       const PackSet *Packs = nullptr,
+                       IndependentItemsTracker *IndependentItems = nullptr);
 
 #endif // VEGEN_DEPENDENCECHECKER_H

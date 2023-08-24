@@ -463,6 +463,14 @@ static bool mayOverlap(ScalarEvolution &SE, MemRange R1, MemRange R2) {
 
 Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
                                                      Instruction *I2) {
+  auto [It, Inserted] = DepKinds.try_emplace({I1, I2});
+  if (!Inserted)
+    return It->second;
+  return It->second = getDepKindImpl(I1, I2);
+}
+
+Optional<DepCondition> DependenceChecker::getDepKindImpl(Instruction *I1,
+                                                         Instruction *I2) {
   if (I1 == I2)
     return None;
 
@@ -1363,7 +1371,7 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) {
 
 std::pair<ConditionSetTracker::ValueSet *, ConditionSetTracker::ValueSet *>
 ConditionSetTracker::getMergedObjects(Value *A, Value *B) {
-  //errs() << "Getting merged objects for " << *A << ", " << *B << '\n';
+  // errs() << "Getting merged objects for " << *A << ", " << *B << '\n';
   for (auto &KV : MergedObjects) {
     auto DepCond = KV.first;
     if (!(DepCond == getCoalescedCondition(DepCond)))
@@ -1379,7 +1387,8 @@ ConditionSetTracker::getMergedObjects(Value *A, Value *B) {
 
 bool findNecessaryDeps(VersioningPlan &VerPlan, ArrayRef<Instruction *> Insts,
                        PredicatedSSA &PSSA, DependenceChecker &DepChecker,
-                       const PackSet *Packs) {
+                       const PackSet *Packs,
+                       IndependentItemsTracker *IndependentItems) {
   SmallVector<DepNode> Nodes;
   SmallVector<Item> Items;
   auto *ParentVL = PSSA.getLoopForInst(Insts.front());
@@ -1419,11 +1428,27 @@ bool findNecessaryDeps(VersioningPlan &VerPlan, ArrayRef<Instruction *> Insts,
     ParentVL = Loops.front()->getParent();
   }
 
+  // See if we have checked the independence of `Items` previously
+  if (IndependentItems && IndependentItems->contains(Items))
+    return true;
+
   auto Ver = inferVersioning(Nodes, Items, VerPlan.InterLoopDeps, ParentVL,
                              DepChecker, Packs);
   if (!Ver)
     return false;
+
+  if (IndependentItems)
+    IndependentItems->add(Items);
+
   if (!Ver->CutEdges.empty())
     VerPlan.Versionings.push_back(std::move(Ver));
   return true;
+}
+
+void IndependentItemsTracker::add(ArrayRef<Item> Items) {
+  Checked.insert(std::vector<Item>(Items.begin(), Items.end()));
+}
+
+bool IndependentItemsTracker::contains(ArrayRef<Item> Items) {
+  return Checked.find_as(Items) != Checked.end();
 }
