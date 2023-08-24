@@ -746,6 +746,8 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
     // we also need to check their dependences
     ArrayRef<Instruction *> Insts = P ? P->values() : I;
     for (auto *I : Insts) {
+      if (!VL->contains(I))
+        continue;
       visitCond(VL->getInstCond(I), I);
       if (auto *PN = dyn_cast<PHINode>(I); PN && VL->isGatedPhi(PN)) {
         for (auto [C, V] :
