@@ -176,7 +176,7 @@ public:
 // Group stores by their underlying objects
 class StoreGrouper : public PSSAVisitor<StoreGrouper> {
 public:
-  using ObjToInstMapTy = std::map<Value *, SmallVector<Instruction *, 8>>;
+  using ObjToInstMapTy = MapVector<Value *, SmallVector<Instruction *, 8>>;
 
 private:
   ObjToInstMapTy &ObjToStoreMap;
@@ -967,7 +967,7 @@ public:
 
 } // namespace
 
-using StoreGroupType = std::map<Instruction *, SmallVector<Instruction *, 8>>;
+using StoreGroupType = MapVector<Instruction *, SmallVector<Instruction *, 8>>;
 static void partitionStoresByStructure(ArrayRef<Instruction *> Stores,
                                        StoreGroupType &Groups,
                                        const DataLayout &DL,
