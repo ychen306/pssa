@@ -54,7 +54,8 @@ bool sortByPointers(llvm::ArrayRef<InstT *> Insts,
     unsigned SortedIdx = GetSortedIdx(i);
     auto *Ptr = Ptrs[SortedIdx];
     auto Diff = diffPointers(Ty, FirstPtr, Ty, Ptr, DL, SE, LI);
-    assert(Diff);
+    if (!Diff)
+      return false;
     if (*Diff - i != 0)
       return false;
     SortedInsts.push_back(Insts[SortedIdx]);
