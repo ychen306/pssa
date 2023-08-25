@@ -1160,6 +1160,9 @@ static void findPackableReductions(
   visitWith<ReductionFinder>(PSSA, RI, Rdxs);
 
   for (auto *Rdx : Rdxs) {
+    auto *Ty = Rdx->getType();
+    if (Ty->isX86_FP80Ty() || Ty->isVectorTy())
+      continue;
     // Find out the elements that we are reducing over
     // FIXME: rename this sub reduction
     SmallVector<Value *> Elements;
