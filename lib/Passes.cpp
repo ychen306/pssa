@@ -5,6 +5,7 @@
 #include "vegen/LooseInstructionTable.h"
 #include "vegen/Lower.h"
 #include "vegen/Reduction.h"
+#include "vegen/Scalarizer.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -20,7 +21,6 @@
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Scalar/JumpThreading.h"
 #include "llvm/Transforms/Scalar/LoopRotation.h"
-#include "llvm/Transforms/Scalar/Scalarizer.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
 #include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
 
@@ -224,7 +224,7 @@ static void buildPasses(PassBuilder &PB) {
   if (UseGlobalSLP)
     PB.registerVectorizerStartEPCallback(
         [](FunctionPassManager &FPM, OptimizationLevel) {
-          FPM.addPass(ScalarizerPass());
+          FPM.addPass(VeGenScalarizerPass());
           FPM.addPass(GVNHoistPass());
           FPM.addPass(InstCombinePass());
           addPreprocessingPasses(FPM);

@@ -15,7 +15,8 @@ set(LIB_VEGEN_SRC
     LoopUnrolling.cpp
     UnrollFactor.cpp
     Versioning.cpp
-    ConditionUserTracker.cpp)
+    ConditionUserTracker.cpp
+    Scalarizer.cpp)
 
 if (APPLE)
   add_library(VeGen STATIC ${LIB_VEGEN_SRC})
