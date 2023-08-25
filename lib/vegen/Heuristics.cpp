@@ -1279,10 +1279,12 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
     });
 
     // Determine the maximum vector length for this type of stores
-    unsigned BitWidth = cast<StoreInst>(SortedStores.front())
-                            ->getValueOperand()
-                            ->getType()
-                            ->getScalarSizeInBits();
+    auto *StoredTy =
+        cast<StoreInst>(SortedStores.front())->getValueOperand()->getType();
+
+    unsigned BitWidth = !isa<PointerType>(StoredTy)
+                            ? StoredTy->getScalarSizeInBits()
+                            : DL.getPointerSize();
     unsigned RegWidth = TTI.getLoadStoreVecRegBitWidth(0);
     unsigned VL = RegWidth / BitWidth;
 
