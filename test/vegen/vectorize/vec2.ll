@@ -3,128 +3,13 @@
 target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"
 
-; This code is vectorizable but the code is not simplified enough that the default AA pipeline reports MayAlias
-; The fix was to do our special-case SCEV-AA'ish analysis
+; CHECK: fmul <8 x float>
+; CHECK: fmul <8 x float>
+; CHECK: fmul <8 x float>
+; CHECK: fmul <8 x float>
 
 ; Function Attrs: argmemonly nofree norecurse nosync nounwind ssp uwtable
 define void @s212(i32 noundef %LEN, ptr noalias nocapture noundef %a, ptr noalias nocapture noundef %b, ptr noalias nocapture noundef readonly %c, ptr noalias nocapture noundef readonly %d) local_unnamed_addr #0 {
-; CHECK-LABEL: @s212(
-; CHECK-NEXT:  entry:
-; CHECK-NEXT:    [[CMP18:%.*]] = icmp sgt i32 [[LEN:%.*]], 1
-; CHECK-NEXT:    br i1 [[CMP18]], label [[TMP0:%.*]], label [[EXIT10:%.*]]
-; CHECK:       0:
-; CHECK-NEXT:    [[SUB:%.*]] = add nsw i32 [[LEN]], -1
-; CHECK-NEXT:    [[WIDE_TRIP_COUNT:%.*]] = zext i32 [[SUB]] to i64
-; CHECK-NEXT:    [[DOTPRE:%.*]] = load float, ptr [[A:%.*]], align 4, !tbaa [[TBAA5:![0-9]+]]
-; CHECK-NEXT:    [[TMP1:%.*]] = add nsw i64 [[WIDE_TRIP_COUNT]], -1
-; CHECK-NEXT:    [[XTRAITER:%.*]] = and i64 [[WIDE_TRIP_COUNT]], 15
-; CHECK-NEXT:    [[TMP2:%.*]] = icmp ult i64 [[TMP1]], 15
-; CHECK-NEXT:    br i1 [[TMP2]], label [[EXIT:%.*]], label [[TMP3:%.*]]
-; CHECK:       3:
-; CHECK-NEXT:    [[UNROLL_ITER:%.*]] = sub i64 [[WIDE_TRIP_COUNT]], [[XTRAITER]]
-; CHECK-NEXT:    br label [[HEADER:%.*]]
-; CHECK:       header:
-; CHECK-NEXT:    [[NITER:%.*]] = phi i64 [ 0, [[TMP3]] ], [ [[NITER_NEXT_15:%.*]], [[HEADER]] ]
-; CHECK-NEXT:    [[INDVARS_IV:%.*]] = phi i64 [ 0, [[TMP3]] ], [ [[INDVARS_IV_NEXT_15:%.*]], [[HEADER]] ]
-; CHECK-NEXT:    [[TMP4:%.*]] = phi float [ [[DOTPRE]], [[TMP3]] ], [ [[TMP7:%.*]], [[HEADER]] ]
-; CHECK-NEXT:    [[ARRAYIDX:%.*]] = getelementptr inbounds float, ptr [[C:%.*]], i64 [[INDVARS_IV]]
-; CHECK-NEXT:    [[INDVARS_IV_NEXT:%.*]] = add nuw nsw i64 [[INDVARS_IV]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_1:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_2:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_1]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_3:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_2]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_4:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_3]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_5:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_4]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_6:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_5]], 1
-; CHECK-NEXT:    [[DOTVEC:%.*]] = load <8 x float>, ptr [[ARRAYIDX]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[ARRAYIDX2:%.*]] = getelementptr inbounds float, ptr [[A]], i64 [[INDVARS_IV]]
-; CHECK-NEXT:    [[ARRAYIDX4:%.*]] = getelementptr inbounds float, ptr [[A]], i64 [[INDVARS_IV_NEXT]]
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_7:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_6]], 1
-; CHECK-NEXT:    [[DOTVEC1:%.*]] = load <8 x float>, ptr [[ARRAYIDX4]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[TMP5:%.*]] = shufflevector <8 x float> [[DOTVEC1]], <8 x float> undef, <8 x i32> <i32 undef, i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6>
-; CHECK-NEXT:    [[TMP6:%.*]] = insertelement <8 x float> [[TMP5]], float [[TMP4]], i64 0
-; CHECK-NEXT:    [[MUL_1_VEC:%.*]] = fmul <8 x float> [[TMP6]], [[DOTVEC]]
-; CHECK-NEXT:    store <8 x float> [[MUL_1_VEC]], ptr [[ARRAYIDX2]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[ARRAYIDX6:%.*]] = getelementptr inbounds float, ptr [[D:%.*]], i64 [[INDVARS_IV]]
-; CHECK-NEXT:    [[DOTVEC2:%.*]] = load <8 x float>, ptr [[ARRAYIDX6]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[MUL7_1_VEC:%.*]] = fmul <8 x float> [[DOTVEC2]], [[DOTVEC1]]
-; CHECK-NEXT:    [[ARRAYIDX9:%.*]] = getelementptr inbounds float, ptr [[B:%.*]], i64 [[INDVARS_IV]]
-; CHECK-NEXT:    [[DOTVEC3:%.*]] = load <8 x float>, ptr [[ARRAYIDX9]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[ADD10_1_VEC:%.*]] = fadd <8 x float> [[DOTVEC3]], [[MUL7_1_VEC]]
-; CHECK-NEXT:    store <8 x float> [[ADD10_1_VEC]], ptr [[ARRAYIDX9]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[NITER_NEXT:%.*]] = add nuw nsw i64 [[NITER]], 1
-; CHECK-NEXT:    [[NITER_NEXT_1:%.*]] = add nuw nsw i64 [[NITER_NEXT]], 1
-; CHECK-NEXT:    [[NITER_NEXT_2:%.*]] = add nuw nsw i64 [[NITER_NEXT_1]], 1
-; CHECK-NEXT:    [[NITER_NEXT_3:%.*]] = add nuw nsw i64 [[NITER_NEXT_2]], 1
-; CHECK-NEXT:    [[NITER_NEXT_4:%.*]] = add nuw nsw i64 [[NITER_NEXT_3]], 1
-; CHECK-NEXT:    [[NITER_NEXT_5:%.*]] = add nuw nsw i64 [[NITER_NEXT_4]], 1
-; CHECK-NEXT:    [[NITER_NEXT_6:%.*]] = add nuw nsw i64 [[NITER_NEXT_5]], 1
-; CHECK-NEXT:    [[NITER_NEXT_7:%.*]] = add nuw nsw i64 [[NITER_NEXT_6]], 1
-; CHECK-NEXT:    [[ARRAYIDX_8:%.*]] = getelementptr inbounds float, ptr [[C]], i64 [[INDVARS_IV_NEXT_7]]
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_8:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_7]], 1 ; CHECK-NEXT:    [[INDVARS_IV_NEXT_9:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_8]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_10:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_9]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_11:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_10]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_12:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_11]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_13:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_12]], 1
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_14:%.*]] = add nuw nsw i64 [[INDVARS_IV_NEXT_13]], 1
-; CHECK-NEXT:    [[DOTVEC4:%.*]] = load <8 x float>, ptr [[ARRAYIDX_8]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[ARRAYIDX2_8:%.*]] = getelementptr inbounds float, ptr [[A]], i64 [[INDVARS_IV_NEXT_7]]
-; CHECK-NEXT:    [[ARRAYIDX4_8:%.*]] = getelementptr inbounds float, ptr [[A]], i64 [[INDVARS_IV_NEXT_8]]
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_15]] = add nuw nsw i64 [[INDVARS_IV_NEXT_14]], 1
-; CHECK-NEXT:    [[DOTVEC5:%.*]] = load <8 x float>, ptr [[ARRAYIDX4_8]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[TMP7]] = extractelement <8 x float> [[DOTVEC5]], i64 7
-; CHECK-NEXT:    [[TMP8:%.*]] = shufflevector <8 x float> [[DOTVEC1]], <8 x float> undef, <8 x i32> <i32 7, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef, i32 undef>
-; CHECK-NEXT:    [[TMP9:%.*]] = shufflevector <8 x float> [[DOTVEC5]], <8 x float> undef, <8 x i32> <i32 undef, i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6>
-; CHECK-NEXT:    [[TMP10:%.*]] = shufflevector <8 x float> [[TMP8]], <8 x float> [[TMP9]], <8 x i32> <i32 0, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
-; CHECK-NEXT:    [[MUL_9_VEC:%.*]] = fmul <8 x float> [[TMP10]], [[DOTVEC4]]
-; CHECK-NEXT:    store <8 x float> [[MUL_9_VEC]], ptr [[ARRAYIDX2_8]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[ARRAYIDX6_8:%.*]] = getelementptr inbounds float, ptr [[D]], i64 [[INDVARS_IV_NEXT_7]]
-; CHECK-NEXT:    [[DOTVEC6:%.*]] = load <8 x float>, ptr [[ARRAYIDX6_8]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[MUL7_9_VEC:%.*]] = fmul <8 x float> [[DOTVEC6]], [[DOTVEC5]]
-; CHECK-NEXT:    [[ARRAYIDX9_8:%.*]] = getelementptr inbounds float, ptr [[B]], i64 [[INDVARS_IV_NEXT_7]]
-; CHECK-NEXT:    [[DOTVEC7:%.*]] = load <8 x float>, ptr [[ARRAYIDX9_8]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[ADD10_9_VEC:%.*]] = fadd <8 x float> [[DOTVEC7]], [[MUL7_9_VEC]]
-; CHECK-NEXT:    store <8 x float> [[ADD10_9_VEC]], ptr [[ARRAYIDX9_8]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[NITER_NEXT_8:%.*]] = add nuw nsw i64 [[NITER_NEXT_7]], 1
-; CHECK-NEXT:    [[NITER_NEXT_9:%.*]] = add nuw nsw i64 [[NITER_NEXT_8]], 1
-; CHECK-NEXT:    [[NITER_NEXT_10:%.*]] = add nuw nsw i64 [[NITER_NEXT_9]], 1
-; CHECK-NEXT:    [[NITER_NEXT_11:%.*]] = add nuw nsw i64 [[NITER_NEXT_10]], 1
-; CHECK-NEXT:    [[NITER_NEXT_12:%.*]] = add nuw nsw i64 [[NITER_NEXT_11]], 1
-; CHECK-NEXT:    [[NITER_NEXT_13:%.*]] = add nuw nsw i64 [[NITER_NEXT_12]], 1
-; CHECK-NEXT:    [[NITER_NEXT_14:%.*]] = add nuw nsw i64 [[NITER_NEXT_13]], 1
-; CHECK-NEXT:    [[NITER_NEXT_15]] = add i64 [[NITER_NEXT_14]], 1
-; CHECK-NEXT:    [[NITER_NCMP_15:%.*]] = icmp eq i64 [[NITER_NEXT_15]], [[UNROLL_ITER]]
-; CHECK-NEXT:    [[DOT:%.*]] = select i1 [[NITER_NCMP_15]], i1 false, i1 true
-; CHECK-NEXT:    br i1 [[DOT]], label [[HEADER]], label [[EXIT]]
-; CHECK:       exit:
-; CHECK-NEXT:    [[DOTUNR_DEMOTED_0:%.*]] = phi float [ [[DOTPRE]], [[TMP0]] ], [ [[TMP7]], [[HEADER]] ]
-; CHECK-NEXT:    [[INDVARS_IV_UNR_DEMOTED_0:%.*]] = phi i64 [ 0, [[TMP0]] ], [ [[INDVARS_IV_NEXT_15]], [[HEADER]] ]
-; CHECK-NEXT:    [[LCMP_MOD:%.*]] = icmp ne i64 [[XTRAITER]], 0
-; CHECK-NEXT:    br i1 [[LCMP_MOD]], label [[HEADER8:%.*]], label [[EXIT10]]
-; CHECK:       header8:
-; CHECK-NEXT:    [[EPIL_ITER:%.*]] = phi i64 [ [[EPIL_ITER_NEXT:%.*]], [[HEADER8]] ], [ 0, [[EXIT]] ]
-; CHECK-NEXT:    [[INDVARS_IV_EPIL:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_EPIL:%.*]], [[HEADER8]] ], [ [[INDVARS_IV_UNR_DEMOTED_0]], [[EXIT]] ]
-; CHECK-NEXT:    [[TMP11:%.*]] = phi float [ [[TMP13:%.*]], [[HEADER8]] ], [ [[DOTUNR_DEMOTED_0]], [[EXIT]] ]
-; CHECK-NEXT:    [[ARRAYIDX_EPIL:%.*]] = getelementptr inbounds float, ptr [[C]], i64 [[INDVARS_IV_EPIL]]
-; CHECK-NEXT:    [[TMP12:%.*]] = load float, ptr [[ARRAYIDX_EPIL]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[ARRAYIDX2_EPIL:%.*]] = getelementptr inbounds float, ptr [[A]], i64 [[INDVARS_IV_EPIL]]
-; CHECK-NEXT:    [[MUL_EPIL:%.*]] = fmul fast float [[TMP11]], [[TMP12]]
-; CHECK-NEXT:    store float [[MUL_EPIL]], ptr [[ARRAYIDX2_EPIL]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[INDVARS_IV_NEXT_EPIL]] = add nuw nsw i64 [[INDVARS_IV_EPIL]], 1
-; CHECK-NEXT:    [[ARRAYIDX4_EPIL:%.*]] = getelementptr inbounds float, ptr [[A]], i64 [[INDVARS_IV_NEXT_EPIL]]
-; CHECK-NEXT:    [[TMP13]] = load float, ptr [[ARRAYIDX4_EPIL]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[ARRAYIDX6_EPIL:%.*]] = getelementptr inbounds float, ptr [[D]], i64 [[INDVARS_IV_EPIL]]
-; CHECK-NEXT:    [[TMP14:%.*]] = load float, ptr [[ARRAYIDX6_EPIL]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[MUL7_EPIL:%.*]] = fmul fast float [[TMP14]], [[TMP13]]
-; CHECK-NEXT:    [[ARRAYIDX9_EPIL:%.*]] = getelementptr inbounds float, ptr [[B]], i64 [[INDVARS_IV_EPIL]]
-; CHECK-NEXT:    [[TMP15:%.*]] = load float, ptr [[ARRAYIDX9_EPIL]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[ADD10_EPIL:%.*]] = fadd fast float [[TMP15]], [[MUL7_EPIL]]
-; CHECK-NEXT:    store float [[ADD10_EPIL]], ptr [[ARRAYIDX9_EPIL]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[EPIL_ITER_NEXT]] = add i64 [[EPIL_ITER]], 1
-; CHECK-NEXT:    [[EPIL_ITER_CMP:%.*]] = icmp ne i64 [[EPIL_ITER_NEXT]], [[XTRAITER]]
-; CHECK-NEXT:    br i1 [[EPIL_ITER_CMP]], label [[HEADER8]], label [[EXIT10]]
-; CHECK:       exit10:
-; CHECK-NEXT:    ret void
-;
 entry:
   %cmp18 = icmp sgt i32 %LEN, 1
   br i1 %cmp18, label %for.body.preheader, label %for.cond.cleanup

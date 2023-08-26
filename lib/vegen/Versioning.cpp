@@ -166,6 +166,11 @@ struct AddRecNarrower : public SCEVRewriteVisitor<AddRecNarrower> {
         InsertBefore(InsertBefore), DepChecker(DepChecker), DL(DL),
         PSSA(*VL->getPSSA()) {}
 
+  const SCEV *visitUnknown(const SCEVUnknown *Unknown) {
+    SE.forgetValue(Unknown->getValue());
+    return Unknown;
+  }
+
   const SCEV *visitAddRecExpr(const SCEVAddRecExpr *AddRec) {
     if (auto *Rewritten = Memo.lookup(AddRec))
       return Rewritten;
@@ -518,7 +523,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
 
   // Figure out the items we need to version in this loop and their versioning
   // conditions
-  DenseMap<DepCondition, std::vector<Item>> CondToItemMap;
+  MapVector<DepCondition, std::vector<Item>> CondToItemMap;
   std::map<std::vector<DepCondition>, std::vector<Item>> CondSetToItemMap;
   SmallVector<Item> ItemsToVersion;
   for (auto Item : Items) {
