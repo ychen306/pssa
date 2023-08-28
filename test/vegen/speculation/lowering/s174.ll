@@ -12,43 +12,48 @@ define void @s174(i32 noundef %M) local_unnamed_addr #0 {
 ; CHECK-LABEL: @s174(
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[I:%.*]] = sext i32 [[M:%.*]] to i64
+; CHECK-NEXT:    [[TMP0:%.*]] = shl nsw i64 [[I]], 2
+; CHECK-NEXT:    [[TMP1:%.*]] = add nsw i64 [[TMP0]], 4
+; CHECK-NEXT:    [[UGLYGEP:%.*]] = getelementptr i8, ptr @a, i64 [[TMP1]]
+; CHECK-NEXT:    [[IDENT_CHECK:%.*]] = icmp ult ptr [[UGLYGEP]], getelementptr (i8, ptr @a, i64 4)
+; CHECK-NEXT:    [[UGLYGEP1:%.*]] = getelementptr i8, ptr @a, i64 [[TMP0]]
+; CHECK-NEXT:    [[IDENT_CHECK2:%.*]] = icmp ult ptr getelementptr (i8, ptr @a, i64 16), [[UGLYGEP1]]
+; CHECK-NEXT:    [[TMP2:%.*]] = or i1 [[IDENT_CHECK]], [[IDENT_CHECK2]]
+; CHECK-NEXT:    br i1 [[TMP2]], label [[TMP3:%.*]], label [[TMP4:%.*]]
+; CHECK:       3:
+; CHECK-NEXT:    [[I3_VEC:%.*]] = load <4 x float>, ptr @a, align 16, !tbaa [[TBAA5:![0-9]+]]
+; CHECK-NEXT:    [[I4_VEC5:%.*]] = load <4 x float>, ptr @b, align 16, !tbaa [[TBAA5]]
+; CHECK-NEXT:    [[ADD_1_VEC:%.*]] = fadd <4 x float> [[I3_VEC]], [[I4_VEC5]]
+; CHECK-NEXT:    [[ARRAYIDX511:%.*]] = getelementptr inbounds [320000 x float], ptr @a, i64 0, i64 [[I]]
+; CHECK-NEXT:    store <4 x float> [[ADD_1_VEC]], ptr [[ARRAYIDX511]], align 4, !tbaa [[TBAA5]]
+; CHECK-NEXT:    br label [[TMP9:%.*]]
+; CHECK:       4:
+; CHECK-NEXT:    [[I1_CLONE:%.*]] = load float, ptr @a, align 16, !tbaa [[TBAA5]]
+; CHECK-NEXT:    [[I4_VEC:%.*]] = load <4 x float>, ptr @b, align 16, !tbaa [[TBAA5]]
+; CHECK-NEXT:    [[TMP5:%.*]] = extractelement <4 x float> [[I4_VEC]], i64 0
+; CHECK-NEXT:    [[TMP6:%.*]] = extractelement <4 x float> [[I4_VEC]], i64 1
+; CHECK-NEXT:    [[TMP7:%.*]] = extractelement <4 x float> [[I4_VEC]], i64 2
+; CHECK-NEXT:    [[TMP8:%.*]] = extractelement <4 x float> [[I4_VEC]], i64 3
+; CHECK-NEXT:    [[ADD_CLONE:%.*]] = fadd float [[I1_CLONE]], [[TMP5]]
+; CHECK-NEXT:    [[ARRAYIDX5:%.*]] = getelementptr inbounds [320000 x float], ptr @a, i64 0, i64 [[I]]
+; CHECK-NEXT:    store float [[ADD_CLONE]], ptr [[ARRAYIDX5]], align 4, !tbaa [[TBAA5]]
 ; CHECK-NEXT:    [[I5:%.*]] = add nsw i64 [[I]], 1
 ; CHECK-NEXT:    [[ARRAYIDX5_1:%.*]] = getelementptr inbounds [320000 x float], ptr @a, i64 0, i64 [[I5]]
-; CHECK-NEXT:    [[IDENT_CHECK:%.*]] = icmp ult ptr [[ARRAYIDX5_1]], getelementptr (i8, ptr @a, i64 4)
-; CHECK-NEXT:    [[ARRAYIDX5:%.*]] = getelementptr inbounds [320000 x float], ptr @a, i64 0, i64 [[I]]
-; CHECK-NEXT:    [[IDENT_CHECK1:%.*]] = icmp ult ptr getelementptr (i8, ptr @a, i64 16), [[ARRAYIDX5]]
-; CHECK-NEXT:    [[TMP0:%.*]] = or i1 [[IDENT_CHECK]], [[IDENT_CHECK1]]
-; CHECK-NEXT:    br i1 [[TMP0]], label [[TMP1:%.*]], label [[TMP2:%.*]]
-; CHECK:       1:
-; CHECK-NEXT:    [[I3_VEC:%.*]] = load <4 x float>, ptr @a, align 16
-; CHECK-NEXT:    [[I4_VEC4:%.*]] = load <4 x float>, ptr @b, align 16
-; CHECK-NEXT:    [[ADD_1_VEC:%.*]] = fadd <4 x float> [[I3_VEC]], [[I4_VEC4]]
-; CHECK-NEXT:    store <4 x float> [[ADD_1_VEC]], ptr [[ARRAYIDX5]], align 4
-; CHECK-NEXT:    br label [[TMP7:%.*]]
-; CHECK:       2:
-; CHECK-NEXT:    [[I1_CLONE:%.*]] = load float, ptr @a, align 16, !tbaa [[TBAA5:![0-9]+]]
-; CHECK-NEXT:    [[I4_VEC:%.*]] = load <4 x float>, ptr @b, align 16
-; CHECK-NEXT:    [[TMP3:%.*]] = extractelement <4 x float> [[I4_VEC]], i64 0
-; CHECK-NEXT:    [[TMP4:%.*]] = extractelement <4 x float> [[I4_VEC]], i64 1
-; CHECK-NEXT:    [[TMP5:%.*]] = extractelement <4 x float> [[I4_VEC]], i64 2
-; CHECK-NEXT:    [[TMP6:%.*]] = extractelement <4 x float> [[I4_VEC]], i64 3
-; CHECK-NEXT:    [[ADD_CLONE:%.*]] = fadd float [[I1_CLONE]], [[TMP3]]
-; CHECK-NEXT:    store float [[ADD_CLONE]], ptr [[ARRAYIDX5]], align 4, !tbaa [[TBAA5]]
 ; CHECK-NEXT:    [[I8:%.*]] = add nsw i64 [[I]], 2
 ; CHECK-NEXT:    [[ARRAYIDX5_2:%.*]] = getelementptr inbounds [320000 x float], ptr @a, i64 0, i64 [[I8]]
 ; CHECK-NEXT:    [[I11:%.*]] = add nsw i64 [[I]], 3
 ; CHECK-NEXT:    [[ARRAYIDX5_3:%.*]] = getelementptr inbounds [320000 x float], ptr @a, i64 0, i64 [[I11]]
 ; CHECK-NEXT:    [[I3_CLONE:%.*]] = load float, ptr getelementptr inbounds ([320000 x float], ptr @a, i64 0, i64 1), align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[ADD_1_CLONE:%.*]] = fadd float [[I3_CLONE]], [[TMP4]]
+; CHECK-NEXT:    [[ADD_1_CLONE:%.*]] = fadd float [[I3_CLONE]], [[TMP6]]
 ; CHECK-NEXT:    store float [[ADD_1_CLONE]], ptr [[ARRAYIDX5_1]], align 4, !tbaa [[TBAA5]]
 ; CHECK-NEXT:    [[I6_CLONE:%.*]] = load float, ptr getelementptr inbounds ([320000 x float], ptr @a, i64 0, i64 2), align 8, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[ADD_2_CLONE:%.*]] = fadd float [[I6_CLONE]], [[TMP5]]
+; CHECK-NEXT:    [[ADD_2_CLONE:%.*]] = fadd float [[I6_CLONE]], [[TMP7]]
 ; CHECK-NEXT:    store float [[ADD_2_CLONE]], ptr [[ARRAYIDX5_2]], align 4, !tbaa [[TBAA5]]
 ; CHECK-NEXT:    [[I9_CLONE:%.*]] = load float, ptr getelementptr inbounds ([320000 x float], ptr @a, i64 0, i64 3), align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    [[ADD_3_CLONE:%.*]] = fadd float [[I9_CLONE]], [[TMP6]]
+; CHECK-NEXT:    [[ADD_3_CLONE:%.*]] = fadd float [[I9_CLONE]], [[TMP8]]
 ; CHECK-NEXT:    store float [[ADD_3_CLONE]], ptr [[ARRAYIDX5_3]], align 4, !tbaa [[TBAA5]]
-; CHECK-NEXT:    br label [[TMP7]]
-; CHECK:       7:
+; CHECK-NEXT:    br label [[TMP9]]
+; CHECK:       9:
 ; CHECK-NEXT:    ret void
 ;
 entry:

@@ -13,15 +13,17 @@ define void @s174(i32 noundef %M) local_unnamed_addr #0 {
 ; CHECK-LABEL: @s174(
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[I:%.*]] = sext i32 [[M:%.*]] to i64
-; CHECK-NEXT:    [[TMP0:%.*]] = shl nsw i64 [[I]], 2
-; CHECK-NEXT:    [[UGLYGEP:%.*]] = getelementptr i8, ptr @a, i64 [[TMP0]]
+; CHECK-NEXT:    [[TMP0:%.*]] = sext i32 [[M]] to i64
+; CHECK-NEXT:    [[TMP1:%.*]] = shl nsw i64 [[TMP0]], 2
+; CHECK-NEXT:    [[UGLYGEP:%.*]] = getelementptr i8, ptr @a, i64 [[TMP1]]
 ; CHECK-NEXT:    [[IDENT_CHECK:%.*]] = icmp ult ptr getelementptr (i8, ptr @a, i64 409598720020), [[UGLYGEP]]
-; CHECK-NEXT:    [[TMP1:%.*]] = shl nsw i64 [[I]], 2
-; CHECK-NEXT:    [[TMP2:%.*]] = add nsw i64 [[TMP1]], 409598720020
-; CHECK-NEXT:    [[UGLYGEP1:%.*]] = getelementptr i8, ptr @a, i64 [[TMP2]]
+; CHECK-NEXT:    [[TMP2:%.*]] = sext i32 [[M]] to i64
+; CHECK-NEXT:    [[TMP3:%.*]] = shl nsw i64 [[TMP2]], 2
+; CHECK-NEXT:    [[TMP4:%.*]] = add nsw i64 [[TMP3]], 409598720020
+; CHECK-NEXT:    [[UGLYGEP1:%.*]] = getelementptr i8, ptr @a, i64 [[TMP4]]
 ; CHECK-NEXT:    [[IDENT_CHECK2:%.*]] = icmp ult ptr [[UGLYGEP1]], @a
-; CHECK-NEXT:    [[TMP3:%.*]] = or i1 [[IDENT_CHECK]], [[IDENT_CHECK2]]
-; CHECK-NEXT:    br i1 [[TMP3]], label [[EXIT:%.*]], label [[HEADER:%.*]]
+; CHECK-NEXT:    [[TMP5:%.*]] = or i1 [[IDENT_CHECK]], [[IDENT_CHECK2]]
+; CHECK-NEXT:    br i1 [[TMP5]], label [[EXIT:%.*]], label [[HEADER:%.*]]
 ; CHECK:       header:
 ; CHECK-NEXT:    [[INDVARS_IV_CLONE:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_CLONE:%.*]], [[HEADER]] ], [ 0, [[ENTRY:%.*]] ]
 ; CHECK-NEXT:    [[ARRAYIDX6_CLONE:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @a, i64 0, i64 [[INDVARS_IV_CLONE]], i64 0
@@ -39,7 +41,7 @@ define void @s174(i32 noundef %M) local_unnamed_addr #0 {
 ; CHECK-NEXT:    [[I1:%.*]] = add nsw i64 [[I]], 1
 ; CHECK-NEXT:    [[I4:%.*]] = add nsw i64 [[I]], 2
 ; CHECK-NEXT:    [[I7:%.*]] = add nsw i64 [[I]], 3
-; CHECK-NEXT:    br i1 [[TMP3]], label [[HEADER3:%.*]], label [[HEADER8:%.*]]
+; CHECK-NEXT:    br i1 [[TMP5]], label [[HEADER3:%.*]], label [[HEADER8:%.*]]
 ; CHECK:       header3:
 ; CHECK-NEXT:    [[INDVARS_IV_3:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_3:%.*]], [[HEADER3]] ], [ 0, [[EXIT]] ]
 ; CHECK-NEXT:    [[INDVARS_IV_2:%.*]] = phi i64 [ [[INDVARS_IV_NEXT_2:%.*]], [[HEADER3]] ], [ 0, [[EXIT]] ]
@@ -49,18 +51,18 @@ define void @s174(i32 noundef %M) local_unnamed_addr #0 {
 ; CHECK-NEXT:    [[ARRAYIDX6_1:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @a, i64 0, i64 [[INDVARS_IV_1]], i64 1
 ; CHECK-NEXT:    [[ARRAYIDX6_2:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @a, i64 0, i64 [[INDVARS_IV_2]], i64 2
 ; CHECK-NEXT:    [[ARRAYIDX6_3:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @a, i64 0, i64 [[INDVARS_IV_3]], i64 3
-; CHECK-NEXT:    [[I2_VEC:%.*]] = load <4 x float>, ptr [[ARRAYIDX6]], align 16
+; CHECK-NEXT:    [[I2_VEC:%.*]] = load <4 x float>, ptr [[ARRAYIDX6]], align 16, !tbaa [[TBAA5]], !alias.scope !9, !noalias !12
 ; CHECK-NEXT:    [[ARRAYIDX10:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @b, i64 0, i64 [[INDVARS_IV]], i64 0
 ; CHECK-NEXT:    [[ARRAYIDX10_1:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @b, i64 0, i64 [[INDVARS_IV_1]], i64 1
 ; CHECK-NEXT:    [[ARRAYIDX10_2:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @b, i64 0, i64 [[INDVARS_IV_2]], i64 2
 ; CHECK-NEXT:    [[ARRAYIDX10_3:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @b, i64 0, i64 [[INDVARS_IV_3]], i64 3
-; CHECK-NEXT:    [[I3_VEC:%.*]] = load <4 x float>, ptr [[ARRAYIDX10]], align 16
+; CHECK-NEXT:    [[I3_VEC:%.*]] = load <4 x float>, ptr [[ARRAYIDX10]], align 16, !tbaa [[TBAA5]]
 ; CHECK-NEXT:    [[ADD_1_VEC:%.*]] = fadd <4 x float> [[I2_VEC]], [[I3_VEC]]
 ; CHECK-NEXT:    [[ARRAYIDX15:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @a, i64 0, i64 [[INDVARS_IV]], i64 [[I]]
 ; CHECK-NEXT:    [[ARRAYIDX15_1:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @a, i64 0, i64 [[INDVARS_IV_1]], i64 [[I1]]
 ; CHECK-NEXT:    [[ARRAYIDX15_2:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @a, i64 0, i64 [[INDVARS_IV_2]], i64 [[I4]]
 ; CHECK-NEXT:    [[ARRAYIDX15_3:%.*]] = getelementptr inbounds [320000 x [320000 x float]], ptr @a, i64 0, i64 [[INDVARS_IV_3]], i64 [[I7]]
-; CHECK-NEXT:    store <4 x float> [[ADD_1_VEC]], ptr [[ARRAYIDX15]], align 4
+; CHECK-NEXT:    store <4 x float> [[ADD_1_VEC]], ptr [[ARRAYIDX15]], align 4, !tbaa [[TBAA5]], !alias.scope !12, !noalias !9
 ; CHECK-NEXT:    [[INDVARS_IV_NEXT]] = add nuw nsw i64 [[INDVARS_IV]], 1
 ; CHECK-NEXT:    [[EXITCOND_NOT:%.*]] = icmp eq i64 [[INDVARS_IV_NEXT]], 320000
 ; CHECK-NEXT:    [[INDVARS_IV_NEXT_1]] = add nuw nsw i64 [[INDVARS_IV_1]], 1

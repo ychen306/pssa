@@ -106,6 +106,7 @@ class SCEVEmitter {
           assert(!FoundCycle);
         }
       }
+
       // Move the deps before InsertBefore
       assert(!llvm::count(Deps, *InsertBefore));
       ItemMover Mover(VL);
@@ -167,7 +168,13 @@ struct AddRecNarrower : public SCEVRewriteVisitor<AddRecNarrower> {
         PSSA(*VL->getPSSA()) {}
 
   const SCEV *visitUnknown(const SCEVUnknown *Unknown) {
-    SE.forgetValue(Unknown->getValue());
+    auto *V = Unknown->getValue();
+    if (isa<Instruction>(V)) {
+      SE.forgetValue(V);
+    } else {
+      for (auto *U : V->users())
+        SE.forgetValue(U);
+    }
     return Unknown;
   }
 
