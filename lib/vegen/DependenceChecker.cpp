@@ -345,6 +345,15 @@ static AliasResult::Kind isAliased(Instruction *I1, Instruction *I2,
   auto *Ptr1SCEV = SE.getSCEV(Ptr1);
   auto *Ptr2SCEV = SE.getSCEV(Ptr2);
 
+  // If two accesses have the same alignment and size
+  // and we can prove that the pointers are not equal, then they don't alias
+  // (We make two calls to SE.isKnownPredicate because it's not commutative...)
+  if (Loc1.Size.getValue() == Loc2.Size.getValue() &&
+      getLoadStoreAlignment(I1).value() == Loc1.Size.getValue() &&
+      (SE.isKnownPredicate(CmpInst::ICMP_NE, Ptr1SCEV, Ptr2SCEV) ||
+       SE.isKnownPredicate(CmpInst::ICMP_NE, Ptr2SCEV, Ptr1SCEV)))
+    return AliasResult::NoAlias;
+
   auto *Base1 = getBaseValue(Ptr1SCEV);
   auto *Base2 = getBaseValue(Ptr2SCEV);
   if (Base1 && Base2 && Base1 != Base2)
