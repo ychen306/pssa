@@ -1297,6 +1297,10 @@ static std::unique_ptr<Versioning> hoistConditions(Versioning *Ver) {
   for (auto Edge : RemoveFromVersioning)
     Ver->CutEdges.erase(Edge);
 
+  // Transfer the primary versioning to the outer versioning
+  // so that we will remember to lower the primary versioning later
+  OuterVer->Primary = Ver->Primary;
+  Ver->Primary = nullptr;
   return OuterVer;
 }
 
