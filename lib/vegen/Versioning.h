@@ -128,6 +128,12 @@ public:
   }
 };
 
+// Check if the proposed versioning plan is feasible to lower
+bool isVersioningPlanFeasible(const VersioningPlan &,
+                              llvm::EquivalenceClasses<Item> EC,
+                              DependenceChecker &DepChecker,
+                              PredicatedSSA &, llvm::ScalarEvolution &);
+
 // See Versionier::run for EC for merging conditions
 void lowerVersioningPlan(VersioningPlan &, Versioner &,
                          llvm::EquivalenceClasses<Item> EC, PredicatedSSA &,

@@ -1355,6 +1355,22 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
           return {};
       }
     }
+
+    // Sometimes the versioning plan becomes infeasible to implement after we
+    // insist all packed instructions are versioned under the same conditions.
+    // Do a final check to make sure the versioning plan is feasible.
+    EquivalenceClasses<Item> EC;
+    for (auto *P : Packs) {
+      if (isa<MuPack>(P))
+        continue;
+      SmallVector<Instruction *> Insts;
+      P->getKilledInsts(Insts);
+      auto *I0 = Insts.front();
+      for (auto *I : drop_begin(Insts))
+        EC.unionSets(I0, I);
+    }
+    if (!isVersioningPlanFeasible(VerPlan, EC, DepChecker, PSSA, SE))
+      return {};
   }
 
   LLVM_DEBUG({

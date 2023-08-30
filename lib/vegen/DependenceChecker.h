@@ -6,6 +6,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include <list>
 #include <map>
 
@@ -15,6 +16,7 @@ class Instruction;
 class ScalarEvolution;
 class LoopInfo;
 class SCEV;
+class Loop;
 } // namespace llvm
 
 class PackSet;
@@ -319,6 +321,7 @@ class DependencesFinder {
   DependenceChecker &DepChecker;
   const PackSet *Packs;
   llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> *InterLoopDeps;
+  const llvm::DenseSet<DepEdge> *DepsToIgnore;
 
   llvm::DenseSet<Item, ItemHashInfo> Visited, Processing;
   llvm::DenseSet<const ControlCondition *> VisitedConds;
@@ -332,10 +335,11 @@ public:
   DependencesFinder(
       llvm::SmallVectorImpl<Item> &Deps, Item Earliest, VLoop *VL,
       DependenceChecker &DepChecker, const PackSet *Packs = nullptr,
-      llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> *InterLoopDeps = nullptr)
+      llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> *InterLoopDeps = nullptr,
+      const llvm::DenseSet<DepEdge> *DepsToIgnore = nullptr)
       : Deps(Deps), FoundCycle(false), Earliest(Earliest), VL(VL),
         PSSA(VL->getPSSA()), DepChecker(DepChecker), Packs(Packs),
-        InterLoopDeps(InterLoopDeps) {
+        InterLoopDeps(InterLoopDeps), DepsToIgnore(DepsToIgnore) {
     auto *PN = llvm::dyn_cast_or_null<llvm::PHINode>(Earliest.asInstruction());
     if (PN && VL->isMu(PN))
       this->Earliest = *VL->item_begin();
@@ -369,6 +373,35 @@ public:
   }
 };
 
+// Utility to find the dependencies of a scev
+struct SCEVDepFinder : llvm::SCEVRewriteVisitor<SCEVDepFinder> {
+  PredicatedSSA &PSSA;
+  VLoop *VL;
+  llvm::SmallVectorImpl<DepNode> &Deps;
+
+  SCEVDepFinder(llvm::ScalarEvolution &SE, VLoop *VL, llvm::SmallVectorImpl<DepNode> &Deps)
+      : SCEVRewriteVisitor<SCEVDepFinder>(SE), PSSA(*VL->getPSSA()), VL(VL),
+        Deps(Deps) {}
+
+  const llvm::SCEV *visitAddRecExpr(const llvm::SCEVAddRecExpr *S) {
+    auto *VL2 = PSSA.getVLoop(const_cast<llvm::Loop *>(S->getLoop()));
+    if (VL2 != VL) {
+      assert(VL->contains(VL2) || VL2->contains(VL));
+      if (VL->contains(VL2))
+        Deps.push_back(Item(VL2));
+    }
+    return S;
+  }
+
+  const llvm::SCEV *visitUnknown(const llvm::SCEVUnknown *S) {
+    using namespace llvm;
+    auto *I = dyn_cast<Instruction>(S->getValue());
+    if (I && VL->contains(I))
+      Deps.push_back(I);
+    return S;
+  }
+};
+
 // Find the dependences of Items but scan no further than the earliest Items
 // Also report if there's any circular dep
 bool findInBetweenDeps(llvm::SmallVectorImpl<Item> &Deps,
@@ -386,6 +419,9 @@ struct Versioning {
   VLoop *ParentLoop;
   std::unique_ptr<Versioning> Secondary;
   Versioning *Primary = nullptr;
+
+  Versioning(const Versioning &);
+  Versioning() = default;
 };
 
 // Keep track of all the versionings that we need to do

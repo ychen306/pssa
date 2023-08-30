@@ -943,8 +943,7 @@ static void removeRedundantConditions(PredicatedSSA &PSSA,
     VersioningMap.erase(Item);
 }
 
-template<typename T>
-std::pair<T, T> reorder(std::pair<T, T> Pair) {
+template <typename T> std::pair<T, T> reorder(std::pair<T, T> Pair) {
   auto [A, B] = Pair;
   return {B, A};
 }
@@ -953,13 +952,13 @@ static void addScopeForInst(Instruction *I, Metadata *Scope) {
   I->setMetadata(
       LLVMContext::MD_alias_scope,
       MDNode::concatenate(I->getMetadata(LLVMContext::MD_alias_scope),
-        MDNode::get(I->getContext(), Scope)));
+                          MDNode::get(I->getContext(), Scope)));
 }
 
 static void addNoAliasForInst(Instruction *I, Metadata *Scope) {
   I->setMetadata(LLVMContext::MD_noalias,
-      MDNode::concatenate(I->getMetadata(LLVMContext::MD_noalias),
-        MDNode::get(I->getContext(), Scope)));
+                 MDNode::concatenate(I->getMetadata(LLVMContext::MD_noalias),
+                                     MDNode::get(I->getContext(), Scope)));
 }
 
 static void annotateWithNoAlias(LLVMContext &Ctx,
@@ -968,7 +967,8 @@ static void annotateWithNoAlias(LLVMContext &Ctx,
   MDBuilder MDB(Ctx);
 
   using ValueSet = ConditionSetTracker::ValueSet;
-  DenseMap<std::pair<ValueSet *, ValueSet *>, std::pair<MDNode *, MDNode *>> SetsToScopesMap;
+  DenseMap<std::pair<ValueSet *, ValueSet *>, std::pair<MDNode *, MDNode *>>
+      SetsToScopesMap;
   auto GetScopesForSets = [&](ValueSet *SetA, ValueSet *SetB) {
     auto Key = std::make_pair(SetA, SetB);
     if (SetA > SetB)
@@ -1383,4 +1383,127 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
     Frontier = std::move(NewFrontier);
     EC = std::move(OldEC);
   }
+}
+
+static bool isVersioningPlanFeasibleImpl(ArrayRef<Versioning *> Versionings,
+                                         const DenseSet<DepEdge> &DepsToIgnore,
+                                         const EquivalenceClasses<Item> &EC,
+                                         DependenceChecker &DepChecker,
+                                         PredicatedSSA &PSSA,
+                                         llvm::ScalarEvolution &SE) {
+  // Mapping a versioning condition c -> set of items whose versioning uses c
+  DenseMap<DepCondition, DenseSet<Item, ItemHashInfo>> CondToItemsMap;
+  for (auto *Ver : Versionings) {
+    // Figure out the items that we are versioning
+    DenseSet<Item, ItemHashInfo> Items;
+    auto ProcessNode = [&](auto N) {
+      if (auto *I = N.asInstruction()) {
+        Items.insert(I);
+        Items.insert(EC.findLeader(I), EC.member_end());
+      } else if (auto *VL = N.asLoop()) {
+        Items.insert(VL);
+      }
+    };
+    llvm::for_each(Ver->Nodes, ProcessNode);
+    for (auto &[Edge, DepConds] : Ver->CutEdges) {
+      auto [Src, Dst] = Edge;
+      ProcessNode(Src);
+      ProcessNode(Dst);
+      for (auto &DepCond : DepConds)
+        CondToItemsMap[DepCond].insert(Items.begin(), Items.end());
+    }
+  }
+
+  // Check that none of the dep cond depends on the items
+  for (auto &[DepCond, ItemSet] : CondToItemsMap) {
+    // Partition the items by the loops that they are in
+    DenseMap<VLoop *, std::vector<Item>> VLoopToItemsMap;
+    for (auto It : ItemSet)
+      VLoopToItemsMap[PSSA.getLoopForItem(It)].push_back(It);
+
+    for (auto &[VL, Items] : VLoopToItemsMap) {
+      auto ComesBefore = [VL = VL](auto It1, auto It2) {
+        return VL->comesBefore(It1, It2);
+      };
+      Item Earliest =
+          *std::min_element(Items.begin(), Items.end(), ComesBefore);
+      SmallVector<Item> Deps;
+      DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker,
+                                  nullptr /*Packs*/, nullptr /*InterLoopDeps*/,
+                                  &DepsToIgnore);
+      if (DepCond.isOverlapping()) {
+        SmallVector<DepNode> SCEVDeps;
+        SCEVDepFinder SDF(SE, VL, SCEVDeps);
+        auto [R1, R2] = DepCond.getRanges();
+        SDF.visit(R1.Base);
+        SDF.visit(R1.Size);
+        SDF.visit(R2.Base);
+        SDF.visit(R2.Size);
+        for (auto Dep : SCEVDeps) {
+          if (auto *I = Dep.asInstruction())
+            DepFinder.findDep(I, true /*add I as dep*/);
+        }
+      } else {
+        DepFinder.findDep(DepCond.getCondition());
+      }
+
+      DenseSet<Item, ItemHashInfo> DepSet(Deps.begin(), Deps.end());
+      // Not feasible if any of the items is depended
+      for (auto It : Items) {
+        if (DepSet.count(It))
+          return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool isVersioningPlanFeasible(const VersioningPlan &VerPlan,
+                              EquivalenceClasses<Item> EC,
+                              DependenceChecker &DepChecker,
+                              PredicatedSSA &PSSA, llvm::ScalarEvolution &SE) {
+  DenseSet<DepEdge> DepsToIgnore;
+  SmallVector<Versioning *> Frontier;
+  // Make a copy of the versionings and finalize the versionings
+  std::vector<std::unique_ptr<Versioning>> Versionings;
+  for (auto &Ver : VerPlan.Versionings) {
+    Versionings.push_back(std::make_unique<Versioning>(*Ver));
+    finalizeVersioning(Versionings.back().get());
+    Frontier.push_back(getOutermostVersioning(Versionings.back().get()));
+  }
+
+  while (!Frontier.empty()) {
+    // Union the conditions for nodes in the same versioning
+    auto OldEC = EC;
+    for (auto *Ver : Frontier) {
+      SmallVector<Item> Items;
+      for (auto N : Ver->Nodes) {
+        if (auto *I = N.asInstruction())
+          Items.push_back(I);
+        else if (auto *VL = N.asLoop())
+          Items.push_back(VL);
+      }
+      if (Items.empty())
+        continue;
+      auto I0 = Items.front();
+      for (auto I : Items)
+        EC.unionSets(I, I0);
+    }
+
+    if (!isVersioningPlanFeasibleImpl(Frontier, DepsToIgnore, EC, DepChecker,
+                                      PSSA, SE))
+      return false;
+
+    SmallVector<Versioning *> NewFrontier;
+    for (auto *Ver : Frontier) {
+      for (auto Edge : make_first_range(Ver->CutEdges))
+        DepsToIgnore.insert(Edge);
+      if (Ver->Primary)
+        NewFrontier.push_back(Ver->Primary);
+    }
+    Frontier = std::move(NewFrontier);
+    EC = std::move(OldEC);
+  }
+
+  return true;
 }

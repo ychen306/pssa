@@ -8,7 +8,6 @@
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
-#include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/ValueTracking.h"
 
 using namespace llvm;
@@ -735,6 +734,9 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
     ParentVL = ParentVL->getParent();
   }
 
+  if (DepsToIgnore && DepsToIgnore->count({Src, It}))
+    return;
+
   DepEdges.try_emplace({Src, It /*dst*/}, DepCondition::always());
 
   if (!Processing.insert(It).second) {
@@ -826,36 +828,6 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
     FoundCycle |= DepFinder.findDep(It);
   return FoundCycle;
 }
-
-namespace {
-// Utility to find the dependencies of a scev
-struct SCEVDepFinder : SCEVRewriteVisitor<SCEVDepFinder> {
-  PredicatedSSA &PSSA;
-  VLoop *VL;
-  SmallVectorImpl<DepNode> &Deps;
-
-  SCEVDepFinder(ScalarEvolution &SE, VLoop *VL, SmallVectorImpl<DepNode> &Deps)
-      : SCEVRewriteVisitor<SCEVDepFinder>(SE), PSSA(*VL->getPSSA()), VL(VL),
-        Deps(Deps) {}
-
-  const SCEV *visitAddRecExpr(const SCEVAddRecExpr *S) {
-    auto *VL2 = PSSA.getVLoop(const_cast<Loop *>(S->getLoop()));
-    if (VL2 != VL) {
-      assert(VL->contains(VL2) || VL2->contains(VL));
-      if (VL->contains(VL2))
-        Deps.push_back(Item(VL2));
-    }
-    return S;
-  }
-
-  const SCEV *visitUnknown(const SCEVUnknown *S) {
-    auto *I = dyn_cast<Instruction>(S->getValue());
-    if (I && VL->contains(I))
-      Deps.push_back(I);
-    return S;
-  }
-};
-} // namespace
 
 std::unique_ptr<Versioning>
 inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
@@ -1461,4 +1433,13 @@ void IndependentItemsTracker::add(ArrayRef<Item> Items) {
 
 bool IndependentItemsTracker::contains(ArrayRef<Item> Items) {
   return Checked.find_as(Items) != Checked.end();
+}
+
+Versioning::Versioning(const Versioning &Ver)
+    : Nodes(Ver.Nodes), CutEdges(Ver.CutEdges),
+      ImpliedCutEdges(Ver.ImpliedCutEdges), ParentLoop(Ver.ParentLoop) {
+  if (Ver.Secondary) {
+    Secondary = std::make_unique<Versioning>(*Ver.Secondary);
+    Secondary->Primary = this;
+  }
 }
