@@ -1,10 +1,10 @@
 #include "vegen/GlobalSLP.h"
-#include "PackSet.h"
 #include "DependenceChecker.h"
 #include "Heuristics.h"
 #include "LoopUnrolling.h"
 #include "LooseInstructionTable.h"
 #include "Matcher.h"
+#include "PackSet.h"
 #include "Reducer.h"
 #include "Reduction.h"
 #include "UnrollFactor.h"
@@ -119,7 +119,7 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
     for (auto *P : Packs) {
       if (isa<MuPack>(P))
         continue;
-      SmallVector<Instruction *> Insts;
+      SmallVector<Instruction *> Insts(P->values().begin(), P->values().end());
       P->getKilledInsts(Insts);
       auto *I0 = Insts.front();
       for (auto *I : drop_begin(Insts))

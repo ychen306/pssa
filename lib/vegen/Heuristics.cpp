@@ -1363,8 +1363,9 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
     for (auto *P : Packs) {
       if (isa<MuPack>(P))
         continue;
-      SmallVector<Instruction *> Insts;
+      SmallVector<Instruction *> Insts(P->values().begin(), P->values().end());
       P->getKilledInsts(Insts);
+      assert(!Insts.empty());
       auto *I0 = Insts.front();
       for (auto *I : drop_begin(Insts))
         EC.unionSets(I0, I);
