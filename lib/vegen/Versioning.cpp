@@ -1029,9 +1029,12 @@ void Versioner::run(ArrayRef<Versioning *> Versionings,
   DenseSet<DepEdge> AliasedEdgesToIgnore, DepEdgesToIgnore;
   for (auto *Ver : Versionings) {
     assert(!Ver->CutEdges.empty());
+    DenseSet<DepCondition> UniqueConds;
     std::vector<DepCondition> GlobalDepConds;
     for (auto [Edge, DepConds] : Ver->CutEdges) {
-      llvm::append_range(GlobalDepConds, DepConds);
+      for (auto &DepCond : DepConds)
+        if (UniqueConds.insert(DepCond).second)
+          GlobalDepConds.push_back(DepCond);
       auto [Src, Dst] = Edge;
       auto *SrcI = Src.asInstruction();
       auto *DstI = Dst.asInstruction();
