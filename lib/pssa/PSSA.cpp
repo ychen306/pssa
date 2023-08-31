@@ -35,6 +35,13 @@ canonicalizeAndGetConditions(PHINode *PN, ControlDependenceAnalysis &CDA) {
   return Conds;
 }
 
+VLoop::~VLoop() {
+  for (auto It : Items)
+    if (auto *VL = It.asLoop())
+      delete VL;
+  Items.clear();
+}
+
 VLoop::ItemIterator VLoop::insert(Instruction *I, const ControlCondition *C,
                                   Optional<ItemIterator> InsertBefore) {
   assert((!isa<PHINode>(I) || isGatedPhi(cast<PHINode>(I))) &&

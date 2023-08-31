@@ -87,6 +87,7 @@ public:
         const ControlCondition *BackEdgeCond, VLoop *Parent = nullptr)
       : PSSA(PSSA), IsTopLevel(false), LoopCond(LoopCond),
         BackEdgeCond(BackEdgeCond), Parent(Parent) {}
+  ~VLoop();
 
   using ItemIterator = decltype(Items)::iterator;
   using ConstItemIterator = decltype(Items)::const_iterator;

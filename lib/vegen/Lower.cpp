@@ -497,7 +497,9 @@ static VLoop *fuse(VLoop *ParentVL, ArrayRef<VLoop *> Loops) {
     for (auto *Mu : VL->mus())
       Leader->addMu(Mu);
     // Transfer the loop items
-    for (auto &It : VL->items()) {
+    std::vector<Item> Items(VL->item_begin(), VL->item_end());
+    for (auto &It : Items) {
+      VL->erase(It);
       if (auto *I = It.asInstruction()) {
         auto *C = VL->getInstCond(I);
         if (auto *PN = dyn_cast<PHINode>(I)) {

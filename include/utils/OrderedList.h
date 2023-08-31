@@ -110,6 +110,11 @@ public:
     assert(Labels.count(Y));
     return Labels.lookup(X) < Labels.lookup(Y);
   }
+
+  void clear() {
+    Storage.clear();
+    Labels.clear();
+  }
 };
 
 #endif // end UTILS_ORDERED_LIST_H
