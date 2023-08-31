@@ -87,7 +87,8 @@ struct MemRange {
   // iterations
   llvm::Optional<MemRange> promote(llvm::ScalarEvolution &, PredicatedSSA &);
   bool operator==(const MemRange &Other) const {
-    return Base == Other.Base && Size == Other.Size;
+    return Base == Other.Base && Size == Other.Size &&
+           ParentLoop == Other.ParentLoop;
   }
   bool operator!=(const MemRange &Other) const { return !((*this) == Other); }
   // Get a total order for things like std::set
@@ -379,7 +380,8 @@ struct SCEVDepFinder : llvm::SCEVRewriteVisitor<SCEVDepFinder> {
   VLoop *VL;
   llvm::SmallVectorImpl<DepNode> &Deps;
 
-  SCEVDepFinder(llvm::ScalarEvolution &SE, VLoop *VL, llvm::SmallVectorImpl<DepNode> &Deps)
+  SCEVDepFinder(llvm::ScalarEvolution &SE, VLoop *VL,
+                llvm::SmallVectorImpl<DepNode> &Deps)
       : SCEVRewriteVisitor<SCEVDepFinder>(SE), PSSA(*VL->getPSSA()), VL(VL),
         Deps(Deps) {}
 
