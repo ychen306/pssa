@@ -285,9 +285,11 @@ void ReductionInfo::processLoop(VLoop *VL) {
   for (auto &It : VL->items()) {
     if (auto *I = It.asInstruction()) {
       // Don't mess with boolean values, which could be used for control-flow
-      if (I->getType()->isIntegerTy(1))
+      auto *Ty = I->getType();
+      if (Ty->isIntegerTy(1))
         continue;
-
+      if (!Ty->isFloatTy() && !Ty->isDoubleTy() && !Ty->isIntegerTy())
+        continue;
       if (auto *PN = dyn_cast<PHINode>(I)) {
         if (PN->getNumOperands() == 1) {
           // detect recurrent reduction
