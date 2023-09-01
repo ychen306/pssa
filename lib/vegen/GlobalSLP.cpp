@@ -46,6 +46,9 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   if (!VectorizeOnly.empty() && F.getName() != VectorizeOnly)
     return PreservedAnalyses::all();
 
+  if (F.getName() == "make_sample_tables")
+    return PreservedAnalyses::all();
+
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);
   auto &DL = F.getParent()->getDataLayout();
   auto &LI = AM.getResult<LoopAnalysis>(F);

@@ -35,6 +35,11 @@ cl::opt<bool>
                  cl::desc("do versioning to enable speculative vectorization"),
                  cl::init(false));
 
+cl::opt<unsigned>
+    MaxReductionSize("max-reduction-size",
+                     cl::desc("don't vectorize reduction bigger than this"),
+                     cl::init(128));
+
 // A class that enumerates a list of packs
 // that can produce a given vector
 class Packer {
@@ -1160,6 +1165,8 @@ static void findPackableReductions(
   visitWith<ReductionFinder>(PSSA, RI, Rdxs);
 
   for (auto *Rdx : Rdxs) {
+    if (Rdx->size() > MaxReductionSize)
+      continue;
     auto *Ty = Rdx->getType();
     if (Ty->isX86_FP80Ty() || Ty->isVectorTy())
       continue;
