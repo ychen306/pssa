@@ -1,4 +1,5 @@
 #include "pssa/Lower.h"
+#include "llvm/Transforms/Utils/LowerSwitch.h"
 #include "pssa/PSSA.h"
 #include "vegen/DependenceChecker.h"
 #include "vegen/GlobalSLP.h"
@@ -225,6 +226,7 @@ static void buildPasses(PassBuilder &PB) {
     PB.registerVectorizerStartEPCallback(
         [](FunctionPassManager &FPM, OptimizationLevel) {
           FPM.addPass(VeGenScalarizerPass());
+          FPM.addPass(LowerSwitchPass());
           FPM.addPass(GVNHoistPass());
           FPM.addPass(InstCombinePass());
           addPreprocessingPasses(FPM);

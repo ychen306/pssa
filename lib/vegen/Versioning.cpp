@@ -630,6 +630,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
     VersioningFlags[It] = CondSets[DepConds];
   }
 
+  reset();
   // Mapping <original item/inst> -> <cloned item/inst>
   auto GetClonedInst = [&](Instruction *I) -> Instruction * {
     auto It = OrigToCloneMap.find(I);
@@ -1275,7 +1276,7 @@ static std::unique_ptr<Versioning> hoistConditions(Versioning *Ver) {
 
   decltype(Versioning::CutEdges) InvariantEdges;
   SmallVector<DepEdge> RemoveFromVersioning;
-  for (auto [Edge, DepConds] : Ver->CutEdges) {
+  for (auto &[Edge, DepConds] : Ver->CutEdges) {
     for (auto &DepCond : DepConds)
       if (DepCond.isLoopInvariant(VL))
         InvariantEdges[Edge].push_back(DepCond);

@@ -26,9 +26,10 @@
 
 using namespace llvm;
 
-static cl::opt<std::string>
+static cl::list<std::string>
     VectorizeOnly("vectorize-only",
-                  cl::desc("only vectorize selected function"));
+                  cl::desc("only vectorize selected functions"),
+                  cl::CommaSeparated);
 
 static cl::opt<bool> DoUnroll("unroll-loops",
                               cl::desc("don't unroll before vectorize"),
@@ -43,7 +44,9 @@ static cl::opt<bool>
 extern ArrayRef<InstructionDescriptor> getTestInsts();
 
 PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
-  if (!VectorizeOnly.empty() && F.getName() != VectorizeOnly)
+  if (!VectorizeOnly.empty() && none_of(VectorizeOnly, [&](StringRef Name) {
+        return F.getName() == Name;
+      }))
     return PreservedAnalyses::all();
 
   if (F.getName() == "make_sample_tables")
