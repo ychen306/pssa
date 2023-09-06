@@ -1001,6 +1001,8 @@ static void annotateWithNoAlias(LLVMContext &Ctx,
   for (auto [Src, Dst] : AliasedEdgesToIgnore) {
     auto *SrcI = Src.asInstruction();
     auto *DstI = Dst.asInstruction();
+    if (!SrcI || !DstI)
+      continue;
     auto [SrcSet, DstSet] = CST.getMergedObjects(SrcI, DstI);
     auto [SrcScope, DstScope] = GetScopesForSets(SrcSet, DstSet);
     assert(SrcSet->contains(SrcI));
