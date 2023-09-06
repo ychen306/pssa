@@ -44,12 +44,15 @@ SmallVector<OperandPack, 2> Pack::getOperands() const {
 void Pack::getLooseInsts(SmallVectorImpl<Instruction *> &LooseInsts,
                          LooseInstructionTable &LIT) const {
   for (auto *I : Insts)
-    if (LIT.isLoose(I))
+    if (I && LIT.isLoose(I))
       LooseInsts.push_back(I);
 }
 
 void Pack::getKilledInsts(SmallVectorImpl<Instruction *> &Killed) const {
-  Killed.append(Insts.begin(), Insts.end());
+  for (auto *I : Insts) {
+    if (I)
+      Killed.push_back(I);
+  }
 }
 
 SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
@@ -344,15 +347,22 @@ LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
   }
 
   SmallVector<Instruction *, 8> SortedLoads;
-  if (!sortByPointers(Insts, Ptrs, SortedLoads, DL, SE, LI))
+  if (!sortByPointers(Insts, Ptrs, SortedLoads, DL, SE, LI, true/*allow gaps*/))
+    return nullptr;
+  // Bail if there are too many gaps
+  // FIXME: check the threshold in a more principled way
+  if (SortedLoads.size() > Insts.size() && SortedLoads.size() > 16)
     return nullptr;
 
   return new LoadPack(SortedLoads, PSSA, IsDereferenceable);
 }
 
 SmallVector<VectorMask, 2> LoadPack::masks() const {
-  VectorMask Conds(
-      map_range(Insts, [this](auto *I) { return PSSA.getInstCond(I); }));
+  VectorMask Conds;
+  for (auto *I : Insts) {
+    if (I)
+      Conds.push_back(PSSA.getInstCond(I));
+  }
   auto *C = Conds.front();
   if (all_of(drop_begin(Conds),
              [&](auto *C2) { return PSSA.isEquivalent(C, C2); }))
@@ -361,7 +371,11 @@ SmallVector<VectorMask, 2> LoadPack::masks() const {
 }
 
 static Instruction *propagateMetadata(Value *V, ArrayRef<Instruction *> Insts) {
-  SmallVector<Value *> Vals(Insts.begin(), Insts.end());
+  SmallVector<Value *> Vals;
+  for (auto *I : Insts) {
+    if (I)
+      Vals.push_back(I);
+  }
   return propagateMetadata(cast<Instruction>(V), Vals);
 }
 
@@ -446,7 +460,7 @@ StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
   }
 
   SmallVector<Instruction *, 8> SortedStores;
-  if (!sortByPointers(Insts, Ptrs, SortedStores, DL, SE, LI))
+  if (!sortByPointers(Insts, Ptrs, SortedStores, DL, SE, LI, false/*allow gaps*/))
     return nullptr;
 
   return new StorePack(SortedStores, PSSA);

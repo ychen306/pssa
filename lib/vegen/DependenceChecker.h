@@ -55,9 +55,13 @@ public:
 llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, const DepNode &N);
 
 template <> struct llvm::DenseMapInfo<DepNode> {
-  static DepNode getEmptyKey() { return DepNode(); }
+  static DepNode getEmptyKey() {
+    uintptr_t Val = static_cast<uintptr_t>(-1);
+    return DepNode(reinterpret_cast<Instruction *>(Val << 12));
+  }
   static DepNode getTombstoneKey() {
-    return DepNode(llvm::DenseMapInfo<Instruction *>::getTombstoneKey());
+    uintptr_t Val = static_cast<uintptr_t>(-2);
+    return DepNode(reinterpret_cast<Instruction *>(Val << 12));
   }
   static unsigned getHashValue(DepNode N) {
     return llvm::hash_value(N.getPointer());

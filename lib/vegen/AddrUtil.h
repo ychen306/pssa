@@ -34,7 +34,7 @@ bool sortByPointers(llvm::ArrayRef<InstT *> Insts,
                     llvm::ArrayRef<llvm::Value *> Ptrs,
                     llvm::SmallVectorImpl<InstT *> &SortedInsts,
                     const llvm::DataLayout &DL, llvm::ScalarEvolution &SE,
-                    llvm::LoopInfo &LI) {
+                    llvm::LoopInfo &LI, bool AllowGaps) {
   using namespace llvm;
   auto *Ty = getLoadStoreType(Insts.front());
   SmallVector<unsigned, 8> SortedIdxs;
@@ -50,14 +50,15 @@ bool sortByPointers(llvm::ArrayRef<InstT *> Insts,
   SortedInsts.clear();
   SortedInsts.push_back(Insts[GetSortedIdx(0)]);
   auto *FirstPtr = Ptrs[GetSortedIdx(0)];
-  for (unsigned i = 1, N = Insts.size(); i < N; i++) {
+  for (int i = 1, N = Insts.size(); i < N; i++) {
     unsigned SortedIdx = GetSortedIdx(i);
     auto *Ptr = Ptrs[SortedIdx];
     auto Diff = diffPointers(Ty, FirstPtr, Ty, Ptr, DL, SE, LI);
     if (!Diff)
       return false;
-    if (*Diff - i != 0)
+    if (!AllowGaps && *Diff != i)
       return false;
+    SortedInsts.resize(*Diff, nullptr);
     SortedInsts.push_back(Insts[SortedIdx]);
   }
   return true;
@@ -67,7 +68,7 @@ template <typename InstT>
 bool sortByPointers(llvm::ArrayRef<InstT *> Insts,
                     llvm::SmallVectorImpl<InstT *> &SortedInsts,
                     const llvm::DataLayout &DL, llvm::ScalarEvolution &SE,
-                    llvm::LoopInfo &LI) {
+                    llvm::LoopInfo &LI, bool AllowGaps=false) {
   using namespace llvm;
   SmallVector<Value *, 8> Ptrs;
   for (auto *I : Insts) {
@@ -77,7 +78,7 @@ bool sortByPointers(llvm::ArrayRef<InstT *> Insts,
     Ptrs.push_back(Ptr);
   }
 
-  return sortByPointers(Insts, Ptrs, SortedInsts, DL, SE, LI);
+  return sortByPointers(Insts, Ptrs, SortedInsts, DL, SE, LI, AllowGaps);
 }
 
 #endif // VEGEN_ADDR_UTIL_H

@@ -238,7 +238,7 @@ static void refineUnrollFactors(Function *F, DominatorTree &DT, LoopInfo &LI,
     for (auto *I : P->values()) {
       // FIXME: we don't have a good way to track the versions of "unrolled"
       // loose instructions
-      if (LIT.isLoose(I))
+      if (!I || LIT.isLoose(I))
         continue;
       auto *BB = I->getParent();
       auto *L = LI.getLoopFor(BB);

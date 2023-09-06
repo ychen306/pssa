@@ -899,6 +899,8 @@ const ControlCondition *findSpeculativeCond(Instruction *I,
   // Collect the conditions for all the users instructions
   SmallVector<const ControlCondition *, 8> Conds{VL->getInstCond(I)};
   for (auto *UserI : Users) {
+    if (!UserI)
+      continue;
     // Easy case the defs and uses in the same loop
     auto *UserVL = PSSA.getLoopForInst(UserI);
     if (UserVL == VL || PSSA.getLoopDepth(UserVL) == PSSA.getLoopDepth(VL)) {

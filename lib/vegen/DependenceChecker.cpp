@@ -765,6 +765,8 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
     // we also need to check their dependences
     ArrayRef<Instruction *> Insts = P ? P->values() : I;
     for (auto *I : Insts) {
+      if (!I)
+        continue;
       if (!VL->contains(I))
         continue;
       visitCond(VL->getInstCond(I), I);

@@ -170,8 +170,10 @@ public:
 
   template <typename ValueT> int getTripCount(ArrayRef<ValueT *> Values) const {
     int Count = 1;
-    for (auto *V : Values)
-      Count = std::max<int>(Count, getTripCount(V));
+    for (auto *V : Values) {
+      if (V)
+        Count = std::max<int>(Count, getTripCount(V));
+    }
     return Count;
   }
 
@@ -680,7 +682,7 @@ static InstructionCost getTotalCost(PredicatedSSA &PSSA, const PackSet &Packs,
 
     for (auto X : enumerate(P->values())) {
       Instruction *I = X.value();
-      if (!all_of(I->users(), IsPackedOrDead)) {
+      if (I && !all_of(I->users(), IsPackedOrDead)) {
         Cost += TTI.getVectorInstrCost(Instruction::ExtractElement, VecTy,
                                        X.index());
       }
@@ -875,14 +877,14 @@ static void runBottomUp(Pack *P, BottomUpHeuristic &Heuristic,
     // Check the independence of all packed, non-loose insts
     SmallVector<Instruction *> Insts;
     for (auto *I : P->values())
-      if (!LIT.isLoose(I))
+      if (I && !LIT.isLoose(I))
         Insts.push_back(I);
     // Check if the instructions are independent
     if (!Insts.empty() &&
         !isIndependent(Insts, PSSA, DepChecker, IndependentItems)) {
       // Try again and see if we can do versioning to get independence
       if (!DoVersioning ||
-          !findNecessaryDeps(VerPlan, P->values(), PSSA, DepChecker,
+          !findNecessaryDeps(VerPlan, Insts, PSSA, DepChecker,
                              nullptr /*packs*/, &IndependentItems))
         return;
     }
@@ -892,8 +894,10 @@ static void runBottomUp(Pack *P, BottomUpHeuristic &Heuristic,
     for (auto &M : P->masks())
       ProcessMaskOperands(M);
     LoopBundle Loops;
-    for (auto *I : P->values())
-      Loops.push_back(getLoopFor(I, PSSA, LIT));
+    for (auto *I : P->values()) {
+      if (I)
+        Loops.push_back(getLoopFor(I, PSSA, LIT));
+    }
     ProcessLoopBundle(Loops);
   };
 
@@ -1136,10 +1140,16 @@ static InstructionCost getReductionSaving(BottomUpHeuristic &H,
   return ScalarCost - VectorCost;
 }
 
+struct ReductionSeed {
+  Reduction *Rdx; // The reduction that we try to vectorize
+  ReductionPack *Seed;
+  InstructionCost Saving;
+};
+
 // Find list of reduction elements that are profitable to pack together
 // Also return their saving estimate
 static void findPackableReductions(
-    SmallVectorImpl<std::pair<Pack *, InstructionCost>> &Seeds,
+    SmallVectorImpl<ReductionSeed> &Seeds,
     PredicatedSSA &PSSA, ReductionInfo &RI, LooseInstructionTable &LIT,
     BottomUpHeuristic &Heuristic, TargetTransformInfo &TTI) {
   unsigned MaxVecWidth = TTI.getLoadStoreVecRegBitWidth(0 /*address space*/);
@@ -1157,9 +1167,6 @@ static void findPackableReductions(
         Rdxs.insert(Rdx);
     }
   };
-
-  // FIXME: find a better way to configure the available vector width
-  SmallVector<unsigned> VectorLengths{2, 4, 8, 16};
 
   SetVector<Reduction *> Rdxs;
   visitWith<ReductionFinder>(PSSA, RI, Rdxs);
@@ -1211,7 +1218,7 @@ static void findPackableReductions(
         unsigned VecLen = MaxVecLen;
         if (Seed.size() < VecLen)
           VecLen = Seed.size();
-        Seeds.emplace_back(new ReductionPack(R, Seed.size(), VecLen), Saving);
+        Seeds.push_back({Rdx, new ReductionPack(R, Seed.size(), VecLen), Saving});
       }
     }
   }
@@ -1329,14 +1336,28 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
   };
 
   if (!NoReductionPacking) {
-    SmallVector<std::pair<Pack *, InstructionCost>> RdxSeeds;
+    SmallVector<ReductionSeed> RdxSeeds;
     findPackableReductions(RdxSeeds, PSSA, RI, LIT, Heuristic, TTI);
 
     if (!RdxSeeds.empty()) {
       llvm::stable_sort(RdxSeeds, [](const auto &A, const auto &B) {
-        return A.second > B.second;
+        return A.Saving > B.Saving;
       });
-      VectorizeReduction(RdxSeeds.front().first);
+      DenseSet<Value *> ReducedValues;
+      for (auto &RdxSeed : RdxSeeds) {
+        bool Reduced = false;
+        for (auto &Elt : RdxSeed.Rdx->Elements) {
+          bool Inserted = ReducedValues.insert(Elt.Val).second;
+          if (!Inserted) {
+            Reduced = true;
+            break;
+          }
+        }
+        // Ignore reduction whose values we've reduced before.
+        if (Reduced)
+          continue;
+        VectorizeReduction(RdxSeed.Seed);
+      }
     }
   }
 
@@ -1350,14 +1371,14 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
       // Check the independence of all packed, non-loose insts
       SmallVector<Instruction *> Insts;
       for (auto *I : P->values())
-        if (!LIT.isLoose(I))
+        if (I && !LIT.isLoose(I))
           Insts.push_back(I);
       // Check if the instructions are independent
       if (!Insts.empty() &&
           !isIndependent(Insts, PSSA, DepChecker, IndependentItems, &Packs)) {
         // Try again and see if we can do versioning to get independence
         if (!DoVersioning ||
-            !findNecessaryDeps(VerPlan, P->values(), PSSA, DepChecker, &Packs,
+            !findNecessaryDeps(VerPlan, Insts, PSSA, DepChecker, &Packs,
                                &IndependentItems))
           return {};
       }
@@ -1370,9 +1391,12 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
     for (auto *P : Packs) {
       if (isa<MuPack>(P))
         continue;
-      SmallVector<Instruction *> Insts(P->values().begin(), P->values().end());
-      P->getKilledInsts(Insts);
-      assert(!Insts.empty());
+      SmallVector<Instruction *> Insts;
+      for (auto *I : P->values())
+        if (I && !LIT.isLoose(I))
+          Insts.push_back(I);
+      if (Insts.empty())
+        continue;
       auto *I0 = Insts.front();
       for (auto *I : drop_begin(Insts))
         EC.unionSets(I0, I);
