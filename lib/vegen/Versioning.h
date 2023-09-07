@@ -86,7 +86,7 @@ class Versioner {
   void recordCloning(Item It, Item ClonedIt);
 
 public:
-  Versioner(PredicatedSSA &PSSA, llvm::DependenceInfo &DI, CachingAA &AA,
+  Versioner(PredicatedSSA &PSSA, WrappedDependenceInfo &DI, CachingAA &AA,
             llvm::LoopInfo &LI, llvm::ScalarEvolution &SE)
       : PSSA(PSSA), SE(SE),
         DepChecker(PSSA, DI, AA, LI, SE, nullptr /*dead insts*/, this),

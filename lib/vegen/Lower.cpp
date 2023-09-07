@@ -140,7 +140,7 @@ template <typename SequenceTy> SmallItemVector toItems(SequenceTy Seq) {
 class VectorGen {
   PackSet Packs;
   PredicatedSSA &PSSA;
-  DependenceInfo &DI;
+  WrappedDependenceInfo &DI;
   CachingAA &AA;
   LoopInfo &LI;
   ScalarEvolution &SE;
@@ -240,9 +240,9 @@ class VectorGen {
   void runOnLoop(VLoop *);
 
 public:
-  VectorGen(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI,
-            CachingAA &AA, LoopInfo &LI, ScalarEvolution &SE,
-            Versioner *TheVersioner)
+  VectorGen(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
+            WrappedDependenceInfo &DI, CachingAA &AA, LoopInfo &LI,
+            ScalarEvolution &SE, Versioner *TheVersioner)
       : Packs(Packs), PSSA(PSSA), DI(DI), AA(AA), LI(LI), SE(SE),
         TheVersioner(TheVersioner), Remapper(VM, RF_None, nullptr, &Extracter) {
   }
@@ -1370,9 +1370,9 @@ bool VectorGen::run() {
   return true;
 }
 
-bool lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA, DependenceInfo &DI,
-           CachingAA &AA, LoopInfo &LI, ScalarEvolution &SE,
-           Versioner *TheVersioner) {
+bool lower(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA,
+           WrappedDependenceInfo &DI, CachingAA &AA, LoopInfo &LI,
+           ScalarEvolution &SE, Versioner *TheVersioner) {
   VectorGen Gen(Packs, PSSA, DI, AA, LI, SE, TheVersioner);
   return Gen.run();
 }

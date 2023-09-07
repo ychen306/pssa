@@ -308,8 +308,8 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
   auto &LI = AM.getResult<LoopAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
-  auto &DI = AM.getResult<DependenceAnalysis>(F);
   auto &AA = AM.getResult<AAManager>(F);
+  WrappedDependenceInfo DI(F);
   PredicatedSSA PSSA(&F, LI, DT, PDT, &SE);
   ReductionInfo RI(PSSA);
   LooseInstructionTable LIT;

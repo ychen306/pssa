@@ -18,11 +18,12 @@ class PredicatedSSA;
 class ControlCondition;
 class Versioner;
 class CachingAA;
+class WrappedDependenceInfo;
 
 // Lower a set of packs to vector instructions.
 // May bail out due to circular deps introduced by the packs.
 // Return true if succeeded.
-bool lower(llvm::ArrayRef<Pack *>, PredicatedSSA &, llvm::DependenceInfo &,
+bool lower(llvm::ArrayRef<Pack *>, PredicatedSSA &, WrappedDependenceInfo &,
            CachingAA &, llvm::LoopInfo &, llvm::ScalarEvolution &,
            Versioner *TheVersioner = nullptr);
 

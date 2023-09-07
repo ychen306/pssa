@@ -1,6 +1,7 @@
 #ifndef VEGEN_DEPENDENCECHECKER_H
 #define VEGEN_DEPENDENCECHECKER_H
 
+#include "WrappedDependenceInfo.h"
 #include "pssa/PSSA.h"
 #include "pssa/VectorHashInfo.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -11,7 +12,6 @@
 #include <map>
 
 namespace llvm {
-class DependenceInfo;
 class Instruction;
 class ScalarEvolution;
 class LoopInfo;
@@ -247,11 +247,16 @@ public:
   CachingAA(llvm::AAResults &AA) : AA(AA) {}
   llvm::AliasResult alias(const llvm::MemoryLocation &LocA,
                           const llvm::MemoryLocation &LocB) {
+    using namespace llvm;
     auto [It, Inserted] =
         Cache.try_emplace({LocA.getWithoutAATags(), LocB.getWithoutAATags()},
-                          llvm::AliasResult::NoAlias);
-    if (!Inserted)
+                          AliasResult::NoAlias);
+    auto Result = AA.alias(LocA, LocB);
+    if (!Inserted) {
+      if (Result == AliasResult::NoAlias || It->second == AliasResult::NoAlias)
+        return AliasResult::NoAlias;
       return It->second;
+    }
     return It->second = AA.alias(LocA, LocB);
   }
 };
@@ -262,7 +267,7 @@ class DependenceChecker {
   };
 
   PredicatedSSA &PSSA;
-  llvm::DependenceInfo &DI;
+  WrappedDependenceInfo &DI;
   CachingAA &AA;
   llvm::LoopInfo &LI;
   llvm::ScalarEvolution &SE;
@@ -295,7 +300,7 @@ class DependenceChecker {
 
 public:
   // DeadInsts is an optional set of instructions known to be dead
-  DependenceChecker(PredicatedSSA &PSSA, llvm::DependenceInfo &DI,
+  DependenceChecker(PredicatedSSA &PSSA, WrappedDependenceInfo &DI,
                     CachingAA &AA, llvm::LoopInfo &LI,
                     llvm::ScalarEvolution &SE,
                     llvm::DenseSet<llvm::Instruction *> *DeadInsts = nullptr,

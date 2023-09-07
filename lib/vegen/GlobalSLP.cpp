@@ -57,7 +57,6 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   auto &LI = AM.getResult<LoopAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &TTI = AM.getResult<TargetIRAnalysis>(F);
-  auto &DI = AM.getResult<DependenceAnalysis>(F);
   auto &AA = AM.getResult<AAManager>(F);
 
   CachingAA CAA(AA);
@@ -74,6 +73,8 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
     unrollLoops(SE, LI, AC, DT, &TTI, UFs, DupToOrigLoopMap,
                 &UnrolledIterations);
   }
+
+  WrappedDependenceInfo DI(F);
 
   if (DumpModuleAfterUnroll)
     F.getParent()->dump();

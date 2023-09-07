@@ -143,8 +143,9 @@ PreservedAnalyses ReductionLowering::run(Function &F,
   auto &LI = AM.getResult<LoopAnalysis>(F);
   auto &DT = AM.getResult<DominatorTreeAnalysis>(F);
   auto &PDT = AM.getResult<PostDominatorTreeAnalysis>(F);
-  auto &DI = AM.getResult<DependenceAnalysis>(F);
   auto &AA = AM.getResult<AAManager>(F);
+
+  WrappedDependenceInfo DI(F);
 
   if (!isConvertibleToPSSA(F, LI, DT))
     return PreservedAnalyses::all();

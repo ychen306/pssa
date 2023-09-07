@@ -9,7 +9,6 @@ namespace llvm {
 class DataLayout;
 class LoopInfo;
 class ScalarEvolution;
-class DependenceInfo;
 class TargetTransformInfo;
 } // namespace llvm
 
@@ -28,7 +27,7 @@ std::vector<Pack *> packBottomUp(llvm::ArrayRef<InstructionDescriptor> InstPool,
                                  Matcher &, const llvm::DataLayout &,
                                  llvm::ScalarEvolution &, llvm::DominatorTree &,
                                  llvm::LoopInfo &, CachingAA &,
-                                 llvm::DependenceInfo &,
+                                 WrappedDependenceInfo &,
                                  llvm::TargetTransformInfo &);
 
 // If we generate versioning phis for a packed value,

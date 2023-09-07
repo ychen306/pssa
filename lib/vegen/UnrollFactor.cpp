@@ -29,40 +29,6 @@
 using namespace llvm;
 
 namespace {
-class AAResultsBuilder {
-  std::function<const TargetLibraryInfo &(Function &F)> GetTLI;
-
-  // BasicAA
-  PhiValues PV;
-  BasicAAResult BasicResult;
-
-  ScopedNoAliasAAResult ScopedNoAliasResult;
-
-  TypeBasedAAResult TBAAResult;
-
-  // Globals AA
-  CallGraph CG;
-  GlobalsAAResult GlobalsResult;
-
-  AAResults Result;
-
-public:
-  AAResultsBuilder(Module &M, Function &F,
-                   std::function<const TargetLibraryInfo &(Function &F)> GetTLI,
-                   AssumptionCache &AC, DominatorTree &DT)
-      : GetTLI(GetTLI), PV(F),
-        BasicResult(M.getDataLayout(), F, GetTLI(F), AC, &DT, &PV), CG(M),
-        GlobalsResult(GlobalsAAResult::analyzeModule(M, GetTLI, CG)),
-        Result(GetTLI(F)) {
-    Result.addAAResult(ScopedNoAliasResult);
-    Result.addAAResult(TBAAResult);
-    Result.addAAResult(GlobalsResult);
-    Result.addAAResult(BasicResult);
-  }
-
-  AAResults &getResult() { return Result; }
-};
-
 struct Range {
   bool Initialized;
   unsigned Lo, Hi; // inclusive
@@ -219,7 +185,7 @@ static void refineUnrollFactors(Function *F, DominatorTree &DT, LoopInfo &LI,
   AAResultsBuilder AABuilder(*M, *F, GetTLI, AC, DT);
   AAResults &AA = AABuilder.getResult();
   CachingAA CAA(AA);
-  DependenceInfo DI(F, &AA, &SE, &LI);
+  WrappedDependenceInfo DI(*F);
   PostDominatorTree PDT(*F);
 
   PredicatedSSA PSSA(F, LI, DT, PDT, &SE);

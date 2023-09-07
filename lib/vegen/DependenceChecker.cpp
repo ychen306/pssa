@@ -344,6 +344,7 @@ static AliasResult::Kind isAliased(Instruction *I1, Instruction *I2,
   auto *Ptr1SCEV = SE.getSCEV(Ptr1);
   auto *Ptr2SCEV = SE.getSCEV(Ptr2);
 
+#if 0
   // If two accesses have the same alignment and size
   // and we can prove that the pointers are not equal, then they don't alias
   // (We make two calls to SE.isKnownPredicate because it's not commutative...)
@@ -352,6 +353,7 @@ static AliasResult::Kind isAliased(Instruction *I1, Instruction *I2,
       (SE.isKnownPredicate(CmpInst::ICMP_NE, Ptr1SCEV, Ptr2SCEV) ||
        SE.isKnownPredicate(CmpInst::ICMP_NE, Ptr2SCEV, Ptr1SCEV)))
     return AliasResult::NoAlias;
+#endif
 
   auto *Base1 = getBaseValue(Ptr1SCEV);
   auto *Base2 = getBaseValue(Ptr2SCEV);
@@ -513,8 +515,11 @@ Optional<DepCondition> DependenceChecker::getDepKindImpl(Instruction *I1,
   if (!Ptr1 || !Ptr2)
     return DepCondition::always();
 
-  auto Dep = DI.depends(I1, I2, true);
-  if (Dep && Dep->isOrdered()) {
+  auto HasDep = [&](auto *I1, auto *I2) {
+    auto Dep = DI.depends(I1, I2, true);
+    return Dep && Dep->isOrdered();
+  };
+  if (HasDep(I1, I2) && HasDep(I2, I1)) {
     auto R1 = MemRange::get(I1, SE, PSSA, LI);
     auto R2 = MemRange::get(I2, SE, PSSA, LI);
     auto *L = nearestCommonParent(R1.OrigParentLoop, R2.OrigParentLoop);
