@@ -1310,6 +1310,33 @@ static std::unique_ptr<Versioning> hoistConditions(Versioning *Ver) {
   return OuterVer;
 }
 
+static DepCondition promoteCondition(const DepCondition &DepCond,
+                                     ScalarEvolution &SE, PredicatedSSA &PSSA) {
+  if (!DepCond.isOverlapping())
+    return DepCond;
+  auto [R1, R2] = DepCond.getRanges();
+  if (!R1.ParentLoop->isLoop())
+    return DepCond;
+
+  // Don't promote with the overlapping checks are for the same objects.
+  // For checks around the same objects, it's plausible that the conditions
+  // are only true for some iterations but not others, and promotion can disable
+  // vectorization for *all* iterations.
+  auto *Obj1 = getUnderlyingObject(getLoadStorePointerOperand(R1.Access));
+  auto *Obj2 = getUnderlyingObject(getLoadStorePointerOperand(R2.Access));
+  if (Obj1 == Obj2)
+    return DepCond;
+
+  auto PromotedR1 = R1.promote(SE, PSSA);
+  if (!PromotedR1)
+    return DepCond;
+  auto PromotedR2 = R2.promote(SE, PSSA);
+  if (!PromotedR2)
+    return DepCond;
+
+  return DepCondition::ifOverlapping(*PromotedR1, *PromotedR2, SE, PSSA);
+}
+
 void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
                          EquivalenceClasses<Item> EC, PredicatedSSA &PSSA,
                          ScalarEvolution &SE) {
@@ -1330,6 +1357,8 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
         DenseSet<DepCondition> Inserted;
         for (auto &DepCond : DepConds) {
           auto NewCond = CST.getCoalescedCondition(DepCond);
+          // Try to promote the condition so that it's loop invariant
+          NewCond = promoteCondition(NewCond, SE, PSSA);
           if (Inserted.insert(NewCond).second)
             NewConds.push_back(NewCond);
         }
