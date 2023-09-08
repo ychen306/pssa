@@ -14,6 +14,7 @@ class ScalarEvolution;
 class DominatorTree;
 class LoopInfo;
 class Reducer;
+class Use;
 } // namespace llvm
 
 class PredicatedSSA;
@@ -69,6 +70,7 @@ public:
   // Get the loose insts that need to be inserted if we want to make this pack
   virtual void getLooseInsts(llvm::SmallVectorImpl<llvm::Instruction *> &,
                              LooseInstructionTable &) const;
+  virtual llvm::SmallVector<llvm::Use *, 2> getScalarUses() const { return {}; }
   // Return instructions immediately killed by using this pack
   virtual void
   getKilledInsts(llvm::SmallVectorImpl<llvm::Instruction *> &) const;
@@ -323,6 +325,7 @@ public:
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   void print(llvm::raw_ostream &OS) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_Reduction; }
+  llvm::SmallVector<llvm::Use *, 2> getScalarUses() const override;
   Pack *clone() const override;
 };
 

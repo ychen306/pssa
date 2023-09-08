@@ -1037,6 +1037,11 @@ void VectorGen::runOnLoop(VLoop *VL) {
         }
         V = InsertBeforeI.createPhi(Operands, VL->getPhiConditions(PN));
       } else {
+        // Some packs also have scalar operands, which may need to be extracted
+        for (Use *U : P->getScalarUses()) {
+          if (auto *V = Remapper.mapValue(*U->get()))
+            U->set(V);
+        }
         SmallVector<Value *, 8> Operands;
         for (OperandPack OP : getVectorOperands(P))
           Operands.push_back(gatherOperand(OP, InsertBeforeI));

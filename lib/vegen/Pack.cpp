@@ -881,6 +881,13 @@ Value *ReductionPack::emit(ArrayRef<Value *> Operands, Inserter &Insert) const {
   return emitReduction(RdxKind, Args, Insert);
 }
 
+SmallVector<Use *, 2> ReductionPack::getScalarUses() const {
+  SmallVector<Use *, 2> Uses;
+  for (unsigned i = 0; i < Root->getNumOperands() - N; i++)
+    Uses.push_back(Root->getOperandList() + i);
+  return Uses;
+}
+
 void ReductionPack::print(raw_ostream &OS) const {
   OS << "reduce { ";
   for (Value *V : Root->operand_values()) {
