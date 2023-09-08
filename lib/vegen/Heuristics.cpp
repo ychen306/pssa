@@ -512,6 +512,10 @@ static InstructionCost getScalarCost(Instruction *I, TargetTransformInfo &TTI) {
     return Rdx->size() - 1;
   if (auto *R = dyn_cast<Reducer>(I))
     return R->getNumOperands() - 1;
+  // We can't vectorize aggregate types anyway so just return a placeholder value
+  // The main reason is this can trigger assertions in TTI
+  if (I->getType()->isAggregateType())
+    return 10;
   return TTI.getInstructionCost(I, TTI::TCK_RecipThroughput);
 }
 
