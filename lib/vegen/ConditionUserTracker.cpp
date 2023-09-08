@@ -8,9 +8,13 @@ void ConditionUserTracker::processCondition(const ControlCondition *C) {
     return;
 
   SmallVector<const ControlCondition *> Worklist {C};
+  DenseSet<Instruction *> Insts;
+  DenseSet<const ControlCondition *> Visited;
   while (!Worklist.empty()) {
     auto *C2 = Worklist.pop_back_val();
     if (!C2)
+      continue;
+    if (!Visited.insert(C2).second)
       continue;
 
     if (auto *Or = dyn_cast<ConditionOr>(C2)) {
@@ -20,10 +24,13 @@ void ConditionUserTracker::processCondition(const ControlCondition *C) {
 
     auto *And = cast<ConditionAnd>(C2);
     if (auto *I = dyn_cast<Instruction>(And->Cond)) {
-      InstToCondsMap[I].push_back(C);
+      Insts.insert(I);
     }
     Worklist.push_back(And->Parent);
   }
+
+  for (auto *I : Insts)
+    InstToCondsMap[I].insert(C);
 }
 
 void ConditionUserTracker::add(Item It) {

@@ -7,7 +7,7 @@
 class ConditionUserTracker {
   PredicatedSSA &PSSA;
   // Mapping <an instruction I> -> <conditions C that use I>
-  llvm::DenseMap<llvm::Instruction *, std::vector<const ControlCondition *>> InstToCondsMap;
+  llvm::DenseMap<llvm::Instruction *, llvm::DenseSet<const ControlCondition *>> InstToCondsMap;
   llvm::DenseSet<llvm::Instruction *> Deleted;
   // Mapping <a condition C> -> <items that uses C>
   llvm::DenseMap<const ControlCondition *, std::vector<Item>> CondToUsersMap;
