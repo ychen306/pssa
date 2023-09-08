@@ -363,6 +363,15 @@ SmallVector<VectorMask, 2> LoadPack::masks() const {
     if (I)
       Conds.push_back(PSSA.getInstCond(I));
   }
+  auto *CommonC = getGreatestCommonCondition(Conds);
+  Conds.clear();
+
+  for (auto *I : Insts) {
+    if (I)
+      Conds.push_back(PSSA.getInstCond(I));
+    else
+      Conds.push_back(CommonC);
+  }
   auto *C = Conds.front();
   if (all_of(drop_begin(Conds),
              [&](auto *C2) { return PSSA.isEquivalent(C, C2); }))
