@@ -204,6 +204,14 @@ struct AddRecNarrower : public SCEVRewriteVisitor<AddRecNarrower> {
     return Memo[AddRec] =
                SE.getUnknown(Insert.make<TruncInst>(V, AddRec->getType()));
   }
+
+  const SCEV *visitPtrToIntExpr(const SCEVPtrToIntExpr *PTI) {
+    SCEVEmitter Emitter(VL, C, InsertBefore, DepChecker, SE, DL);
+    auto *V = Emitter.emitSCEV(visit(PTI->getOperand()));
+    Inserter Insert(VL, C, InsertBefore);
+    return Memo[PTI] =
+               SE.getUnknown(Insert.make<PtrToIntInst>(V, PTI->getType()));
+  }
 };
 
 } // namespace
