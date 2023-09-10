@@ -129,8 +129,10 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
       SmallVector<Instruction *> Insts(P->values().begin(), P->values().end());
       P->getKilledInsts(Insts);
       auto *I0 = Insts.front();
-      for (auto *I : drop_begin(Insts))
-        EC.unionSets(I0, I);
+      for (auto *I : drop_begin(Insts)) {
+        if (I)
+          EC.unionSets(I0, I);
+      }
 #if 0
       for (auto &O : P->getOperands())
         for (auto *I2 : O) {
