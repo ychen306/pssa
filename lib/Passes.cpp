@@ -171,8 +171,8 @@ static void addPreprocessingPasses(FunctionPassManager &FPM) {
 }
 
 static void addCleanupPasses(FunctionPassManager &FPM) {
-  FPM.addPass(SimplifyCFGPass());
   FPM.addPass(JumpThreadingPass());
+  FPM.addPass(SimplifyCFGPass());
   FPM.addPass(InstCombinePass());
   FPM.addPass(GVNPass());
   FPM.addPass(ADCEPass());
