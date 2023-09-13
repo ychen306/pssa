@@ -15,6 +15,8 @@ class Pack;
 // Utility to track whether any given instructions are packed
 class PackSet {
   std::vector<Pack *> Packs;
+  // Mapping a pack to its index in the `Packs` vector
+  llvm::DenseMap<Pack *, unsigned> PackIndex;
   llvm::DenseMap<llvm::Instruction *, Pack *> InstToPackMap;
 
 public:
@@ -30,6 +32,7 @@ public:
   }
 
   void add(Pack *);
+  void erase(Pack *);
   bool isPacked(llvm::Instruction *) const;
   bool isPacked(llvm::Value *) const;
   Pack *getPackForValue(llvm::Value *) const;

@@ -351,7 +351,7 @@ LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
     return nullptr;
   // Bail if there are too many gaps
   // FIXME: check the threshold in a more principled way
-  if (SortedLoads.size() > Insts.size() && SortedLoads.size() > 16)
+  if (SortedLoads.size() > Insts.size() && SortedLoads.size() > 32)
     return nullptr;
 
   return new LoadPack(SortedLoads, PSSA, IsDereferenceable);

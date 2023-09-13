@@ -512,8 +512,8 @@ static InstructionCost getScalarCost(Instruction *I, TargetTransformInfo &TTI) {
     return Rdx->size() - 1;
   if (auto *R = dyn_cast<Reducer>(I))
     return R->getNumOperands() - 1;
-  // We can't vectorize aggregate types anyway so just return a placeholder value
-  // The main reason is this can trigger assertions in TTI
+  // We can't vectorize aggregate types anyway so just return a placeholder
+  // value The main reason is this can trigger assertions in TTI
   if (I->getType()->isAggregateType())
     return 10;
   return TTI.getInstructionCost(I, TTI::TCK_RecipThroughput);
@@ -1152,10 +1152,11 @@ struct ReductionSeed {
 
 // Find list of reduction elements that are profitable to pack together
 // Also return their saving estimate
-static void findPackableReductions(
-    SmallVectorImpl<ReductionSeed> &Seeds,
-    PredicatedSSA &PSSA, ReductionInfo &RI, LooseInstructionTable &LIT,
-    BottomUpHeuristic &Heuristic, TargetTransformInfo &TTI) {
+static void findPackableReductions(SmallVectorImpl<ReductionSeed> &Seeds,
+                                   PredicatedSSA &PSSA, ReductionInfo &RI,
+                                   LooseInstructionTable &LIT,
+                                   BottomUpHeuristic &Heuristic,
+                                   TargetTransformInfo &TTI) {
   unsigned MaxVecWidth = TTI.getLoadStoreVecRegBitWidth(0 /*address space*/);
   class ReductionFinder : public PSSAVisitor<ReductionFinder> {
     ReductionInfo &RI;
@@ -1222,19 +1223,93 @@ static void findPackableReductions(
         unsigned VecLen = MaxVecLen;
         if (Seed.size() < VecLen)
           VecLen = Seed.size();
-        Seeds.push_back({Rdx, new ReductionPack(R, Seed.size(), VecLen), Saving});
+        Seeds.push_back(
+            {Rdx, new ReductionPack(R, Seed.size(), VecLen), Saving});
       }
     }
   }
 }
 
-std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
-                                 VersioningPlan &VerPlan, PredicatedSSA &PSSA,
-                                 ReductionInfo &RI, LooseInstructionTable &LIT,
-                                 Matcher &TheMatcher, const DataLayout &DL,
-                                 ScalarEvolution &SE, DominatorTree &DT,
-                                 LoopInfo &LI, CachingAA &AA,
-                                 WrappedDependenceInfo &DI, TargetTransformInfo &TTI) {
+static void coalesceLoadPacks(PackSet &Packs, const DataLayout &DL,
+                              ScalarEvolution &SE, DominatorTree &DT,
+                              LoopInfo &LI, TargetTransformInfo &TTI,
+                              PredicatedSSA &PSSA) {
+  // First partition the load packs by the objects that we are loading from
+  DenseMap<std::pair<Value *, Type *>, std::vector<Instruction *>>
+      ObjToLoadsMap;
+  for (auto *P : Packs) {
+    if (!isa<LoadPack>(P))
+      continue;
+    for (auto *I : P->values()) {
+      if (!I)
+        continue;
+      auto *Ptr = getLoadStorePointerOperand(I);
+      auto *Obj = getUnderlyingObject(Ptr);
+      ObjToLoadsMap[{Obj, I->getType()}].push_back(I);
+    }
+  }
+
+  // See if we can sort the loads
+  for (auto &Loads : llvm::make_second_range(ObjToLoadsMap)) {
+    SmallVector<Instruction *> SortedLoads;
+    bool Sorted = sortByPointers(ArrayRef(Loads), SortedLoads, DL, SE, LI,
+                                 true /*allow gaps*/);
+    if (!Sorted)
+      continue;
+
+    // Determine the maximum vector length for this type of loads
+    auto *Ty = Loads.front()->getType();
+    unsigned BitWidth =
+        !isa<PointerType>(Ty) ? Ty->getScalarSizeInBits() : DL.getPointerSize();
+    unsigned RegWidth = TTI.getLoadStoreVecRegBitWidth(0);
+    unsigned VL = RegWidth / BitWidth;
+
+    // Break up the loads into vectorizable chunks
+    unsigned NumChunks = SortedLoads.size() / VL;
+    SmallVector<ArrayRef<Instruction *>> Chunks;
+    for (unsigned i = 0; i < NumChunks; i++) {
+      auto Chunk = ArrayRef<Instruction *>(SortedLoads).slice(i * VL, VL);
+      Chunks.push_back(Chunk);
+    }
+
+    // For simplicity, only attempt coalescing if we can pack all of the chunks
+    bool Success = true;
+    SmallDenseSet<Pack *, 8> OldPacks;
+    SmallVector<Pack *> NewPacks;
+    for (auto Chunk : Chunks) {
+      SmallVector<Instruction *> Insts;
+      for (auto *I : Chunk) {
+        if (I) {
+          Insts.push_back(I);
+          assert(Packs.isPacked(I));
+          OldPacks.insert(Packs.getPackForValue(I));
+        }
+      }
+      // Don't bother with packing if this chunk contains only one instruction
+      if (Insts.size() <= 1)
+        continue;
+      auto *P = LoadPack::tryPack(Insts, DL, SE, DT, LI, PSSA);
+      if (!P) {
+        Success = false;
+        break;
+      }
+      NewPacks.push_back(P);
+    }
+    if (Success) {
+      for (auto *P : OldPacks)
+        Packs.erase(P);
+      for (auto *P : NewPacks)
+        Packs.add(P);
+    }
+  }
+}
+
+std::vector<Pack *>
+packBottomUp(ArrayRef<InstructionDescriptor> InstPool, VersioningPlan &VerPlan,
+             PredicatedSSA &PSSA, ReductionInfo &RI, LooseInstructionTable &LIT,
+             Matcher &TheMatcher, const DataLayout &DL, ScalarEvolution &SE,
+             DominatorTree &DT, LoopInfo &LI, CachingAA &AA,
+             WrappedDependenceInfo &DI, TargetTransformInfo &TTI) {
   StoreGrouper::ObjToInstMapTy ObjToStoreMap;
   visitWith<StoreGrouper>(PSSA, ObjToStoreMap);
 
@@ -1364,6 +1439,8 @@ std::vector<Pack *> packBottomUp(ArrayRef<InstructionDescriptor> InstPool,
       }
     }
   }
+
+  coalesceLoadPacks(Packs, DL, SE, DT, LI, TTI, PSSA);
 
   // Do a final cut on the speculation to make sure we dont have inter-pack
   // circular deps
