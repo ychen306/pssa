@@ -23,6 +23,7 @@
 #include "llvm/Transforms/Scalar/JumpThreading.h"
 #include "llvm/Transforms/Scalar/LoopRotation.h"
 #include "llvm/Transforms/Scalar/SimplifyCFG.h"
+#include "llvm/Transforms/Scalar/Sink.h"
 #include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
 
 using namespace llvm;
@@ -173,6 +174,7 @@ static void addPreprocessingPasses(FunctionPassManager &FPM) {
 static void addCleanupPasses(FunctionPassManager &FPM) {
   FPM.addPass(JumpThreadingPass());
   FPM.addPass(SimplifyCFGPass());
+  FPM.addPass(SinkingPass());
   FPM.addPass(InstCombinePass());
   FPM.addPass(GVNPass());
   FPM.addPass(ADCEPass());
