@@ -1202,7 +1202,7 @@ static void findPackableReductions(SmallVectorImpl<ReductionSeed> &Seeds,
 
     unsigned MaxVecLen = MaxVecWidth / Rdx->getType()->getScalarSizeInBits();
 
-    for (auto SubRdxs : make_second_range(LoopToReductionsMap)) {
+    for (auto &[VL, SubRdxs] : LoopToReductionsMap) {
       if (SubRdxs.size() < 2)
         continue;
 
@@ -1224,7 +1224,7 @@ static void findPackableReductions(SmallVectorImpl<ReductionSeed> &Seeds,
         if (Seed.size() < VecLen)
           VecLen = Seed.size();
         Seeds.push_back(
-            {Rdx, new ReductionPack(R, Seed.size(), VecLen), Saving});
+            {Rdx, new ReductionPack(R, Seed.size(), VecLen, VL), Saving});
       }
     }
   }

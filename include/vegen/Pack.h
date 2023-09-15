@@ -312,21 +312,27 @@ public:
                     llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
 };
 
+class VLoop;
 class ReductionPack : public Pack {
   // We will implement this reducer by horizontally adding up all of its
   // operands; With the last N done with vector reduction
   llvm::Reducer *Root;
   unsigned N;
   unsigned VecLen; // <= N and power of two
+  // We don't need to know which loop we are reducing over for code generation,
+  // recording the loop here for the purpose of
+  // over-unrolling the loop to expose more ILP
+  VLoop *VL;
 
 public:
-  ReductionPack(llvm::Reducer *Root, unsigned N, unsigned VecLen);
+  ReductionPack(llvm::Reducer *Root, unsigned N, unsigned VecLen, VLoop *VL);
   llvm::SmallVector<OperandPack, 2> getOperands() const override;
   llvm::Value *emit(llvm::ArrayRef<llvm::Value *>, Inserter &) const override;
   void print(llvm::raw_ostream &OS) const override;
   static bool classof(const Pack *P) { return P->getKind() == PK_Reduction; }
   llvm::SmallVector<llvm::Use *, 2> getScalarUses() const override;
   Pack *clone() const override;
+  VLoop *getLoop() const { return VL; }
 };
 
 struct Match;

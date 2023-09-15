@@ -416,7 +416,7 @@ PreservedAnalyses TestVectorGen::run(Function &F, FunctionAnalysisManager &AM) {
         LIT.getOrCreateReducer(Rdx, *cast_many<Reduction, Value>(SubRdxs));
 
     // Pack the final horizontal reduction
-    Packs.push_back(new ReductionPack(RootR, SubRdxs.size(), SubRdxs.size()));
+    Packs.push_back(new ReductionPack(RootR, SubRdxs.size(), SubRdxs.size(), nullptr));
   }
 
   CachingAA CAA(AA);

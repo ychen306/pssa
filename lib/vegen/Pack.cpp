@@ -347,7 +347,8 @@ LoadPack *LoadPack::tryPack(ArrayRef<Instruction *> Insts, const DataLayout &DL,
   }
 
   SmallVector<Instruction *, 8> SortedLoads;
-  if (!sortByPointers(Insts, Ptrs, SortedLoads, DL, SE, LI, true/*allow gaps*/))
+  if (!sortByPointers(Insts, Ptrs, SortedLoads, DL, SE, LI,
+                      true /*allow gaps*/))
     return nullptr;
   // Bail if there are too many gaps
   // FIXME: check the threshold in a more principled way
@@ -469,7 +470,8 @@ StorePack *StorePack::tryPack(ArrayRef<Instruction *> Insts,
   }
 
   SmallVector<Instruction *, 8> SortedStores;
-  if (!sortByPointers(Insts, Ptrs, SortedStores, DL, SE, LI, false/*allow gaps*/))
+  if (!sortByPointers(Insts, Ptrs, SortedStores, DL, SE, LI,
+                      false /*allow gaps*/))
     return nullptr;
 
   return new StorePack(SortedStores, PSSA);
@@ -815,8 +817,9 @@ Value *AndPack::emit(ArrayRef<Value *> ReifiedMasks, ArrayRef<Value *> Operands,
   return Insert.CreateBinOp(BinaryOperator::And, ReifiedMasks.front(), Operand);
 }
 
-ReductionPack::ReductionPack(Reducer *Root, unsigned N, unsigned VecLen)
-    : Pack({Root}, PK_Reduction), Root(Root), N(N), VecLen(VecLen) {}
+ReductionPack::ReductionPack(Reducer *Root, unsigned N, unsigned VecLen,
+                             VLoop *VL)
+    : Pack({Root}, PK_Reduction), Root(Root), N(N), VecLen(VecLen), VL(VL) {}
 
 SmallVector<OperandPack, 2> ReductionPack::getOperands() const {
   unsigned NumElts = Root->getNumOperands();
@@ -911,7 +914,7 @@ void ReductionPack::print(raw_ostream &OS) const {
 Pack *ReductionPack::clone() const {
   assert(Insts.size() == 1 &&
          "reduction pack should produce exactly one value");
-  return new ReductionPack(Root, N, VecLen);
+  return new ReductionPack(Root, N, VecLen, VL);
 }
 
 GeneralPack *GeneralPack::tryPack(const InstructionDescriptor &InstDesc,

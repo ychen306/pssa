@@ -198,8 +198,18 @@ static void refineUnrollFactors(Function *F, DominatorTree &DT, LoopInfo &LI,
       packBottomUp(InstPool, VerPlan, PSSA, RI, LIT, TheMatcher,
                    F->getParent()->getDataLayout(), SE, DT, LI, CAA, DI, *TTI);
 
-  // FIXME: try to unroll more for loops that we decide to vectorize reductions
+  // Count how many loop reductions each loop has
+  DenseMap<Loop *, unsigned> LoopToReductionCounts;
   for (auto *P : Packs) {
+    if (auto *RP = dyn_cast<ReductionPack>(P)) {
+      if (auto *L = PSSA.getOrigLoop(RP->getLoop())) {
+        // Each loop reduction has n+1 operands,
+        // where n being the number of independent accumulators
+        LoopToReductionCounts[L] += RP->getOperands().size() - 1;
+      }
+      continue;
+    }
+
     std::map<Loop *, Range> PackedIterations;
     for (auto *I : P->values()) {
       // FIXME: we don't have a good way to track the versions of "unrolled"
@@ -236,6 +246,17 @@ static void refineUnrollFactors(Function *F, DominatorTree &DT, LoopInfo &LI,
       if (!Inserted)
         It->second = std::max(It->second, MinUF);
     }
+  }
+
+  for (auto [L, NumRdxs]: LoopToReductionCounts) {
+    if (!OrigLoops.count(L))
+      continue;
+    if (!NumRdxs)
+      continue;
+    UFs[L] = PowerOf2Ceil(UFs[L]) * divideCeil(2, NumRdxs);
+    errs() << "Adjusted uf = " << UFs[L]
+      << ", num reductions = " << NumRdxs
+      << '\n';
   }
 
   LIT.destroy();
@@ -310,7 +331,7 @@ void computeUnrollFactor(ArrayRef<InstructionDescriptor> InstPool,
       UFs[L] = 0;
       continue;
     }
-    UFs[L] = 8;
+    UFs[L] = 16;
     computeUnrollFactorImpl(InstPool, TTI, F, LI, UFs);
     errs() << "Unroll factor for loop " << L << "(depth=" << L->getLoopDepth()
            << ')' << " " << UFs.lookup(L) << '\n';
