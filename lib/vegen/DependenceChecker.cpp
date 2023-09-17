@@ -890,8 +890,8 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   // Build the flow graph
   using namespace operations_research;
   SimpleMaxFlow MaxFlow;
-  const int ConditionalWeight = 10;
-  const int UnconditionalWeight = (NumConditionalDeps + 1) * 10;
+  const int ConditionalWeight = 100;
+  const int UnconditionalWeight = (NumConditionalDeps + 1) * 100;
   DenseMap<DepEdge, ArcIndex> EdgeToArcMap;
   // Add the dep edges
   for (auto [Edge, Kind] : DepFinder.getDepEdges()) {
