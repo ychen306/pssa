@@ -71,6 +71,7 @@ static Optional<MemRange> promoteTo(const MemRange &R, Loop *L,
   Optional<MemRange> MaybeR = R;
   while (MaybeR && MaybeR->OrigParentLoop != L)
     MaybeR = MaybeR->promote(SE, PSSA);
+  assert(!MaybeR || MaybeR->OrigParentLoop == L);
   return MaybeR;
 }
 
@@ -215,6 +216,8 @@ DepCondition DepCondition::ifOverlapping(const MemRange &R1, const MemRange &R2,
     NewR2.Base = Base2->getStart();
     NewR1.ParentLoop = R1.ParentLoop->getParent();
     NewR2.ParentLoop = R2.ParentLoop->getParent();
+    NewR1.OrigParentLoop = R1.OrigParentLoop->getParentLoop();
+    NewR2.OrigParentLoop = R2.OrigParentLoop->getParentLoop();
     return DepCondition(NewR1, NewR2);
   }
   return DepCondition(R1, R2);
