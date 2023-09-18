@@ -49,7 +49,11 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
       }))
     return PreservedAnalyses::all();
 
-  if (F.getName() == "make_sample_tables")
+  if (F.getName() == "make_sample_tables") // blender
+    return PreservedAnalyses::all();
+  if (F.getName() == "frame_init_lowres_core") // x264
+    return PreservedAnalyses::all();
+  if (F.getName() == "deblock_strength_c") // x264; SE invalidated by versioning
     return PreservedAnalyses::all();
 
   auto &SE = AM.getResult<ScalarEvolutionAnalysis>(F);

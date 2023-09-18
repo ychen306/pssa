@@ -338,9 +338,9 @@ static AliasResult::Kind isAliased(Instruction *I1, Instruction *I2,
   auto *Ptr2 = getLoadStorePointerOperand(I2);
   if (!Ptr1 || !Ptr2)
     return AliasResult::MustAlias;
+
   assert(Loc1.Size.hasValue());
   assert(Loc2.Size.hasValue());
-
   auto *Ptr1SCEV = SE.getSCEV(Ptr1);
   auto *Ptr2SCEV = SE.getSCEV(Ptr2);
 

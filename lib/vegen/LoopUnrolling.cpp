@@ -225,7 +225,7 @@ UnrollLoopWithVMap(Loop *L, UnrollLoopOptions ULO, LoopInfo *LI,
   // Are we eliminating the loop control altogether?  Note that we can know
   // we're eliminating the backedge without knowing exactly which iteration
   // of the unrolled body exits.
-  const bool CompletelyUnroll = ULO.Count == MaxTripCount;
+  const bool CompletelyUnroll = ULO.Count == MaxTripCount && false;
 
   const bool PreserveOnlyFirst = CompletelyUnroll && MaxOrZero;
 

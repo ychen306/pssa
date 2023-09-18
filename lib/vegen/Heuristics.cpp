@@ -1321,12 +1321,16 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, VersioningPlan &VerPlan,
   auto PrevCost = getTotalCost(PSSA, Packs, RI, LIT, TTI);
 
   auto VectorizeStoreChain = [&](ArrayRef<Instruction *> SortedStores) {
-    if (!canSpeculativelyComputeAddr(SortedStores, PSSA))
+    if (!canSpeculativelyComputeAddr(SortedStores, PSSA)) {
+      LLVM_DEBUG(dbgs() << "Can't compute address speculatively\n");
       return;
+    }
 
     auto *StoreP = StorePack::tryPack(SortedStores, DL, SE, LI, PSSA);
-    if (!StoreP)
+    if (!StoreP) {
+      LLVM_DEBUG(dbgs() << "Can't pack stores\n");
       return;
+    }
 
     LLVM_DEBUG(dbgs() << "Found seed store pack: " << *StoreP << '\n');
     PackSet Scratch = Packs;
@@ -1382,7 +1386,8 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, VersioningPlan &VerPlan,
                             ? StoredTy->getScalarSizeInBits()
                             : DL.getPointerSize();
     unsigned RegWidth = TTI.getLoadStoreVecRegBitWidth(0);
-    unsigned VL = RegWidth / BitWidth;
+    unsigned VL = std::min<unsigned>(RegWidth / BitWidth, SortedStores.size());
+
 
     // Break up the stores into vectorizable chunks
     unsigned NumChunks = SortedStores.size() / VL;

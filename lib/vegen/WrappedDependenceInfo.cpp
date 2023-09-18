@@ -1,6 +1,7 @@
 #include "WrappedDependenceInfo.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
 
 using namespace llvm;
 
@@ -26,6 +27,4 @@ WrappedDependenceInfo::depends(Instruction *I1, Instruction *I2,
                     PossiblyLoopIndependent);
 }
 
-WrappedDependenceInfo::~WrappedDependenceInfo() {
-  F->eraseFromParent();
-}
+WrappedDependenceInfo::~WrappedDependenceInfo() { F->eraseFromParent(); }

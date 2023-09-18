@@ -929,6 +929,11 @@ bool canSpeculateAt(Value *V, const ControlCondition *C, PredicatedSSA &PSSA) {
   if (!I)
     return true;
 
+  // Special case when `V` is a phi node
+  auto *PN = dyn_cast<PHINode>(V);
+  if (PN && PSSA.isMu(PN))
+    return true;
+
   if (!isSafeToSpeculativelyExecute(I))
     return false;
 
@@ -1292,6 +1297,9 @@ void weakenAddressConditions(ArrayRef<Pack *> Packs, PredicatedSSA &PSSA) {
       continue;
     auto *C = findSpeculativeCond(Ptr, P->values(), PSSA);
     assert(canSpeculateAt(Ptr, C, PSSA));
+    auto *PN = dyn_cast<PHINode>(Ptr);
+    if (PN && PSSA.isMu(PN))
+      continue;
     auto *VL = PSSA.getLoopForInst(Ptr);
     VL->setInstCond(Ptr, C);
   }
