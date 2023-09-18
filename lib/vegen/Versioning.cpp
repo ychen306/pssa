@@ -1068,12 +1068,13 @@ void Versioner::run(ArrayRef<Versioning *> Versionings,
       }
     }
 
+    DenseSet<DepNode> Nodes(Ver->Nodes.begin(), Ver->Nodes.end());
     for (auto [Src, Dst] : make_first_range(Ver->CutEdges)) {
-      MarkForVersioning(Src, GlobalDepConds);
-      MarkForVersioning(Dst, GlobalDepConds);
-      for (auto Node : Ver->Nodes)
-        MarkForVersioning(Node, GlobalDepConds);
+      Nodes.insert(Src);
+      Nodes.insert(Dst);
     }
+    for (auto Node : Nodes)
+      MarkForVersioning(Node, GlobalDepConds);
   }
 
   IndepTracker.ignoreDependences(DepEdgesToIgnore, AliasedEdgesToIgnore,

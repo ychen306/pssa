@@ -1015,6 +1015,10 @@ void VectorGen::runOnLoop(VLoop *VL) {
         continue;
 
       P->getKilledInsts(DeadInsts);
+      for (auto *I : P->values()) {
+        if (I)
+          DeadInsts.push_back(I);
+      }
 
       SmallVector<const ControlCondition *, 8> Conds;
       for (auto *I : P->values())
@@ -1361,7 +1365,8 @@ bool VectorGen::run() {
     I->replaceAllUsesWith(UndefValue::get(I->getType()));
     I->dropAllReferences();
   }
-  for (auto *I : DeadInsts) {
+  DenseSet<Instruction *> DeadSet(DeadInsts.begin(), DeadInsts.end());
+  for (auto *I : DeadSet) {
     if (auto *PN = dyn_cast<PHINode>(I); PN && PSSA.isMu(PN)) {
       PSSA.getLoopForInst(PN)->eraseMu(PN);
     } else {
