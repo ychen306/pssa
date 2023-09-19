@@ -479,7 +479,13 @@ Optional<DepCondition> DependenceChecker::getDepKind(Instruction *I1,
   auto [It, Inserted] = DepKinds.try_emplace({I1, I2});
   if (!Inserted)
     return It->second;
-  return It->second = getDepKindImpl(I1, I2);
+  if (TheVersioner)
+    TheVersioner->undo();
+  auto Kind = getDepKindImpl(I1, I2);
+  if (TheVersioner)
+    TheVersioner->redo();
+  It->second = Kind;
+  return Kind;
 }
 
 Optional<DepCondition> DependenceChecker::getDepKindImpl(Instruction *I1,

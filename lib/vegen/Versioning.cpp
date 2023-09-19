@@ -12,6 +12,17 @@
 
 using namespace llvm;
 
+
+void Versioner::undo() const {
+  for (auto [U, V] : OldUses)
+    U->set(V);
+}
+
+void Versioner::redo() const {
+  for (auto [U, V] : NewUses)
+    U->set(V);
+}
+
 Instruction *Versioner::cloneInst(Instruction *I) {
   if (auto *R = dyn_cast<Reducer>(I))
     return ClonedReducers.emplace_back(Reducer::clone(R));
@@ -570,9 +581,12 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
     // (We assume prior analyses have
     // made sure that it's indeed possible to materialize DepCond before Items)
     Item Earliest = *std::min_element(Items.begin(), Items.end(), ComesBefore);
+    DenseMap<Use *, Value *> UseToValueMap;
+    undo();
     auto *V = emitOverlappingChecks(DepCond, VL, getCommonCondition(VL, Items),
                                     VL->toIterator(Earliest), DepChecker, SE,
                                     PSSA, DL);
+    redo();
     OverlappingChecks[DepCond] = V;
   }
 
@@ -779,6 +793,8 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
         auto *Phi = InstToVersioningPhiMap.lookup(I);
         errs() << "!!! using versioning phi for " << *I << '\n';
         assert(Phi);
+        OldUses.try_emplace(U, U->get());
+        NewUses.try_emplace(U, Phi);
         U->set(Phi);
         UsedInstToVersioningPhiMap.insert(Phi);
         // If the user is cloned, change the clone to also use the phi

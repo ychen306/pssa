@@ -67,6 +67,12 @@ class Versioner {
   llvm::DenseMap<llvm::Instruction *, std::vector<llvm::Instruction *>>
       VersioningPhisMap;
 
+  // Keep track of use old values before versioning to allow temporarily revert back to the old values
+  // so that analyses like ScalarEvolution will still work.
+  llvm::DenseMap<llvm::Use *, llvm::Value *> OldUses;
+  // Similar to OldUses, except for "unrevert"
+  llvm::DenseMap<llvm::Use *, llvm::Value *> NewUses;
+
   ////////////
   llvm::DenseMap<Item, Item, ItemHashInfo> OrigToCloneMap;
   ////////
@@ -126,6 +132,10 @@ public:
   llvm::ArrayRef<llvm::Reducer *> getClonedReducers() const {
     return ClonedReducers;
   }
+
+  void undo() const;
+  void redo() const;
+
 };
 
 // Check if the proposed versioning plan is feasible to lower
