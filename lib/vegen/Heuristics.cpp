@@ -1237,6 +1237,7 @@ static void coalesceLoadPacks(PackSet &Packs, const DataLayout &DL,
   // First partition the load packs by the objects that we are loading from
   DenseMap<std::pair<Value *, Type *>, std::vector<Instruction *>>
       ObjToLoadsMap;
+  DenseMap<Instruction *, Pack *> InstToPackMap;
   for (auto *P : Packs) {
     if (!isa<LoadPack>(P))
       continue;
@@ -1245,7 +1246,9 @@ static void coalesceLoadPacks(PackSet &Packs, const DataLayout &DL,
         continue;
       auto *Ptr = getLoadStorePointerOperand(I);
       auto *Obj = getUnderlyingObject(Ptr);
+      assert(Packs.isPacked(I));
       ObjToLoadsMap[{Obj, I->getType()}].push_back(I);
+      InstToPackMap[I] = P;
     }
   }
 
@@ -1281,8 +1284,10 @@ static void coalesceLoadPacks(PackSet &Packs, const DataLayout &DL,
       for (auto *I : Chunk) {
         if (I) {
           Insts.push_back(I);
-          assert(Packs.isPacked(I));
-          OldPacks.insert(Packs.getPackForValue(I));
+          auto *P = InstToPackMap.lookup(I);
+          assert(P);
+          if (Packs.isPacked(I))
+            OldPacks.insert(P);
         }
       }
       // Don't bother with packing if this chunk contains only one instruction
