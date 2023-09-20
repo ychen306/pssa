@@ -781,7 +781,7 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
     for (auto *I : Insts) {
       if (!I)
         continue;
-      if (!VL->contains(I))
+      if (PSSA->getLoopForInst(I) != VL)
         continue;
       visitCond(VL->getInstCond(I), I);
       if (auto *PN = dyn_cast<PHINode>(I); PN && VL->isGatedPhi(PN)) {
