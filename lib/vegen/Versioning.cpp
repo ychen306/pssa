@@ -12,7 +12,6 @@
 
 using namespace llvm;
 
-
 void Versioner::undo() const {
   for (auto [U, V] : OldUses)
     U->set(V);
@@ -399,16 +398,38 @@ void Versioner::registerNewCondition(const ControlCondition *C,
   // If C is a strengthened version of something then C2 should also be
   auto Tmp = It->second;
   StrengthenedConds[C2] = Tmp;
+
+  if (FalseConds.count(C))
+    FalseConds.insert(C2);
 }
 
 // TODO: cache this
 const ControlCondition *
 Versioner::strengthenCondition(const ControlCondition *C, Value *Flag,
-                               bool IsTrue) {
+                               ArrayRef<DepCondition> DepConds, bool IsTrue) {
   auto *FlagC = PSSA.getInstCond(cast<Instruction>(Flag));
   auto *C2 = PSSA.getAnd(PSSA.getAnd(FlagC, Flag, IsTrue), C);
   registerNewCondition(C, C2);
   StrengthenedConds[C2].emplace_back(Flag, IsTrue);
+  // A strengthened, false condition is still false;
+  if (FalseConds.count(C)) {
+    FalseConds.insert(C);
+  } else {
+    for (auto &DepCond : DepConds) {
+      if (DepCond.isOverlapping())
+        continue;
+      auto *OrigC = getOriginalCondition(C);
+      if (!OrigC)
+        OrigC = C;
+      // Is OrigC implies any of the dependence conditions,
+      // because the flag is only true when all of the conditions are false,
+      // OrigC is therefore false by contraposition
+      if (isImplied(DepCond.getCondition(), OrigC)) {
+        FalseConds.insert(C2);
+        break;
+      }
+    }
+  }
   return C2;
 }
 
@@ -680,8 +701,9 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
     else
       C = Item.asLoop()->getLoopCond();
 
-    auto *Success = strengthenCondition(C, Flag, true);
-    auto *Fail = strengthenCondition(C, Flag, false);
+    ArrayRef DepConds = VersioningMap.find(Item)->second;
+    auto *Success = strengthenCondition(C, Flag, DepConds, true);
+    auto *Fail = strengthenCondition(C, Flag, DepConds, false);
 
     // Create a versioning phi for the instruction I and its clone I2.
     auto CreateVersioningPhi = [&](Instruction *I, Instruction *I2) {
@@ -712,8 +734,9 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
         for (auto X : llvm::enumerate(VL->getPhiConditions(PN))) {
           auto *C = X.value();
           unsigned i = X.index();
-          VL->setPhiCondition(PN, i, strengthenCondition(C, Flag, true));
-          NewPhiConds.push_back(strengthenCondition(C, Flag, false));
+          VL->setPhiCondition(PN, i,
+                              strengthenCondition(C, Flag, DepConds, true));
+          NewPhiConds.push_back(strengthenCondition(C, Flag, DepConds, false));
         }
         VL->insert(cast<PHINode>(I2), NewPhiConds, Fail, It);
       } else {
@@ -1233,13 +1256,13 @@ bool IndependenceTracker::isIndependent(const DepNode &Src,
   };
 #if 0
   errs() << "checking independence: " << Src << ", " << Dst
-    << " CONDS = " << *GetCond(Src) << ", "
-    << *GetCond(Dst) << "\n\t exclusive? "
-    << TheVersioner.isExclusive(GetCond(Src),
-        GetCond(Dst))
-    << '\n';
+         << " CONDS = " << *GetCond(Src) << ", " << *GetCond(Dst)
+         << "\n\t exclusive? "
+         << TheVersioner.isExclusive(GetCond(Src), GetCond(Dst)) << '\n';
 #endif
   if (TheVersioner.isExclusive(GetCond(Src), GetCond(Dst)))
+    return true;
+  if (TheVersioner.isFalse(GetCond(Src)) || TheVersioner.isFalse(GetCond(Dst)))
     return true;
   return checkIndependence(Src, Dst) || checkIndependence(Dst, Src);
 }

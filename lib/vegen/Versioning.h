@@ -67,11 +67,14 @@ class Versioner {
   llvm::DenseMap<llvm::Instruction *, std::vector<llvm::Instruction *>>
       VersioningPhisMap;
 
-  // Keep track of use old values before versioning to allow temporarily revert back to the old values
-  // so that analyses like ScalarEvolution will still work.
+  // Keep track of use old values before versioning to allow temporarily revert
+  // back to the old values so that analyses like ScalarEvolution will still
+  // work.
   llvm::DenseMap<llvm::Use *, llvm::Value *> OldUses;
   // Similar to OldUses, except for "unrevert"
   llvm::DenseMap<llvm::Use *, llvm::Value *> NewUses;
+  // Conditions falsified by versioning
+  llvm::DenseSet<const ControlCondition *> FalseConds;
 
   ////////////
   llvm::DenseMap<Item, Item, ItemHashInfo> OrigToCloneMap;
@@ -126,23 +129,25 @@ public:
   }
   // Get C', a strengthened version of C, such that C' is true if Flag is true
   // (or false)
-  const ControlCondition *strengthenCondition(const ControlCondition *C,
-                                              llvm::Value *Flag, bool IsTrue);
+  const ControlCondition *
+  strengthenCondition(const ControlCondition *C, llvm::Value *Flag,
+                      llvm::ArrayRef<DepCondition> DepConds, bool IsTrue);
   bool isExclusive(const ControlCondition *, const ControlCondition *);
   llvm::ArrayRef<llvm::Reducer *> getClonedReducers() const {
     return ClonedReducers;
   }
 
+  bool isFalse(const ControlCondition *C) const { return C && FalseConds.count(C); }
+
   void undo() const;
   void redo() const;
-
 };
 
 // Check if the proposed versioning plan is feasible to lower
 bool isVersioningPlanFeasible(const VersioningPlan &,
                               llvm::EquivalenceClasses<Item> EC,
-                              DependenceChecker &DepChecker,
-                              PredicatedSSA &, llvm::ScalarEvolution &);
+                              DependenceChecker &DepChecker, PredicatedSSA &,
+                              llvm::ScalarEvolution &);
 
 // See Versionier::run for EC for merging conditions
 void lowerVersioningPlan(VersioningPlan &, Versioner &,
