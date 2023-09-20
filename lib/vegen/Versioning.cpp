@@ -1468,12 +1468,10 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
   }
 }
 
-static bool isVersioningPlanFeasibleImpl(ArrayRef<Versioning *> Versionings,
-                                         const DenseSet<DepEdge> &DepsToIgnore,
-                                         const EquivalenceClasses<Item> &EC,
-                                         DependenceChecker &DepChecker,
-                                         PredicatedSSA &PSSA,
-                                         llvm::ScalarEvolution &SE) {
+static bool isVersioningPlanFeasibleImpl(
+    ArrayRef<Versioning *> Versionings, const DenseSet<DepEdge> &DepsToIgnore,
+    const EquivalenceClasses<Item> &EC, DependenceChecker &DepChecker,
+    ConditionSetTracker &CST, PredicatedSSA &PSSA, llvm::ScalarEvolution &SE) {
   // Mapping a versioning condition c -> set of items whose versioning uses c
   DenseMap<DepCondition, DenseSet<Item, ItemHashInfo>> CondToItemsMap;
   for (auto *Ver : Versionings) {
@@ -1493,7 +1491,8 @@ static bool isVersioningPlanFeasibleImpl(ArrayRef<Versioning *> Versionings,
       ProcessNode(Src);
       ProcessNode(Dst);
       for (auto &DepCond : DepConds)
-        CondToItemsMap[DepCond].insert(Items.begin(), Items.end());
+        CondToItemsMap[CST.getCoalescedCondition(DepCond)].insert(Items.begin(),
+                                                                  Items.end());
     }
   }
 
@@ -1545,6 +1544,16 @@ bool isVersioningPlanFeasible(const VersioningPlan &VerPlan,
                               EquivalenceClasses<Item> EC,
                               DependenceChecker &DepChecker,
                               PredicatedSSA &PSSA, llvm::ScalarEvolution &SE) {
+  // Visit all of the conditions and coalesce them
+  ConditionSetTracker CST(SE, PSSA);
+  // Add the conditions to tracker
+  for (auto &PrimaryVer : VerPlan.Versionings) {
+    for (auto *Ver = PrimaryVer.get(); Ver; Ver = Ver->Secondary.get())
+      for (auto DepConds : make_second_range(Ver->CutEdges))
+        for (auto &DepCond : DepConds)
+          CST.add(DepCond);
+  }
+
   DenseSet<DepEdge> DepsToIgnore;
   SmallVector<Versioning *> Frontier;
   // Make a copy of the versionings and finalize the versionings
@@ -1574,7 +1583,7 @@ bool isVersioningPlanFeasible(const VersioningPlan &VerPlan,
     }
 
     if (!isVersioningPlanFeasibleImpl(Frontier, DepsToIgnore, EC, DepChecker,
-                                      PSSA, SE))
+                                      CST, PSSA, SE))
       return false;
 
     SmallVector<Versioning *> NewFrontier;
