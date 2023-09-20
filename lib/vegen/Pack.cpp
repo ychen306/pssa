@@ -84,6 +84,13 @@ SIMDPack *SIMDPack::tryPack(ArrayRef<Instruction *> Insts) {
           return cast<CmpInst>(I)->getPredicate() != Pred;
         }))
       return nullptr;
+    // Make sure we are packing comparisons of the same "types"
+    // E.g., don't want to pack a i8 comparison with an i32 one.
+    auto *OperandTy = Cmp->getOperand(0)->getType();
+    if (any_of(Rest, [OperandTy](auto *I) {
+          return cast<CmpInst>(I)->getOperand(0)->getType() != OperandTy;
+        }))
+      return nullptr;
   }
 
   if (auto *Cast = dyn_cast<CastInst>(I)) {
