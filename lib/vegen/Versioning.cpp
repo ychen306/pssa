@@ -1517,6 +1517,9 @@ static bool isVersioningPlanFeasibleImpl(
         SmallVector<DepNode> SCEVDeps;
         SCEVDepFinder SDF(SE, VL, SCEVDeps);
         auto [R1, R2] = DepCond.getRanges();
+        // Parent loop of the overlapping check should contain the items
+        if (!R1.ParentLoop->contains(VL))
+          return false;
         SDF.visit(R1.Base);
         SDF.visit(R1.Size);
         SDF.visit(R2.Base);
