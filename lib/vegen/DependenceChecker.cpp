@@ -453,8 +453,7 @@ static bool isExclusive(const ControlCondition *C1,
       continue;
     }
 
-    auto *Or = cast<ConditionOr>(C);
-    C = getGreatestCommonCondition(Or);
+    C = cast<ConditionOr>(C)->GreatestCommonCond;
   }
 
   C = C2;
@@ -467,8 +466,7 @@ static bool isExclusive(const ControlCondition *C1,
       continue;
     }
 
-    auto *Or = cast<ConditionOr>(C);
-    C = getGreatestCommonCondition(Or);
+    C = cast<ConditionOr>(C)->GreatestCommonCond;
   }
 
   return false;
