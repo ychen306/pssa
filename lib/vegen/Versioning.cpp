@@ -1468,6 +1468,37 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
   }
 }
 
+// Return the control condition under which `DepCond` is available
+static const ControlCondition *getControlCondition(DepCondition &DepCond,
+                                                   ScalarEvolution &SE) {
+  if (!DepCond.isOverlapping())
+    return nullptr;
+
+  auto [R1, R2] = DepCond.getRanges();
+  auto *VL = R1.ParentLoop;
+  SmallVector<DepNode> SCEVDeps;
+  SCEVDepFinder SDF(SE, VL, SCEVDeps);
+  SDF.visit(R1.Base);
+  SDF.visit(R1.Size);
+  SDF.visit(R2.Base);
+  SDF.visit(R2.Size);
+  auto &PSSA = *VL->getPSSA();
+  const ControlCondition *C = nullptr;
+  for (auto N : SCEVDeps) {
+    if (auto *I = N.asInstruction()) {
+      auto *VL2 = PSSA.getLoopForInst(I);
+      if (VL2->contains(VL) && VL2 != VL)
+        continue;
+      assert(VL2 == VL);
+      auto *C2 = VL->getInstCond(I);
+      assert(isImplied(C, C2) || isImplied(C2, C));
+      if (isImplied(C, C2))
+        C = C2;
+    }
+  }
+  return C;
+}
+
 static bool isVersioningPlanFeasibleImpl(
     ArrayRef<Versioning *> Versionings, const DenseSet<DepEdge> &DepsToIgnore,
     const EquivalenceClasses<Item> &EC, DependenceChecker &DepChecker,
@@ -1503,6 +1534,9 @@ static bool isVersioningPlanFeasibleImpl(
     for (auto It : ItemSet)
       VLoopToItemsMap[PSSA.getLoopForItem(It)].push_back(It);
 
+    // C is the condition under which DepCond can be computed
+    auto *C = getControlCondition(DepCond, SE);
+
     for (auto &[VL, Items] : VLoopToItemsMap) {
       auto ComesBefore = [VL = VL](auto It1, auto It2) {
         return VL->comesBefore(It1, It2);
@@ -1520,6 +1554,19 @@ static bool isVersioningPlanFeasibleImpl(
         // Parent loop of the overlapping check should contain the items
         if (!R1.ParentLoop->contains(VL))
           return false;
+        if (R1.ParentLoop == VL) {
+          for (auto It : Items) {
+            if (auto *I = It.asInstruction();
+                I && !isImplied(C, VL->getInstCond(I)))
+              return false;
+            if (auto *SubVL = It.asLoop();
+                SubVL && !isImplied(C, SubVL->getLoopCond()))
+              return false;
+          }
+        } else if (R1.ParentLoop == VL->getParent()) {
+          if (!isImplied(C, VL->getLoopCond()))
+            return false;
+        }
         SDF.visit(R1.Base);
         SDF.visit(R1.Size);
         SDF.visit(R2.Base);
