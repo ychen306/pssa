@@ -1469,8 +1469,8 @@ void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
 }
 
 // Return the control condition under which `DepCond` is available
-static const ControlCondition *getControlCondition(DepCondition &DepCond,
-                                                   ScalarEvolution &SE) {
+static Optional<const ControlCondition *>
+getControlCondition(DepCondition &DepCond, ScalarEvolution &SE) {
   if (!DepCond.isOverlapping())
     return nullptr;
 
@@ -1491,7 +1491,11 @@ static const ControlCondition *getControlCondition(DepCondition &DepCond,
         continue;
       assert(VL2 == VL);
       auto *C2 = VL->getInstCond(I);
-      assert(isImplied(C, C2) || isImplied(C2, C));
+      // If C and C2 aren't comparable (by implication),
+      // then we can't guarantee that the dependent values are simultaneously available,
+      // and therefore can't produce the check.
+      if (!isImplied(C, C2) && !isImplied(C2, C))
+        return None;
       if (isImplied(C, C2))
         C = C2;
     }
@@ -1535,7 +1539,10 @@ static bool isVersioningPlanFeasibleImpl(
       VLoopToItemsMap[PSSA.getLoopForItem(It)].push_back(It);
 
     // C is the condition under which DepCond can be computed
-    auto *C = getControlCondition(DepCond, SE);
+    auto MaybeC = getControlCondition(DepCond, SE);
+    if (!MaybeC)
+      return false;
+    auto *C = MaybeC.getValue();
 
     for (auto &[VL, Items] : VLoopToItemsMap) {
       auto ComesBefore = [VL = VL](auto It1, auto It2) {
