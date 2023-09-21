@@ -444,13 +444,32 @@ static bool isExclusive(const ControlCondition *C1,
   if (!C1 || !C2)
     return false;
 
-  auto *And1 = dyn_cast<ConditionAnd>(C1);
-  if (And1 && And1->Complement == C2)
-    return true;
+  DenseMap<Value *, bool> Literals;
+  auto *C = C1;
+  while (C) {
+    if (auto *And = dyn_cast<ConditionAnd>(C)) {
+      Literals.try_emplace(And->Cond, And->IsTrue);
+      C = And->Parent;
+      continue;
+    }
 
-  auto *And2 = dyn_cast<ConditionAnd>(C2);
-  if (And1 && And2)
-    return isExclusive(And1->Parent, And2->Parent);
+    auto *Or = cast<ConditionOr>(C);
+    C = getGreatestCommonCondition(Or);
+  }
+
+  C = C2;
+  while (C) {
+    if (auto *And = dyn_cast<ConditionAnd>(C)) {
+      if (Literals.count(And->Cond) &&
+          Literals.lookup(And->Cond) != And->IsTrue)
+        return true;
+      C = And->Parent;
+      continue;
+    }
+
+    auto *Or = cast<ConditionOr>(C);
+    C = getGreatestCommonCondition(Or);
+  }
 
   return false;
 }
