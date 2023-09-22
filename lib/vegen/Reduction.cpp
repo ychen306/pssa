@@ -18,6 +18,11 @@ cl::opt<bool>
                           cl::desc("Detect binary, unconditional reduction"),
                           cl::init(false));
 
+cl::opt<unsigned>
+    MaxReductionSize("max-reduction-size",
+                     cl::desc("don't vectorize reduction bigger than this"),
+                     cl::init(128));
+
 StringRef getReductionName(RecurKind Kind) {
   switch (Kind) {
   case RecurKind::Add:
@@ -342,7 +347,8 @@ void ReductionInfo::processLoop(VLoop *VL) {
       }
       Merged->ParentLoop = VL;
       Merged->ParentCond = C;
-      setReductionFor(I, Merged);
+      if (Merged->Elements.size() <= MaxReductionSize)
+        setReductionFor(I, Merged);
       continue;
     }
     assert(It.asLoop());

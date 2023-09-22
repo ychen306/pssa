@@ -23,9 +23,11 @@
 
 #define DEBUG_TYPE "vegen-heuristic"
 
-using namespace llvm;
-namespace {
 
+using namespace llvm;
+extern cl::opt<bool> MaxReductionSize;
+
+namespace {
 cl::opt<bool> NoReductionPacking("no-reduction-packing",
                                  cl::desc("Don't pack reductions horizontally"),
                                  cl::init(false));
@@ -35,10 +37,6 @@ cl::opt<bool>
                  cl::desc("do versioning to enable speculative vectorization"),
                  cl::init(false));
 
-cl::opt<unsigned>
-    MaxReductionSize("max-reduction-size",
-                     cl::desc("don't vectorize reduction bigger than this"),
-                     cl::init(128));
 
 // A class that enumerates a list of packs
 // that can produce a given vector
