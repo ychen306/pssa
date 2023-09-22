@@ -1309,6 +1309,26 @@ static void coalesceLoadPacks(PackSet &Packs, const DataLayout &DL,
   }
 }
 
+// Order the packs in a deterministic way
+static std::vector<Pack *> orderPacks(PredicatedSSA &PSSA,
+                                      const PackSet &Packs) {
+  struct InstNumberer : public PSSAVisitor<InstNumberer> {
+    DenseMap<Instruction *, unsigned> &Numbers;
+    void visitInstruction(Instruction *I) {
+      Numbers.try_emplace(I, Numbers.size());
+    }
+    InstNumberer(DenseMap<Instruction *, unsigned> &Numbers)
+        : Numbers(Numbers) {}
+  };
+  DenseMap<Instruction *, unsigned> Numbers;
+  visitWith<InstNumberer>(PSSA, Numbers);
+  std::vector<Pack *> OrderedPacks(Packs.begin(), Packs.end());
+  llvm::sort(OrderedPacks, [&Numbers](auto *P1, auto *P2) {
+    return Numbers[P1->values().front()] < Numbers[P2->values().front()];
+  });
+  return OrderedPacks;
+}
+
 std::vector<Pack *>
 packBottomUp(ArrayRef<InstructionDescriptor> InstPool, VersioningPlan &VerPlan,
              PredicatedSSA &PSSA, ReductionInfo &RI, LooseInstructionTable &LIT,
@@ -1393,7 +1413,6 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, VersioningPlan &VerPlan,
     unsigned RegWidth = TTI.getLoadStoreVecRegBitWidth(0);
     unsigned VL = std::min<unsigned>(RegWidth / BitWidth, SortedStores.size());
 
-
     // Break up the stores into vectorizable chunks
     unsigned NumChunks = SortedStores.size() / VL;
     for (unsigned Chunk = 0; Chunk < NumChunks; Chunk++) {
@@ -1458,7 +1477,7 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, VersioningPlan &VerPlan,
     IndependentItemsTracker IndependentItems;
     VerPlan.Versionings.clear();
     VerPlan.InterLoopDeps.clear();
-    for (auto *P : Packs) {
+    for (auto *P : orderPacks(PSSA, Packs)) {
       // Check the independence of all packed, non-loose insts
       SmallVector<Instruction *> Insts;
       for (auto *I : P->values())

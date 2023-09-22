@@ -13,18 +13,18 @@ define i32 @add_filt_fmask(i32 %0) #0 {
 ; CHECK-NEXT:    [[IDX_EXT:%.*]] = sext i32 [[MUL]] to i64
 ; CHECK-NEXT:    [[IDX_NEG:%.*]] = sub nsw i64 0, [[IDX_EXT]]
 ; CHECK-NEXT:    [[ADD_PTR:%.*]] = getelementptr inbounds i32, ptr [[TMP1]], i64 [[IDX_NEG]]
+; CHECK-NEXT:    [[UGLYGEP:%.*]] = getelementptr i8, ptr [[TMP1]], i64 32
 ; CHECK-NEXT:    [[TMP2:%.*]] = shl nsw i32 [[TMP0]], 1
 ; CHECK-NEXT:    [[TMP3:%.*]] = sext i32 [[TMP2]] to i64
-; CHECK-NEXT:    [[TMP4:%.*]] = shl nsw i64 [[TMP3]], 2
-; CHECK-NEXT:    [[TMP5:%.*]] = sub i64 32, [[TMP4]]
-; CHECK-NEXT:    [[UGLYGEP:%.*]] = getelementptr i8, ptr [[TMP1]], i64 [[TMP5]]
-; CHECK-NEXT:    [[UGLYGEP1:%.*]] = getelementptr i8, ptr [[TMP1]], i64 12
+; CHECK-NEXT:    [[TMP4:%.*]] = mul nsw i64 [[TMP3]], -4
+; CHECK-NEXT:    [[UGLYGEP1:%.*]] = getelementptr i8, ptr [[TMP1]], i64 [[TMP4]]
 ; CHECK-NEXT:    [[IDENT_CHECK:%.*]] = icmp ult ptr [[UGLYGEP]], [[UGLYGEP1]]
-; CHECK-NEXT:    [[UGLYGEP3:%.*]] = getelementptr i8, ptr [[TMP1]], i64 32
-; CHECK-NEXT:    [[TMP6:%.*]] = shl nsw i32 [[TMP0]], 1
-; CHECK-NEXT:    [[TMP7:%.*]] = sext i32 [[TMP6]] to i64
-; CHECK-NEXT:    [[TMP8:%.*]] = mul nsw i64 [[TMP7]], -4
-; CHECK-NEXT:    [[UGLYGEP2:%.*]] = getelementptr i8, ptr [[TMP1]], i64 [[TMP8]]
+; CHECK-NEXT:    [[TMP5:%.*]] = shl nsw i32 [[TMP0]], 1
+; CHECK-NEXT:    [[TMP6:%.*]] = sext i32 [[TMP5]] to i64
+; CHECK-NEXT:    [[TMP7:%.*]] = shl nsw i64 [[TMP6]], 2
+; CHECK-NEXT:    [[TMP8:%.*]] = sub i64 32, [[TMP7]]
+; CHECK-NEXT:    [[UGLYGEP3:%.*]] = getelementptr i8, ptr [[TMP1]], i64 [[TMP8]]
+; CHECK-NEXT:    [[UGLYGEP2:%.*]] = getelementptr i8, ptr [[TMP1]], i64 12
 ; CHECK-NEXT:    [[IDENT_CHECK4:%.*]] = icmp ult ptr [[UGLYGEP3]], [[UGLYGEP2]]
 ; CHECK-NEXT:    [[TMP9:%.*]] = or i1 [[IDENT_CHECK]], [[IDENT_CHECK4]]
 ; CHECK-NEXT:    br i1 [[TMP9]], label [[TMP10:%.*]], label [[TMP11:%.*]]
