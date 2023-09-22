@@ -994,7 +994,7 @@ static void partitionStoresByStructure(ArrayRef<Instruction *> Stores,
     return;
   }
 
-  std::map<std::pair<Value *, Type *>, SmallVector<Instruction *>>
+  MapVector<std::pair<Value *, Type *>, std::vector<Instruction *>>
       PtrToStoresMap;
   for (auto *Store : Stores) {
     auto *Ty = getLoadStoreType(Store);

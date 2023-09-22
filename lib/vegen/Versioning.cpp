@@ -242,7 +242,6 @@ static Value *emitOverlappingChecks(const DepCondition &DepCond, VLoop *VL,
                                     DependenceChecker &DepChecker,
                                     ScalarEvolution &SE, PredicatedSSA &PSSA,
                                     const DataLayout &DL) {
-  errs() << "emitting checks for " << DepCond << '\n';
   assert(DepCond.isOverlapping());
   auto [R1, R2] = DepCond.getRanges();
   auto *End1 = SE.getAddExpr(R1.Base, R1.Size);
@@ -1386,17 +1385,59 @@ static DepCondition promoteCondition(const DepCondition &DepCond,
   return DepCondition::ifOverlapping(*PromotedR1, *PromotedR2, SE, PSSA);
 }
 
+namespace {
+// Utility to assign a arbitrary, deterministic order for the edges in Versioning:CutEdges
+class CutEdgesOrderer {
+  DenseMap<Item, unsigned, ItemHashInfo> ItemNumbers;
+  int getNumber(const DepNode &N) {
+    if (auto *I = N.asInstruction())
+      return ItemNumbers.lookup(I);
+    if (auto *VL = N.asLoop())
+      return ItemNumbers.lookup(VL);
+    return -1;
+  }
+
+public:
+  CutEdgesOrderer(PredicatedSSA &PSSA) {
+    SmallVector<Item> Worklist{&PSSA.getTopLevel()};
+    while (!Worklist.empty()) {
+      auto It = Worklist.pop_back_val();
+      ItemNumbers.try_emplace(It, ItemNumbers.size());
+      if (auto *VL = It.asLoop()) {
+        Worklist.append(VL->item_begin(), VL->item_end());
+      }
+    }
+  }
+
+  std::vector<std::pair<DepEdge, std::vector<DepCondition>>>
+  orderEdges(const DenseMap<DepEdge, std::vector<DepCondition>> &Edges) {
+    std::vector<std::pair<DepEdge, std::vector<DepCondition>>> OrderedEdges(
+        Edges.begin(), Edges.end());
+    llvm::sort(OrderedEdges, [&](const auto &KV1, const auto &KV2) {
+      auto [Src1, Dst1] = KV1.first;
+      auto [Src2, Dst2] = KV2.first;
+      return std::make_pair(getNumber(Src1), getNumber(Dst1)) <
+             std::make_pair(getNumber(Src2), getNumber(Dst2));
+    });
+    return OrderedEdges;
+  }
+};
+}
+
 void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
                          EquivalenceClasses<Item> EC, PredicatedSSA &PSSA,
                          ScalarEvolution &SE) {
+  CutEdgesOrderer Orderer(PSSA);
   // Visit all of the conditions and coalesce them
   ConditionSetTracker CST(SE, PSSA);
   // Add the conditions to tracker
   for (auto &PrimaryVer : VerPlan.Versionings) {
-    for (auto *Ver = PrimaryVer.get(); Ver; Ver = Ver->Secondary.get())
-      for (auto DepConds : make_second_range(Ver->CutEdges))
+    for (auto *Ver = PrimaryVer.get(); Ver; Ver = Ver->Secondary.get()) {
+      auto OrderedEdges = Orderer.orderEdges(Ver->CutEdges);
+      for (auto DepConds : make_second_range(OrderedEdges))
         for (auto &DepCond : DepConds)
           CST.add(DepCond);
+    }
   }
   // Use the coalesced conditions
   for (auto &PrimaryVer : VerPlan.Versionings) {
@@ -1554,7 +1595,6 @@ static bool isVersioningPlanFeasibleImpl(
         // R1.ParentLoop, find out the child loop of R1.ParentLoop that contains
         // It
         for (auto It : Items) {
-          auto old = It;
           if (!R1.ParentLoop->contains(It))
             return false;
           while (PSSA.getLoopForItem(It) != R1.ParentLoop) {
@@ -1623,14 +1663,17 @@ bool isVersioningPlanFeasible(const VersioningPlan &VerPlan,
                               EquivalenceClasses<Item> EC,
                               DependenceChecker &DepChecker,
                               PredicatedSSA &PSSA, llvm::ScalarEvolution &SE) {
+  CutEdgesOrderer Orderer(PSSA);
   // Visit all of the conditions and coalesce them
   ConditionSetTracker CST(SE, PSSA);
   // Add the conditions to tracker
   for (auto &PrimaryVer : VerPlan.Versionings) {
-    for (auto *Ver = PrimaryVer.get(); Ver; Ver = Ver->Secondary.get())
-      for (auto DepConds : make_second_range(Ver->CutEdges))
+    for (auto *Ver = PrimaryVer.get(); Ver; Ver = Ver->Secondary.get()) {
+      auto OrderedEdges = Orderer.orderEdges(Ver->CutEdges);
+      for (auto DepConds : make_second_range(OrderedEdges))
         for (auto &DepCond : DepConds)
           CST.add(DepCond);
+    }
   }
 
   DenseSet<DepEdge> DepsToIgnore;

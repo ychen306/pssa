@@ -1342,7 +1342,7 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) {
     // We want to elect a new leader by choosing the check with the leftmost
     // first range. Mapping a leader condition -> list of conditions equivalent
     // to the leader
-    DenseMap<DepCondition, std::vector<DepCondition>> EquivalentConds;
+    MapVector<DepCondition, std::vector<DepCondition>> EquivalentConds;
     for (auto [DepCond, LeaderCond] : RedundantConds) {
       if (EquivalentConds[LeaderCond].empty())
         EquivalentConds[LeaderCond].push_back(LeaderCond);
