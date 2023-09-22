@@ -242,6 +242,7 @@ static Value *emitOverlappingChecks(const DepCondition &DepCond, VLoop *VL,
                                     DependenceChecker &DepChecker,
                                     ScalarEvolution &SE, PredicatedSSA &PSSA,
                                     const DataLayout &DL) {
+  errs() << "emitting checks for " << DepCond << '\n';
   assert(DepCond.isOverlapping());
   auto [R1, R2] = DepCond.getRanges();
   auto *End1 = SE.getAddExpr(R1.Base, R1.Size);
@@ -1492,8 +1493,8 @@ getControlCondition(DepCondition &DepCond, ScalarEvolution &SE) {
       assert(VL2 == VL);
       auto *C2 = VL->getInstCond(I);
       // If C and C2 aren't comparable (by implication),
-      // then we can't guarantee that the dependent values are simultaneously available,
-      // and therefore can't produce the check.
+      // then we can't guarantee that the dependent values are simultaneously
+      // available, and therefore can't produce the check.
       if (!isImplied(C, C2) && !isImplied(C2, C))
         return None;
       if (isImplied(C, C2))
@@ -1545,52 +1546,73 @@ static bool isVersioningPlanFeasibleImpl(
     auto *C = MaybeC.getValue();
 
     for (auto &[VL, Items] : VLoopToItemsMap) {
-      auto ComesBefore = [VL = VL](auto It1, auto It2) {
-        return VL->comesBefore(It1, It2);
-      };
-      Item Earliest =
-          *std::min_element(Items.begin(), Items.end(), ComesBefore);
       SmallVector<Item> Deps;
-      DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker,
-                                  nullptr /*Packs*/, nullptr /*InterLoopDeps*/,
-                                  &DepsToIgnore);
       if (DepCond.isOverlapping()) {
-        SmallVector<DepNode> SCEVDeps;
-        SCEVDepFinder SDF(SE, VL, SCEVDeps);
         auto [R1, R2] = DepCond.getRanges();
-        // Parent loop of the overlapping check should contain the items
-        if (!R1.ParentLoop->contains(VL))
-          return false;
-        if (R1.ParentLoop == VL) {
-          for (auto It : Items) {
-            if (auto *I = It.asInstruction();
-                I && !isImplied(C, VL->getInstCond(I)))
-              return false;
-            if (auto *SubVL = It.asLoop();
-                SubVL && !isImplied(C, SubVL->getLoopCond()))
-              return false;
+        DenseSet<Item, ItemHashInfo> ImmediateItems;
+        // For each item It, if It is not contained immediately by
+        // R1.ParentLoop, find out the child loop of R1.ParentLoop that contains
+        // It
+        for (auto It : Items) {
+          auto old = It;
+          if (!R1.ParentLoop->contains(It))
+            return false;
+          while (PSSA.getLoopForItem(It) != R1.ParentLoop) {
+            It = PSSA.getLoopForItem(It);
           }
-        } else if (R1.ParentLoop == VL->getParent()) {
-          if (!isImplied(C, VL->getLoopCond()))
+          assert(PSSA.getLoopForItem(It) == R1.ParentLoop);
+          ImmediateItems.insert(It);
+        }
+        for (auto It : ImmediateItems) {
+          if (auto *I = It.asInstruction();
+              I && !isImplied(C, VL->getInstCond(I)))
+            return false;
+          if (auto *SubVL = It.asLoop();
+              SubVL && !isImplied(C, SubVL->getLoopCond()))
             return false;
         }
+
+        SmallVector<DepNode> SCEVDeps;
+        SCEVDepFinder SDF(SE, R1.ParentLoop, SCEVDeps);
         SDF.visit(R1.Base);
         SDF.visit(R1.Size);
         SDF.visit(R2.Base);
         SDF.visit(R2.Size);
+
+        auto ComesBefore = [VL = R1.ParentLoop](auto It1, auto It2) {
+          return VL->comesBefore(It1, It2);
+        };
+        Item Earliest = *std::min_element(ImmediateItems.begin(),
+                                          ImmediateItems.end(), ComesBefore);
+        DependencesFinder DepFinder(Deps, Earliest, R1.ParentLoop, DepChecker,
+                                    nullptr /*Packs*/,
+                                    nullptr /*InterLoopDeps*/, &DepsToIgnore);
         for (auto Dep : SCEVDeps) {
           if (auto *I = Dep.asInstruction())
             DepFinder.findDep(I, true /*add I as dep*/);
         }
+        // Not feasible if any of the items is depended
+        DenseSet<Item, ItemHashInfo> DepSet(Deps.begin(), Deps.end());
+        for (auto It : ImmediateItems) {
+          if (DepSet.count(It))
+            return false;
+        }
       } else {
+        auto ComesBefore = [VL = VL](auto It1, auto It2) {
+          return VL->comesBefore(It1, It2);
+        };
+        Item Earliest =
+            *std::min_element(Items.begin(), Items.end(), ComesBefore);
+        DependencesFinder DepFinder(Deps, Earliest, VL, DepChecker,
+                                    nullptr /*Packs*/,
+                                    nullptr /*InterLoopDeps*/, &DepsToIgnore);
         DepFinder.findDep(DepCond.getCondition());
-      }
-
-      DenseSet<Item, ItemHashInfo> DepSet(Deps.begin(), Deps.end());
-      // Not feasible if any of the items is depended
-      for (auto It : Items) {
-        if (DepSet.count(It))
-          return false;
+        DenseSet<Item, ItemHashInfo> DepSet(Deps.begin(), Deps.end());
+        // Not feasible if any of the items is depended
+        for (auto It : Items) {
+          if (DepSet.count(It))
+            return false;
+        }
       }
     }
   }

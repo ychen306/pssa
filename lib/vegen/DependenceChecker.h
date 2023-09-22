@@ -395,6 +395,9 @@ struct SCEVDepFinder : llvm::SCEVRewriteVisitor<SCEVDepFinder> {
         Deps(Deps) {}
 
   const llvm::SCEV *visitAddRecExpr(const llvm::SCEVAddRecExpr *S) {
+    for (auto *Op : S->operands())
+      visit(Op);
+
     auto *VL2 = PSSA.getVLoop(const_cast<llvm::Loop *>(S->getLoop()));
     if (VL2 != VL) {
       assert(VL->contains(VL2) || VL2->contains(VL));
