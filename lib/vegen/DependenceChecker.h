@@ -207,7 +207,7 @@ private:
   std::vector<DepCondition> Worklist;
   llvm::DenseMap<DepCondition, ConditionSet *> CondToSetMap;
   // Mapping a redundant check to a leader
-  llvm::DenseMap<DepCondition, DepCondition> RedundantConds;
+  llvm::MapVector<DepCondition, DepCondition> RedundantConds;
   // Mapping <a coalesced condition> -> sets of object the condition is
   // responsible for disambiguating
   llvm::DenseMap<DepCondition, std::pair<ValueSet, ValueSet>> MergedObjects;

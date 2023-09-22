@@ -1310,7 +1310,7 @@ ConditionSetTracker::dedupConditions(ArrayRef<DepCondition> DepConds) {
     for (auto &Check2 : Checks) {
       bool Swapped;
       if (checksAreEquivalent(SE, Check, Check2.getRanges(), Swapped)) {
-        RedundantConds.try_emplace(DepCond, Check2);
+        RedundantConds.insert({DepCond, Check2});
         IsRedundant = true;
         mergeObjectsFromConditions(Check2 /*=LeaderCond*/, DepCond, Swapped);
         break;
@@ -1352,7 +1352,7 @@ ConditionSetTracker::getCoalescedCondition(const DepCondition &DepCond) {
     for (auto [OldLeader, Conds] : EquivalentConds) {
       auto NewLeader = getCanonicalCondition(SE, Conds);
       for (auto &DepCond : Conds) {
-        auto [It, Inserted] = RedundantConds.try_emplace(DepCond, NewLeader);
+        auto [It, Inserted] = RedundantConds.insert({DepCond, NewLeader});
         if (!Inserted)
           It->second = NewLeader;
       }
