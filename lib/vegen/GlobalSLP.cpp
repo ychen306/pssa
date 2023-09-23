@@ -40,6 +40,11 @@ static cl::opt<bool>
                           cl::desc("Dump module after unrolling in global slp"),
                           cl::init(false));
 
+static cl::opt<bool>
+    DumpModuleAfterVectorization("dump-module-after-vectorize",
+                                 cl::desc("Dump module after global slp"),
+                                 cl::init(false));
+
 // FIXME: add a cl::opt to config if we want to use these test instructions
 extern ArrayRef<InstructionDescriptor> getTestInsts();
 
@@ -191,6 +196,9 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
   for (auto *P : Packs)
     delete P;
   lowerPSSAToLLVM(&F, PSSA);
+
+  if (DumpModuleAfterVectorization)
+    F.getParent()->dump();
 
   return PreservedAnalyses::none();
 }
