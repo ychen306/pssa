@@ -437,41 +437,6 @@ ArrayRef<Instruction *> DependenceChecker::getMemoryInsts(VLoop *VL) {
   return Summaries[VL].MemoryInsts;
 }
 
-// FIXME: make this more general
-static bool isExclusive(const ControlCondition *C1,
-                        const ControlCondition *C2) {
-  // If any one is true then it's definitely not exclusive
-  if (!C1 || !C2)
-    return false;
-
-  DenseMap<Value *, bool> Literals;
-  auto *C = C1;
-  while (C) {
-    if (auto *And = dyn_cast<ConditionAnd>(C)) {
-      Literals.try_emplace(And->Cond, And->IsTrue);
-      C = And->Parent;
-      continue;
-    }
-
-    C = cast<ConditionOr>(C)->GreatestCommonCond;
-  }
-
-  C = C2;
-  while (C) {
-    if (auto *And = dyn_cast<ConditionAnd>(C)) {
-      if (Literals.count(And->Cond) &&
-          Literals.lookup(And->Cond) != And->IsTrue)
-        return true;
-      C = And->Parent;
-      continue;
-    }
-
-    C = cast<ConditionOr>(C)->GreatestCommonCond;
-  }
-
-  return false;
-}
-
 DepKind::DepKind(llvm::ArrayRef<DepCondition> TheConds) {
   for (auto &DepCond : TheConds)
     if (!DepCond.isUnconditional())
@@ -1434,6 +1399,16 @@ bool findNecessaryDeps(VersioningPlan &VerPlan, ArrayRef<Instruction *> Insts,
         // This only happens when the instructions have different nesting depth,
         // in which case we just bail out.
         if (!VL)
+          return false;
+      }
+    }
+
+    // Abort if the any of the loops are exclusive
+    for (unsigned i = 0; i < Loops.size(); i++) {
+      auto *C1 = Loops[i]->getLoopCond();
+      for (unsigned j = i + 1; j < Loops.size(); j++) {
+        auto *C2 = Loops[j]->getLoopCond();
+        if (isExclusive(C1, C2))
           return false;
       }
     }

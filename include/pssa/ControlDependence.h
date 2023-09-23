@@ -163,6 +163,8 @@ static inline bool isImplied(const ControlCondition *C1,
   return C1 == C2 || getGreatestCommonCondition({C1, C2}) == C1;
 }
 
+bool isExclusive(const ControlCondition *C1, const ControlCondition *C2);
+
 // Give a lexicographic order to control conditions
 bool compareConditions(const ControlCondition *, const ControlCondition *);
 

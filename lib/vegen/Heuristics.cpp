@@ -23,7 +23,6 @@
 
 #define DEBUG_TYPE "vegen-heuristic"
 
-
 using namespace llvm;
 extern cl::opt<bool> MaxReductionSize;
 
@@ -36,7 +35,6 @@ cl::opt<bool>
     DoVersioning("do-versioning",
                  cl::desc("do versioning to enable speculative vectorization"),
                  cl::init(false));
-
 
 // A class that enumerates a list of packs
 // that can produce a given vector
@@ -793,6 +791,19 @@ static bool isIndependent(ArrayRef<Instruction *> Insts, PredicatedSSA &PSSA,
         // This only happens when the instructions have different nesting depth,
         // in which case we just bail out.
         if (!VL)
+          return false;
+      }
+    }
+
+    // Make sure the loops are not exclusive (e.g., there's no sense in packing
+    // two exclusive loops together as the utilization will always be 1/2 and we
+    // might as well execute them sequentially), technically this has nothing to
+    // do with (in)dependence, but we are checking this here for convenience.
+    for (unsigned i = 0; i < Loops.size(); i++) {
+      auto *C1 = Loops[i]->getLoopCond();
+      for (unsigned j = i + 1; j < Loops.size(); j++) {
+        auto *C2 = Loops[j]->getLoopCond();
+        if (isExclusive(C1, C2))
           return false;
       }
     }

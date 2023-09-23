@@ -301,6 +301,39 @@ ControlDependenceAnalysis::getConditionForBlock(BasicBlock *BB) {
   return BlockConditions[BB] = C;
 }
 
+bool isExclusive(const ControlCondition *C1, const ControlCondition *C2) {
+  // If any one is true then it's definitely not exclusive
+  if (!C1 || !C2)
+    return false;
+
+  DenseMap<Value *, bool> Literals;
+  auto *C = C1;
+  while (C) {
+    if (auto *And = dyn_cast<ConditionAnd>(C)) {
+      Literals.try_emplace(And->Cond, And->IsTrue);
+      C = And->Parent;
+      continue;
+    }
+
+    C = cast<ConditionOr>(C)->GreatestCommonCond;
+  }
+
+  C = C2;
+  while (C) {
+    if (auto *And = dyn_cast<ConditionAnd>(C)) {
+      if (Literals.count(And->Cond) &&
+          Literals.lookup(And->Cond) != And->IsTrue)
+        return true;
+      C = And->Parent;
+      continue;
+    }
+
+    C = cast<ConditionOr>(C)->GreatestCommonCond;
+  }
+
+  return false;
+}
+
 static void dump(raw_ostream &OS, const ControlCondition *C) {
   if (!C) {
     OS << "true";
