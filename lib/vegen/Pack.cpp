@@ -381,8 +381,7 @@ SmallVector<VectorMask, 2> LoadPack::masks() const {
       Conds.push_back(CommonC);
   }
   auto *C = Conds.front();
-  if (all_of(drop_begin(Conds),
-             [&](auto *C2) { return PSSA.isEquivalent(C, C2); }))
+  if (all_of(drop_begin(Conds), [&](auto *C2) { return C == C2; }))
     return {};
   return {Conds};
 }
@@ -488,8 +487,7 @@ SmallVector<VectorMask, 2> StorePack::masks() const {
   VectorMask Conds(
       map_range(Insts, [this](auto *I) { return PSSA.getInstCond(I); }));
   auto *C = Conds.front();
-  if (all_of(drop_begin(Conds),
-             [&](auto *C2) { return PSSA.isEquivalent(C, C2); }))
+  if (all_of(drop_begin(Conds), [&](auto *C2) { return C == C2; }))
     return {};
   return {Conds};
 }
