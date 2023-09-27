@@ -1339,7 +1339,8 @@ static std::unique_ptr<Versioning> hoistConditions(Versioning *Ver) {
     }
   }
 
-  if (InvariantEdges.empty())
+  // idea: only bother hoisting if we can hoist everything
+  if (Ver->CutEdges.size() != InvariantEdges.size())
     return nullptr;
 
   auto OuterVer = std::make_unique<Versioning>();
