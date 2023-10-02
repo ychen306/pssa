@@ -448,7 +448,8 @@ struct VersioningPlan {
 std::unique_ptr<Versioning>
 inferVersioning(llvm::ArrayRef<DepNode> Nodes, llvm::ArrayRef<Item> Deps,
                 llvm::DenseMap<DepEdge, llvm::DenseSet<DepEdge>> &InterLoopDeps,
-                VLoop *VL, DependenceChecker &DepChecker, const PackSet *Packs);
+                VLoop *VL, DependenceChecker &DepChecker, const PackSet *Packs,
+                unsigned Depth = 0);
 
 struct ItemVectorHashInfo {
   static std::vector<Item> getEmptyKey() {

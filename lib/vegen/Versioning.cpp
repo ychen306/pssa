@@ -1581,11 +1581,16 @@ static bool isVersioningPlanFeasibleImpl(
     for (auto It : ItemSet)
       VLoopToItemsMap[PSSA.getLoopForItem(It)].push_back(It);
 
+#if 0
     // C is the condition under which DepCond can be computed
     auto MaybeC = getControlCondition(DepCond, SE);
-    if (!MaybeC)
+    if (!MaybeC) {
+      errs() << "can't lower versioning because can't get condition\n";
+      errs() << "\t cond = " << DepCond << '\n';
       return false;
+    }
     auto *C = MaybeC.getValue();
+#endif
 
     for (auto &[VL, Items] : VLoopToItemsMap) {
       SmallVector<Item> Deps;
@@ -1596,22 +1601,30 @@ static bool isVersioningPlanFeasibleImpl(
         // R1.ParentLoop, find out the child loop of R1.ParentLoop that contains
         // It
         for (auto It : Items) {
-          if (!R1.ParentLoop->contains(It))
+          if (!R1.ParentLoop->contains(It)) {
+            errs() << "wtf\n";
             return false;
+          }
           while (PSSA.getLoopForItem(It) != R1.ParentLoop) {
             It = PSSA.getLoopForItem(It);
           }
           assert(PSSA.getLoopForItem(It) == R1.ParentLoop);
           ImmediateItems.insert(It);
         }
+#if 0
         for (auto It : ImmediateItems) {
           if (auto *I = It.asInstruction();
-              I && !isImplied(C, VL->getInstCond(I)))
+              I && !isImplied(C, VL->getInstCond(I))) {
+            errs() << "bad implication\n";
             return false;
+          }
           if (auto *SubVL = It.asLoop();
-              SubVL && !isImplied(C, SubVL->getLoopCond()))
+              SubVL && !isImplied(C, SubVL->getLoopCond())) {
+            errs() << "bad implication (loop\n";
             return false;
+          }
         }
+#endif
 
         SmallVector<DepNode> SCEVDeps;
         SCEVDepFinder SDF(SE, R1.ParentLoop, SCEVDeps);
@@ -1635,8 +1648,10 @@ static bool isVersioningPlanFeasibleImpl(
         // Not feasible if any of the items is depended
         DenseSet<Item, ItemHashInfo> DepSet(Deps.begin(), Deps.end());
         for (auto It : ImmediateItems) {
-          if (DepSet.count(It))
+          if (DepSet.count(It)) {
+            errs() << "can't lower because deps\n";
             return false;
+          }
         }
       } else {
         auto ComesBefore = [VL = VL](auto It1, auto It2) {
@@ -1651,8 +1666,10 @@ static bool isVersioningPlanFeasibleImpl(
         DenseSet<Item, ItemHashInfo> DepSet(Deps.begin(), Deps.end());
         // Not feasible if any of the items is depended
         for (auto It : Items) {
-          if (DepSet.count(It))
+          if (DepSet.count(It)) {
+            errs() << "cant lower because of deps (cond)\n";
             return false;
+          }
         }
       }
     }
