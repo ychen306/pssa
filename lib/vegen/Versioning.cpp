@@ -1361,6 +1361,7 @@ static std::unique_ptr<Versioning> hoistConditions(Versioning *Ver) {
 
 static DepCondition promoteCondition(const DepCondition &DepCond,
                                      ScalarEvolution &SE, PredicatedSSA &PSSA) {
+  return DepCond;
   if (!DepCond.isOverlapping())
     return DepCond;
   auto [R1, R2] = DepCond.getRanges();
