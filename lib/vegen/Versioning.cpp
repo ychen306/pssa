@@ -1581,11 +1581,13 @@ static bool isVersioningPlanFeasibleImpl(
     for (auto It : ItemSet)
       VLoopToItemsMap[PSSA.getLoopForItem(It)].push_back(It);
 
+#if 0
     // C is the condition under which DepCond can be computed
     auto MaybeC = getControlCondition(DepCond, SE);
     if (!MaybeC)
       return false;
     auto *C = MaybeC.getValue();
+#endif
 
     for (auto &[VL, Items] : VLoopToItemsMap) {
       SmallVector<Item> Deps;
@@ -1604,6 +1606,8 @@ static bool isVersioningPlanFeasibleImpl(
           assert(PSSA.getLoopForItem(It) == R1.ParentLoop);
           ImmediateItems.insert(It);
         }
+
+#if 0
         for (auto It : ImmediateItems) {
           if (auto *I = It.asInstruction();
               I && !isImplied(C, VL->getInstCond(I)))
@@ -1612,6 +1616,7 @@ static bool isVersioningPlanFeasibleImpl(
               SubVL && !isImplied(C, SubVL->getLoopCond()))
             return false;
         }
+#endif
 
         SmallVector<DepNode> SCEVDeps;
         SCEVDepFinder SDF(SE, R1.ParentLoop, SCEVDeps);

@@ -244,6 +244,11 @@ Optional<DepCondition> DepCondition::coalesce(const DepCondition &Cond1,
 
   auto Chk1 = Cond1.getRanges();
   auto Chk2 = Cond2.getRanges();
+
+  // Only coalesce checks from the same loops
+  if (Chk1.first.ParentLoop != Chk2.first.ParentLoop)
+    return None;
+
   Optional<MemRange> R1, R2;
   R1 = MemRange::merge(Chk1.first, Chk2.first, SE, PSSA);
   if (!R1) {
