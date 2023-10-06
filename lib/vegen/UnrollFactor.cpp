@@ -248,6 +248,7 @@ static void refineUnrollFactors(Function *F, DominatorTree &DT, LoopInfo &LI,
     }
   }
 
+#if 0
   for (auto [L, NumRdxs]: LoopToReductionCounts) {
     if (!OrigLoops.count(L))
       continue;
@@ -258,6 +259,7 @@ static void refineUnrollFactors(Function *F, DominatorTree &DT, LoopInfo &LI,
       << ", num reductions = " << NumRdxs
       << '\n';
   }
+#endif
 
   LIT.destroy();
 

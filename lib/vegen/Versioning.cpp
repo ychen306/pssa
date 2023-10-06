@@ -690,6 +690,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
   // Mapping an item to the ancestor loop that we just versioned
   llvm::DenseMap<Item, VLoop *, ItemHashInfo> ItemToLoopMap;
   llvm::SmallVector<llvm::PHINode *> VersionedPhis;
+  llvm::SmallVector<llvm::SelectInst *> VersionedSelects;
   // Clone the instructions/loops
   for (auto Item : ItemsToVersion) {
     auto It = VL->toIterator(Item);
@@ -741,6 +742,9 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
         VL->insert(cast<PHINode>(I2), NewPhiConds, Fail, It);
       } else {
         VL->insert(I2, Fail, It);
+        if (auto *Select = dyn_cast<SelectInst>(I)) {
+          VersionedSelects.push_back(Select);
+        }
       }
       VL->setInstCond(I, Success);
       CreateVersioningPhi(I, I2);
@@ -919,6 +923,29 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
             return isImplied(C, DepCond.getCondition());
           }))
         PN->setOperand(i, UndefValue::get(PN->getType()));
+    }
+  }
+
+  // Nuke the dead operands of versioned selects
+  for (auto *Select : VersionedSelects) {
+    auto *InstC = VL->getInstCond(Select);
+    assert(OrigConds.count(InstC));
+    InstC = getOriginalCondition(InstC);
+    auto *C = PSSA.getAnd(InstC, Select->getCondition(), true);
+    auto *C_negated = PSSA.getAnd(InstC, Select->getCondition(), false);
+    ArrayRef<DepCondition> DepConds = VersioningMap.find(Select)->second;
+    // If C is implied by the one of the DepCond, which is asserted to be false,
+    // it means C is always false and therefore the incoming operand won't be use
+    if (llvm::any_of(DepConds, [C](auto &DepCond) {
+          return isImplied(C, DepCond.getCondition());
+        })) {
+      Select->setTrueValue(UndefValue::get(Select->getType()));
+    } 
+    // The opposite of the previous case
+    if (llvm::any_of(DepConds, [C_negated](auto &DepCond) {
+          return isImplied(C_negated, DepCond.getCondition());
+        })) {
+      Select->setFalseValue(UndefValue::get(Select->getType()));
     }
   }
 
@@ -1387,7 +1414,8 @@ static DepCondition promoteCondition(const DepCondition &DepCond,
 }
 
 namespace {
-// Utility to assign a arbitrary, deterministic order for the edges in Versioning:CutEdges
+// Utility to assign a arbitrary, deterministic order for the edges in
+// Versioning:CutEdges
 class CutEdgesOrderer {
   DenseMap<Item, unsigned, ItemHashInfo> ItemNumbers;
   int getNumber(const DepNode &N) {
@@ -1423,7 +1451,7 @@ public:
     return OrderedEdges;
   }
 };
-}
+} // namespace
 
 void lowerVersioningPlan(VersioningPlan &VerPlan, Versioner &TheVersioner,
                          EquivalenceClasses<Item> EC, PredicatedSSA &PSSA,

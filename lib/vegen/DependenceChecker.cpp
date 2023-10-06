@@ -781,6 +781,21 @@ void DependencesFinder::visit(Item It, bool AddDep, const DepNode &Src) {
           visitCond(C, I);
           visitValue(V, I);
         }
+      } else if (auto *Select = dyn_cast<SelectInst>(I)) {
+        auto *IfTrue = dyn_cast<Instruction>(Select->getTrueValue());
+        auto *IfFalse = dyn_cast<Instruction>(Select->getFalseValue());
+        auto *C = VL->getInstCond(I);
+        auto *Cond = Select->getCondition();
+        if (IfTrue && !DisablePhiSpeculation) {
+          DepEdges.try_emplace(
+              {I, IfTrue}, DepCondition::ifTrue(PSSA->getAnd(C, Cond, true)));
+        }
+        if (IfFalse && !DisablePhiSpeculation) {
+          DepEdges.try_emplace(
+              {I, IfFalse}, DepCondition::ifTrue(PSSA->getAnd(C, Cond, false)));
+        }
+        for (auto *V : I->operand_values())
+          visitValue(V, I);
       } else {
         for (auto *V : I->operand_values())
           visitValue(V, I);

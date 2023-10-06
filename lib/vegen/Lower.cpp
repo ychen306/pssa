@@ -6,6 +6,7 @@
 #include "Versioning.h"
 #include "pssa/Inserter.h"
 #include "pssa/PSSA.h"
+#include "pssa/Visitor.h"
 #include "pssa/VectorHashInfo.h"
 #include "vegen/Pack.h"
 #include "llvm/ADT/EquivalenceClasses.h"
@@ -1328,6 +1329,21 @@ bool VectorGen::run() {
     Masks.append(P->masks());
   SmallVector<std::unique_ptr<ConditionPack>> CondPacks;
   if (!DontPackConditions) {
+    // Find all one hot phis whose conditions that seem profitable to be packed
+    SmallVector<Item> Worklist{&PSSA.getTopLevel()};
+    while (!Worklist.empty()) {
+      auto It = Worklist.pop_back_val();
+      if (auto *VL = It.asLoop()) {
+        Worklist.append(VL->item_begin(), VL->item_end());
+        continue;
+      }
+      auto *PN = dyn_cast<PHINode>(It.asInstruction());
+      if (PN && PSSA.isOneHotPhi(PN)) {
+        auto *Or = dyn_cast<ConditionOr>(PSSA.getPhiCondition(PN, 1));
+        if (Or && Or->Conds.size() > 2)
+          Masks.push_back(VectorMask(Or->Conds.begin(), Or->Conds.end()));
+      }
+    }
     // When we do versioning, we sometimes strengthen some conditions.
     // If we pack a strengthend conditions, we also should pack the original
     // conditions. This allows us to vectorize some of the versioning checks.
