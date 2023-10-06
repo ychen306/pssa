@@ -1537,6 +1537,16 @@ packBottomUp(ArrayRef<InstructionDescriptor> InstPool, VersioningPlan &VerPlan,
       auto *I0 = Insts.front();
       for (auto *I : drop_begin(Insts))
         EC.unionSets(I0, I);
+      for (auto &O : P->getOperands())
+        for (auto *I2 : O) {
+          if (Packs.isPacked(I2)) {
+            auto *PN = dyn_cast<PHINode>(I2);
+            if (PN && PSSA.isMu(PN))
+              continue;
+            if (PSSA.getLoopForInst(I0) == PSSA.getLoopForInst(cast<Instruction>(I2)))
+              EC.unionSets(I0, cast<Instruction>(I2));
+          }
+        }
     }
     if (!isVersioningPlanFeasible(VerPlan, EC, DepChecker, PSSA, SE))
       return {};

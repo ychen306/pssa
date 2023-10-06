@@ -142,16 +142,17 @@ PreservedAnalyses GlobalSLPPass::run(Function &F, FunctionAnalysisManager &AM) {
         if (I)
           EC.unionSets(I0, I);
       }
-#if 0
       for (auto &O : P->getOperands())
         for (auto *I2 : O) {
           if (ThePackSet.isPacked(I2)) {
             auto *PN = dyn_cast<PHINode>(I2);
             if (PN && PSSA.isMu(PN))
               continue;
-            EC.unionSets(I0, cast<Instruction>(I2));
+            if (PSSA.getLoopForInst(I0) == PSSA.getLoopForInst(cast<Instruction>(I2)))
+              EC.unionSets(I0, cast<Instruction>(I2));
           }
         }
+#if 0
       // If the instructions come from different loops, we also want those loops to have the same versioning conditions
       SmallVector<VLoop *, 8> Loops;
       for (auto *I : P->values())
