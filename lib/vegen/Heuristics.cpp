@@ -905,6 +905,8 @@ static void runBottomUp(Pack *P, BottomUpHeuristic &Heuristic,
   auto ProcessNewPack = [&](Pack *P) {
     if (!P)
       return;
+    if (!llvm::isPowerOf2_32(P->size()))
+      return;
     // Check the independence of all packed, non-loose insts
     SmallVector<Instruction *> Insts;
     for (auto *I : P->values())

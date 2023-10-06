@@ -850,7 +850,7 @@ bool findInBetweenDeps(SmallVectorImpl<Item> &Deps, ArrayRef<Item> Items,
 std::unique_ptr<Versioning>
 inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
                 DenseMap<DepEdge, DenseSet<DepEdge>> &InterLoopDeps, VLoop *VL,
-                DependenceChecker &DepChecker, const PackSet *Packs) {
+                DependenceChecker &DepChecker, const PackSet *Packs, unsigned Depth) {
   auto ComesBefore = [VL](const Item &It1, const Item &It2) {
     return VL->comesBefore(It1, It2);
   };
@@ -1115,6 +1115,8 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   // conditionally depend on the boundary items (in which case there would be
   // imposible to schedule the versioning checks).
   if (!CondComputations.empty()) {
+    if (Depth > 1)
+      return nullptr;
     DenseSet<DepNode> NewNodes(CondComputations.begin(),
                                CondComputations.end());
     // If any of the condition computations overlap with the original nodes, it
@@ -1122,7 +1124,7 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
     if (any_of(Nodes, [&](auto N) { return NewNodes.count(N); }))
       return nullptr;
     auto SecondaryVer = inferVersioning(CondComputations, Deps, InterLoopDeps,
-                                        VL, DepChecker, Packs);
+                                        VL, DepChecker, Packs, Depth+1);
     if (!SecondaryVer)
       return nullptr;
 #if 0
