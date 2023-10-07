@@ -501,20 +501,18 @@ InstructionCost BottomUpHeuristic::getCost(Pack *P) {
   for (auto *I : P->values())
     Values.insert(I);
 
-  // Sometimes we a recurrent pack like [t, t2, t3 ... ]
-  // where t2 = op t, ?; t3 = op t2, ... etc
-  // In this case we don't care about the cost of [t, t2, ..]
-  auto Filter = [&](const OperandPack &O) {
+  for (auto &O : P->getOperands()) {
+    // Sometimes we a recurrent pack like [t, t2, t3 ... ]
+    // where t2 = op t, ?; t3 = op t2, ... etc
+    // In this case we don't care about the cost of [t, t2, ..]
     OperandPack O2;
     for (auto *V : O) {
       if (!Values.count(V))
         O2.push_back(V);
     }
-    return O2;
-  };
-
-  for (auto &O : P->getOperands()) {
-    Cost += solve(Filter(O)).Cost;
+    if (O2.empty())
+      continue;
+    Cost += solve(O2).Cost;
   }
   return Cost;
 }
