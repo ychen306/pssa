@@ -1,3 +1,4 @@
+#include "Opts.h"
 #include "pssa/Lower.h"
 #include "llvm/Transforms/Utils/LowerSwitch.h"
 #include "pssa/PSSA.h"
@@ -214,6 +215,11 @@ static void buildPasses(PassBuilder &PB) {
           return true;
         }
 
+        if (Name == "elim-loads") {
+          FPM.addPass(RedundantLoadEliminationPass());
+          return true;
+        }
+
         return false;
       });
 
@@ -224,6 +230,13 @@ static void buildPasses(PassBuilder &PB) {
           FPM.addPass(PSSAEntry());
           addCleanupPasses(FPM);
         });
+
+  PB.registerScalarOptimizerLateEPCallback(
+      [](FunctionPassManager &FPM, OptimizationLevel) {
+      addPreprocessingPasses(FPM);
+      FPM.addPass(RedundantLoadEliminationPass());
+      addCleanupPasses(FPM);
+      });
 
   if (UseGlobalSLP)
     PB.registerVectorizerStartEPCallback(
