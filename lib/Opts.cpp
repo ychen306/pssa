@@ -115,8 +115,31 @@ RedundantLoadEliminationPass::run(Function &F, FunctionAnalysisManager &AM) {
 
   OptimizeLoop(&PSSA.getTopLevel());
 
-  Versioner TheVersioner(PSSA, DI, CAA, LI, SE);
   EquivalenceClasses<Item> EC;
+  for (auto &Insts : make_second_range(RedundantLoads)) {
+    for (auto *I : Insts) {
+      auto *VL = PSSA.getLoopForInst(I);
+      auto *C = PSSA.getInstCond(I);
+      SmallVector<User *> Worklist(I->user_begin(), I->user_end());
+      while (!Worklist.empty()) {
+        auto *I2 = cast<Instruction>(Worklist.pop_back_val());
+        if (I2->isTerminator())
+          continue;
+        if (PSSA.getLoopForInst(I2) != VL)
+          continue;
+        auto *PN = dyn_cast<PHINode>(I2);
+        if (PN && PSSA.isMu(PN))
+          continue;
+        if (isImplied(C, PSSA.getInstCond(I2)))
+          continue;
+        EC.unionSets(I, I2);
+        Worklist.append(I2->user_begin(), I2->user_end());
+      }
+    }
+  }
+
+
+  Versioner TheVersioner(PSSA, DI, CAA, LI, SE);
   lowerVersioningPlan(VerPlan, TheVersioner, EC, PSSA, SE);
   for (auto &[C, Insts] : RedundantLoads) {
     auto *VL = PSSA.getLoopForInst(Insts.front());
