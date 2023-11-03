@@ -116,6 +116,7 @@ RedundantLoadEliminationPass::run(Function &F, FunctionAnalysisManager &AM) {
   OptimizeLoop(&PSSA.getTopLevel());
 
   EquivalenceClasses<Item> EC;
+#if 0
   for (auto &Insts : make_second_range(RedundantLoads)) {
     for (auto *I : Insts) {
       auto *VL = PSSA.getLoopForInst(I);
@@ -137,7 +138,7 @@ RedundantLoadEliminationPass::run(Function &F, FunctionAnalysisManager &AM) {
       }
     }
   }
-
+#endif
 
   Versioner TheVersioner(PSSA, DI, CAA, LI, SE);
   lowerVersioningPlan(VerPlan, TheVersioner, EC, PSSA, SE);

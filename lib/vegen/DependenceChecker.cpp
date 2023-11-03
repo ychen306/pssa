@@ -1047,7 +1047,7 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
 #endif
   ///////////
   if (MaxFlow.OptimalFlow() >= UnconditionalWeight ||
-      MaxFlow.OptimalFlow() > 1000) {
+      MaxFlow.OptimalFlow() > 500) {
     errs() << "max flow eight = " << MaxFlow.OptimalFlow()
            << ", unconditional weight = " << UnconditionalWeight << '\n';
     return nullptr;

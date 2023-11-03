@@ -12,6 +12,16 @@
 
 using namespace llvm;
 
+static const ControlCondition *getOr(PredicatedSSA &PSSA, ArrayRef<const ControlCondition *> Conds) {
+  SmallVector<const ControlCondition *> FilteredConds;
+  for (auto *C : Conds) {
+    if (any_of(Conds, [C](auto *C2) { return C != C2 && isImplied(C2, C); }))
+      continue;
+    FilteredConds.push_back(C);
+  }
+  return PSSA.getOr(FilteredConds);
+}
+
 void Versioner::undo() const {
   for (auto [U, V] : OldUses)
     U->set(V);
@@ -660,7 +670,7 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
         NoDep = Insert.CreateBinOp(Instruction::And, NoDep, V);
       if (!Conds.empty()) {
         NoDep = Insert.CreateBinOp(Instruction::And, NoDep,
-                                   Insert.createOneHotPhi(PSSA.getOr(Conds),
+                                   Insert.createOneHotPhi(getOr(PSSA, Conds),
                                                           Insert.getFalse(),
                                                           Insert.getTrue()));
       }
