@@ -1057,6 +1057,15 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
   Ver->ParentLoop = VL;
   Ver->Primary = nullptr;
 
+  DenseSet<const ControlCondition *> NodeConds;
+  for (auto Node : Nodes) {
+    if (auto *I = Node.asInstruction()) {
+      NodeConds.insert(VL->getInstCond(I));
+    } else if (auto *VL2 = Node.asLoop()) {
+      NodeConds.insert(VL2->getLoopCond());
+    }
+  }
+
   // If we version any edges, remember their sources
   SmallVector<DepNode> Sources;
   // Keep track of the computations that are required to compute the versioning
@@ -1079,6 +1088,9 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
       for (auto &DepCond : Kind.getConds()) {
         // FIXME: also deal with overlap checks
         if (auto *C = DepCond.getCondition()) {
+          // Don't speculate on a condition that kills any of the nodes
+          if (any_of(NodeConds, [C](auto *C2) { return isImplied(C2, C); }))
+            return nullptr;
           CondComputations.push_back(C);
         } else {
           assert(DepCond.isOverlapping());
@@ -1123,6 +1135,8 @@ inferVersioning(ArrayRef<DepNode> Nodes, ArrayRef<Item> Deps,
     // If any of the condition computations overlap with the original nodes, it
     // means there's a circular dep
     if (any_of(Nodes, [&](auto N) { return NewNodes.count(N); }))
+      return nullptr;
+    if (any_of(Deps, [&](auto N) { return NewNodes.count(N); }))
       return nullptr;
     auto SecondaryVer = inferVersioning(CondComputations, Deps, InterLoopDeps,
                                         VL, DepChecker, Packs, Depth+1);

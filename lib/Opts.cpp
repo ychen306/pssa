@@ -139,6 +139,8 @@ RedundantLoadEliminationPass::run(Function &F, FunctionAnalysisManager &AM) {
     }
   }
 #endif
+  //if (!isVersioningPlanFeasible(VerPlan, EC, DepChecker, PSSA, SE))
+  //  return {};
 
   Versioner TheVersioner(PSSA, DI, CAA, LI, SE);
   lowerVersioningPlan(VerPlan, TheVersioner, EC, PSSA, SE);

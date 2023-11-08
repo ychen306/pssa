@@ -673,7 +673,10 @@ void Versioner::runOnLoop(VLoop *VL, const VersioningMapTy &VersioningMap) {
                                    Insert.createOneHotPhi(getOr(PSSA, Conds),
                                                           Insert.getFalse(),
                                                           Insert.getTrue()));
-      }
+	if (NoDep == Insert.getFalse())
+		NoDep = Insert.create<BinaryOperator>(Instruction::Or,
+				Insert.getFalse(), Insert.getFalse());
+     }
       // NoDep = Insert.create<BinaryOperator>(Instruction::Or,
       // Insert.getTrue(), Insert.getTrue());
       CondSets[DepConds] = NoDep;
