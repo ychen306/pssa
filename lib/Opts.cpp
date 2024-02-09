@@ -141,6 +141,11 @@ RedundantLoadEliminationPass::run(Function &F, FunctionAnalysisManager &AM) {
 #endif
   //if (!isVersioningPlanFeasible(VerPlan, EC, DepChecker, PSSA, SE))
   //  return {};
+  for (auto &[C, Insts] : RedundantLoads) {
+    auto *VL = PSSA.getLoopForInst(Insts.front());
+    for (auto *I : Insts)
+      VL->setInstCond(I, C);
+  }
 
   Versioner TheVersioner(PSSA, DI, CAA, LI, SE);
   lowerVersioningPlan(VerPlan, TheVersioner, EC, PSSA, SE);
