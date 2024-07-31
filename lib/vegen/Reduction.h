@@ -143,6 +143,7 @@ public:
              llvm::SmallVectorImpl<ValT *> &SubRdxs) {
     unsigned N = Rdx->size();
     assert(N % Parts == 0);
+    llvm::errs() << "N = " << N << '\n';
     for (unsigned i = 0; i < Parts; i++) {
       auto *SubRdx = copyReduction(Rdx);
       SubRdx->Elements.clear();
