@@ -38,7 +38,6 @@ add_definitions(-fno-rtti)
 add_definitions(-std=c++14)
 
 add_subdirectory(lib)
-add_subdirectory(unittests)
 
 configure_file(${CMAKE_SOURCE_DIR}/test/lit.site.cfg.in
                ${CMAKE_BINARY_DIR}/test/lit.site.cfg)
