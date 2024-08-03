@@ -1204,7 +1204,7 @@ static void findPackableReductions(SmallVectorImpl<ReductionSeed> &Seeds,
   visitWith<ReductionFinder>(PSSA, RI, Rdxs);
 
   for (auto *Rdx : Rdxs) {
-    if (Rdx->size() > MaxReductionSize)
+    if (Rdx->size() > 128)
       continue;
     auto *Ty = Rdx->getType();
     if (Ty->isX86_FP80Ty() || Ty->isVectorTy())
