@@ -89,10 +89,10 @@ RedundantLoadEliminationPass::run(Function &F, FunctionAnalysisManager &AM) {
         PointersToLoadsMap[Load->getPointerOperand()].push_back(Load);
     }
     for (auto &[Ptr, Insts] : PointersToLoadsMap) {
-      if (Insts.size() <= 1)
+      if (Insts.size() <= 2)
         continue;
-      if (isIndependent(Insts, PSSA, DepChecker, IndependentItems))
-        continue;
+      //if (isIndependent(Insts, PSSA, DepChecker, IndependentItems))
+      //  continue;
       if (!findNecessaryDeps(VerPlan, Insts, PSSA, DepChecker, nullptr/*packs*/, &IndependentItems))
         continue;
       errs() << "Found redundant loads: {\n";
