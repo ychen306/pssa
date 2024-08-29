@@ -35,7 +35,7 @@ add_definitions(${LLVM_DEFINITIONS})
 include_directories(${LLVM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/include)
 link_directories(${LLVM_LIBRARY_DIRS})
 add_definitions(-fno-rtti)
-add_definitions(-std=c++14)
+add_definitions(-std=c++17)
 
 add_subdirectory(lib)
 
